@@ -6,7 +6,7 @@ BlogAgent uses a **hybrid deterministic workflow** with two model roles. The pip
 
 This split keeps the system testable and auditable. A failing deterministic step produces a clear Python error. A failing LLM step produces a measurable eval regression.
 
-**Current status:** Real LLM calls are not yet implemented. All LLM steps are stubs. Real web search and extraction are optional via environment configuration.
+**LLM calls are optional and environment-gated.** The default provider is `mock`, which produces deterministic output without any API key. Real LLM calls require explicit opt-in via environment variables.
 
 ---
 
@@ -22,38 +22,80 @@ Responsible for:
 
 The Editor Agent reads the evidence table before drafting. It does not draft first and search for sources later.
 
-**Current state:** stub — returns deterministic placeholder output.
+**Gate:** controlled by `BLOGAGENT_USE_LLM_EDITOR` (default: `false` → mock output).
 
 ### Fact-Check Evaluator
 
 Responsible for:
-- Extracting factual claims from the draft
+- Extracting factual claims from the draft (heuristic or LLM)
 - Classifying each claim as `supported`, `partially_supported`, or `unsupported` against the evidence table
-- Returning a structured `FactCheckReport`
+- Returning a structured `FactCheckJudgmentOutput` and `FactCheckReport`
 
-The evaluator is a separate model role to enforce independence from the drafter.
+The evaluator is a separate model role to enforce independence from the drafter. It judges only against the provided claims, citation matches, and source scores — it never invents sources.
 
-**Current state:** stub — marks all claims as `supported`.
+**Gate:** controlled by `BLOGAGENT_USE_LLM_FACTCHECK` (default: `false` → deterministic heuristic).
+
+---
+
+## LLM Client Layer
+
+The LLM client (`blogagent/llm/`) provides a single internal interface:
+
+```python
+generate_structured(
+    system_prompt: str,
+    user_prompt: str,
+    output_model: type[BaseModel],
+    temperature: float = 0.2,
+) -> LLMResult
+```
+
+`LLMResult` contains: `data`, `provider`, `model`, `is_mock`, `warning`, `error`, `raw_text`.
+
+**Provider selection via `BLOGAGENT_LLM_PROVIDER`:**
+
+| Value | Behavior |
+|---|---|
+| `mock` (default) | Deterministic structured output, no API call. `is_mock=True`. |
+| `anthropic` | Calls Anthropic API. Requires `ANTHROPIC_API_KEY`. Falls back to mock if key is missing. |
+| `openai` | Calls OpenAI API. Requires `OPENAI_API_KEY`. Falls back to mock if key is missing. |
+
+The mock provider has registered responses for every output schema. All tests run against the mock provider.
 
 ---
 
 ## Deterministic Pipeline Steps
 
 ```text
-intake_topic           → normalize and validate topic string
-check_external_effects → guardrail: block publishing/posting requests immediately
-generate_questions     → placeholder or LLM research questions
-run_web_search         → call web_search tool (mock default; Tavily optional via env)
-extract_webpages       → call webpage_extract tool (httpx + BS4; mock for mock URLs)
-score_sources          → call source_score tool (deterministic; no LLM)
-build_evidence_table   → assemble EvidenceItem list from scored sources
-generate_outline       → Editor Agent call (stub → LLM)
-write_draft            → Editor Agent call (stub → LLM)
-extract_claims         → Fact-Check Evaluator call (stub → LLM)
-match_citations        → citation_matcher tool (stub → LLM)
-run_fact_check         → assemble FactCheckReport deterministically
-package_article        → assemble and validate ArticlePackage (with SEO fields)
+intake_topic             → normalize and validate topic string
+check_external_effects   → guardrail: block publishing/posting requests immediately
+generate_research_qs     → Editor Agent: research planning (mock or LLM)
+run_web_search           → call web_search tool (mock default; Tavily optional via env)
+extract_webpages         → call webpage_extract tool (httpx + BS4; mock for mock URLs)
+score_sources            → call source_score tool (deterministic; no LLM)
+build_evidence_table     → assemble EvidenceItem list from scored sources
+generate_outline         → Editor Agent: outline (mock or LLM)
+write_draft              → Editor Agent: draft (mock or LLM)
+extract_claims           → claim_extractor tool (heuristic or LLM)
+match_citations          → citation_matcher tool (deterministic heuristic)
+run_fact_check           → assemble FactCheckReport (+ optional LLM judgment)
+[revision loop]          → Editor Agent revision + re-run claims/citations/fact-check
+package_article          → assemble and validate ArticlePackage (with SEO fields)
 ```
+
+---
+
+## Revision Loop
+
+After the initial fact-check, if `fact_check_report.passed = False` and `revision_count < 1`:
+
+1. `editor_agent.revise_article()` is called (mock or LLM)
+2. `state.draft` is replaced with the revised markdown
+3. `state.revision_summary` is set
+4. `state.revision_count` is incremented
+5. Claim extraction, citation matching, and fact-check re-run
+
+The loop runs **at most once** (`_MAX_REVISIONS = 1`). In mock mode, the revision returns the draft unchanged with an explanatory summary — no infinite loop is possible.
 
 ---
 
@@ -96,6 +138,15 @@ Publishing to external systems is forbidden in MVP. Any future publishing tool m
 
 ---
 
+## Claim Extraction
+
+`claim_extractor` has two modes:
+
+- **Heuristic (default):** parses markdown headings and body sentences. Numerical/comparative patterns (percentages, "more than", "doubled", etc.) produce `high` importance claims; structural heading phrases produce `medium` claims.
+- **LLM (opt-in):** calls `generate_structured` with `ClaimExtractionOutput` schema. Enabled via `BLOGAGENT_USE_LLM_FACTCHECK=true`. Falls back to heuristic if the call fails.
+
+---
+
 ## State Object
 
 `BlogRunState` is a Pydantic model passed through every step. Each step receives the full state and returns the modified state. No global mutable state.
@@ -104,6 +155,10 @@ Key fields:
 - `blocked: bool` — set by `check_external_effects`
 - `block_reason: str` — human-readable explanation
 - `requires_approval: bool` — True when an external effect was requested
+- `draft_meta_description: str` — SEO description from `DraftOutput`
+- `draft_seo_keywords: list[str]` — keywords from `DraftOutput`
+- `revision_summary: str` — what changed in revision
+- `revision_count: int` — number of revisions performed (capped at 1)
 
 See [blogagent/workflow/state.py](../blogagent/workflow/state.py) for the full schema.
 
@@ -113,15 +168,15 @@ See [blogagent/workflow/state.py](../blogagent/workflow/state.py) for the full s
 
 The final `ArticlePackage` includes:
 
-- `article_markdown` — the full draft
+- `article_markdown` — the full draft (revised if revision occurred)
 - `source_list` — scored sources
 - `fact_check_report` — claim support summary
 - `claim_support_statuses` — per-claim citation matches
-- `revision_summary` — what changed in revision
+- `revision_summary` — what changed in revision (or "No revision performed.")
 - `title` — article title (from outline)
 - `slug` — URL-safe slug (derived from title)
-- `meta_description` — SEO description (stub in MVP)
-- `seo_keywords` — keyword list (from outline)
+- `meta_description` — SEO description (from `DraftOutput` or generic fallback)
+- `seo_keywords` — keyword list (from `DraftOutput` or outline)
 
 ---
 
@@ -139,11 +194,10 @@ See [blogagent/tools/validators.py](../blogagent/tools/validators.py).
 
 ## What Is Not Here Yet
 
-- Real LLM API calls (Editor Agent, Fact-Check Evaluator are stubs)
-- Revision loop (pipeline runs once)
 - CMS publishing (blocked; requires approval gate)
 - Persistence / database
 - Async / streaming
 - Cost tracking
+- Semantic citation matching (LLM-backed)
 
 See [limitations.md](./limitations.md) for details.

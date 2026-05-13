@@ -1,60 +1,100 @@
 # Current Limitations
 
-This document describes what is intentionally not implemented in the current scaffold.
+This document describes what is intentionally not implemented or what has known constraints.
 
 ---
 
-## LLM Stubs
+## LLM Provider
 
-All model calls are stubs returning deterministic placeholder data:
+The **mock LLM provider is the default**. All tests and evals run without any API key.
 
-| Component | Status | What replaces it |
+Real LLM calls are opt-in:
+
+| Variable | Default | Effect |
 |---|---|---|
-| Editor Agent — research planning | Stub | Claude API call with `RESEARCH_PLAN_PROMPT` |
-| Editor Agent — outline generation | Stub | Claude API call with `OUTLINE_PROMPT` |
-| Editor Agent — draft writing | Stub | Claude API call with `DRAFT_PROMPT` |
-| Editor Agent — revision | Stub | Claude API call with `REVISION_PROMPT` |
-| Fact-Check Evaluator — claim extraction | Stub | Claude API call with `FACT_CHECK_PROMPT` |
-| `citation_matcher` tool | Deterministic heuristic | LLM-backed semantic matching |
+| `BLOGAGENT_LLM_PROVIDER` | `mock` | Set to `anthropic` or `openai` for real calls |
+| `BLOGAGENT_USE_LLM_EDITOR` | `false` | Set to `true` to enable LLM for research plan, outline, draft, revision |
+| `BLOGAGENT_USE_LLM_FACTCHECK` | `false` | Set to `true` to enable LLM for claim extraction and judgment |
+
+If a provider is configured but the API key is missing or the package is not installed,
+the system falls back to mock mode with an explicit warning. No crash.
 
 ---
 
-## Search and Extraction
+## Draft Quality in Mock Mode
 
-| Component | Status | Notes |
-|---|---|---|
-| `web_search` — mock mode | **Implemented** | Default; returns deterministic mock `SearchResult` objects. `is_mock=True`. |
-| `web_search` — Tavily | **Implemented** | Opt-in via `BLOGAGENT_SEARCH_PROVIDER=tavily` + `TAVILY_API_KEY`. Falls back to mock if key missing. |
-| `webpage_extract` — mock URLs | **Implemented** | Mock URLs (`*.example.dev`, `*.example.com`) return mock `SourcePacket` without network calls. |
-| `webpage_extract` — real URLs | **Implemented** | Uses httpx + BeautifulSoup4. Bounded at 10,000 chars. Graceful error handling. |
-| `source_score` | **Implemented** | Fully deterministic; no LLM. Scores domain credibility, keyword overlap, publication year. |
+In mock mode, the `Editor Agent` generates substantive structured prose (not "[Placeholder content]"),
+but it is **not** production-ready:
+
+- Mock drafts do not contain real research — they use topic-aware template prose.
+- Mock `meta_description` is a generic template, not SEO-optimized.
+- Mock sources use `*.example.dev` domains — not real URLs.
+- Mock source scores are `0.3` — not real credibility assessments.
+
+These are intentional. Connect a real LLM provider to produce research-grounded output.
+
+---
+
+## Citation Matching
+
+Citation matching is deterministic and heuristic:
+
+- No sources → `unsupported`
+- Only mock sources → `partially_supported`
+- At least one real positive-score source → `supported`
+
+**Semantic claim-to-source matching is not implemented.** The heuristic assigns the same
+status to every claim based on the overall source pool. Claims are not individually matched
+to the most relevant source unless LLM fact-checking is enabled.
+
+---
+
+## Revision Loop
+
+The revision loop runs at most once (`_MAX_REVISIONS = 1`).
+
+In mock mode, `revise_article` returns the draft unchanged with an explanatory summary —
+the revision loop therefore does not improve draft quality without a real LLM. This is
+expected: the loop exists to demonstrate the control flow and can be observed by inspecting
+`state.revision_summary` and `state.revision_count`.
+
+---
+
+## Source Grounding
+
+All sources in mock mode are placeholder URLs with low scores. Claims derived from mock
+evidence are classified as `partially_supported`, not `supported`. The `INFO` note in
+eval output ("All sources are mock placeholders") is intentional transparency.
+
+---
+
+## Fact-Check Evaluator
+
+In heuristic mode (`BLOGAGENT_USE_LLM_FACTCHECK=false`), the evaluator:
+- Classifies claims by their citation match status (deterministic)
+- Does not apply semantic or world-knowledge judgment to individual claims
+- Cannot detect factual errors that are not captured by citation matching
+
+In LLM mode, the evaluator uses an LLM to supplement deterministic blocking issues with
+additional judgment, but is still bounded by the provided citations and sources.
 
 ---
 
 ## Not Implemented
 
-- **Revision loop**: The pipeline runs once. The evaluator marks blocking issues but the pipeline does not automatically re-enter the Editor Agent for revision. Requires a loop guard with `revision_count` and a `MAX_REVISIONS` constant.
 - **CMS publishing**: Blocked by the `check_external_effects` guardrail. Any future publishing step requires an explicit user approval gate.
 - **Persistence**: `BlogRunState` is in-memory only. No database or file storage is wired up.
 - **Streaming**: The pipeline is synchronous and blocking.
 - **Async support**: All tools are synchronous.
 - **Cost tracking**: No token counting or API cost tracking yet.
-- **Real SEO metadata**: `meta_description` is a stub string. Real generation requires LLM.
+- **Browser automation**: Not planned for MVP.
+- **Social posting**: Blocked by the external side-effect guardrail.
 
 ---
 
-## Known Placeholder Behaviors
+## Recommended Next Steps
 
-- All sources in mock mode use `*.example.dev` domains — not real URLs.
-- All mock source scores are `0.3` — not real credibility assessments.
-- Citation matching is deterministic and heuristic (no LLM): no sources → unsupported; mock-only → partially_supported; real scored source → supported. Semantic claim-to-source matching is not implemented.
-- Draft content is `[Placeholder content for Section]` — not real prose.
-- `meta_description` is a template string — not LLM-generated.
-
-These are intentional. The scaffold is meant to be replaced section by section as real tools are connected.
-
----
-
-## Recommended Next Step
-
-Connect real LLM calls for the Editor Agent (research planning → outline → draft) and the Fact-Check Evaluator (claim extraction → citation matching). The deterministic scaffold, validators, and evals are all in place to measure the quality improvement.
+1. Set `BLOGAGENT_LLM_PROVIDER=anthropic`, `BLOGAGENT_USE_LLM_EDITOR=true`, `BLOGAGENT_USE_LLM_FACTCHECK=true` and measure eval quality improvement.
+2. Add semantic citation matching (replace heuristic with LLM-backed per-claim matching).
+3. Add real source grounding checks in evals (count real vs. mock sources, check claim support rates).
+4. Implement a persistence layer to store final article packages for review and comparison.

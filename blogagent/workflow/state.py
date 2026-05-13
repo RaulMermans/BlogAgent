@@ -115,11 +115,15 @@ class BlogRunState(BaseModel):
     evidence_table: list[EvidenceItem] = Field(default_factory=list)
     outline: Optional[BlogOutline] = None
     draft: str = ""
+    # SEO fields set by write_article_draft — used in the final package
+    draft_meta_description: str = ""
+    draft_seo_keywords: list[str] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
     citation_matches: list[CitationMatch] = Field(default_factory=list)
     fact_check_report: Optional[FactCheckReport] = None
     final_article_package: Optional[ArticlePackage] = None
     revision_count: int = 0
+    revision_summary: str = ""
     run_id: str = ""
     blocked: bool = False
     block_reason: str = ""

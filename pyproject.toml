@@ -21,6 +21,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4",
 ]
+anthropic = ["anthropic>=0.25"]
+openai = ["openai>=1.0"]
+llm = ["anthropic>=0.25", "openai>=1.0"]
 
 [dependency-groups]
 dev = [

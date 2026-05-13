@@ -160,3 +160,83 @@ def test_pipeline_selected_sources_are_mock_in_mock_mode():
     state = run_pipeline("Solar Energy")
     for source in state.selected_sources:
         assert source.is_mock is True, f"Expected is_mock=True for {source.url}"
+
+
+# ---------------------------------------------------------------------------
+# New assertions: SEO + draft quality + meta description
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_article_package_has_non_empty_meta_description():
+    state = run_pipeline("Photosynthesis")
+    assert state.final_article_package is not None
+    assert state.final_article_package.meta_description.strip() != ""
+
+
+def test_pipeline_article_markdown_has_at_least_one_heading():
+    state = run_pipeline("The Water Cycle")
+    assert state.final_article_package is not None
+    assert "#" in state.final_article_package.article_markdown
+
+
+def test_pipeline_article_package_seo_keywords_is_list():
+    state = run_pipeline("Climate Change")
+    assert state.final_article_package is not None
+    assert isinstance(state.final_article_package.seo_keywords, list)
+
+
+def test_pipeline_revision_count_is_zero_in_mock_mode():
+    """In default mock mode, claims are medium-importance and mock sources give
+    partially_supported — so no blocking issues → no revision triggered."""
+    state = run_pipeline("The Water Cycle")
+    assert state.revision_count == 0
+
+
+def test_pipeline_revision_count_never_exceeds_one(monkeypatch):
+    import blogagent.workflow.graph as _graph
+    from blogagent.workflow.state import FactCheckReport
+
+    call_count = [0]
+    original = _graph.run_fact_check
+
+    def patched(state):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            state.fact_check_report = FactCheckReport(
+                total_claims=1,
+                supported_count=0,
+                partially_supported_count=0,
+                unsupported_count=1,
+                passed=False,
+                blocking_issues=["Unsupported high-importance claim: 'X'"],
+            )
+            return state
+        return original(state)
+
+    monkeypatch.setattr(_graph, "run_fact_check", patched)
+    state = run_pipeline("Climate Change")
+    assert state.revision_count <= 1
+
+
+def test_pipeline_draft_is_no_longer_placeholder():
+    """Mock draft should not contain [Placeholder content for ...]."""
+    state = run_pipeline("Quantum Computing")
+    assert state.draft.strip() != ""
+    assert "[Placeholder content" not in state.draft
+
+
+def test_pipeline_draft_uses_outline_title():
+    state = run_pipeline("The Solar System")
+    assert state.outline is not None
+    assert state.outline.title in state.draft
+
+
+def test_pipeline_passes_without_api_keys(monkeypatch):
+    """Pipeline must complete fully in mock mode with no API keys set."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    state = run_pipeline("Photosynthesis")
+    assert state.final_article_package is not None
+    errors = validate_final_state(state)
+    assert errors == []

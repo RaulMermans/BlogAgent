@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 
+from blogagent.agents import editor_agent, fact_check_evaluator
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
@@ -11,7 +12,6 @@ from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
 from blogagent.workflow.state import (
     ArticlePackage,
-    BlogOutline,
     BlogRunState,
     CitationStatus,
     ClaimImportance,
@@ -87,11 +87,9 @@ def intake_topic(state: BlogRunState) -> BlogRunState:
 
 
 def generate_research_questions(state: BlogRunState) -> BlogRunState:
-    state.research_questions = [
-        f"What is {state.topic}?",
-        f"What are the key facts about {state.topic}?",
-        f"What are the latest developments in {state.topic}?",
-    ]
+    """Call the Editor Agent to produce research questions."""
+    result = editor_agent.generate_research_plan(topic=state.topic)
+    state.research_questions = result.research_questions
     return state
 
 
@@ -137,32 +135,53 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
 
 
 # ---------------------------------------------------------------------------
-# Article generation (stubs — replace with LLM calls)
+# Article generation — backed by Editor Agent
 # ---------------------------------------------------------------------------
 
 
 def generate_outline(state: BlogRunState) -> BlogRunState:
+    """Call the Editor Agent to produce an evidence-grounded outline."""
+    result = editor_agent.generate_outline(
+        topic=state.topic,
+        evidence_table=state.evidence_table,
+        source_scores=state.source_scores,
+    )
+    from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
+
     state.outline = BlogOutline(
-        title=f"Understanding {state.topic}",
-        sections=["Introduction", "Key Facts", "Recent Developments", "Conclusion"],
-        target_word_count=1000,
-        seo_keywords=[state.topic],
+        title=result.title,
+        sections=result.sections,
+        target_word_count=result.target_word_count,
+        seo_keywords=result.seo_keywords,
     )
     return state
 
 
 def write_draft(state: BlogRunState) -> BlogRunState:
+    """Call the Editor Agent to write a draft from the outline and evidence."""
     assert state.outline is not None, "Outline must exist before drafting"
-    sections = "\n\n".join(
-        f"## {section}\n\n[Placeholder content for {section}.]"
-        for section in state.outline.sections
+    from blogagent.llm.schemas import OutlineOutput  # noqa: PLC0415
+
+    outline_out = OutlineOutput(
+        title=state.outline.title,
+        sections=state.outline.sections,
+        target_word_count=state.outline.target_word_count,
+        seo_keywords=state.outline.seo_keywords,
     )
-    state.draft = f"# {state.outline.title}\n\n{sections}"
+    result = editor_agent.write_article_draft(
+        topic=state.topic,
+        outline=outline_out,
+        evidence_table=state.evidence_table,
+        source_scores=state.source_scores,
+    )
+    state.draft = result.article_markdown
+    state.draft_meta_description = result.meta_description
+    state.draft_seo_keywords = result.seo_keywords
     return state
 
 
 # ---------------------------------------------------------------------------
-# Claim extraction and citation matching (stubs — replace with LLM calls)
+# Claim extraction and citation matching
 # ---------------------------------------------------------------------------
 
 
@@ -184,6 +203,7 @@ def match_citations(state: BlogRunState) -> BlogRunState:
 
 
 def run_fact_check(state: BlogRunState) -> BlogRunState:
+    """Assemble the FactCheckReport; optionally supplement with LLM judgment."""
     matches = state.citation_matches
     supported = sum(1 for m in matches if m.status == CitationStatus.supported)
     partial = sum(1 for m in matches if m.status == CitationStatus.partially_supported)
@@ -193,14 +213,32 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         for m in matches
         if m.status == CitationStatus.unsupported and m.claim.importance == ClaimImportance.high
     ]
+
+    import os as _os  # noqa: PLC0415
+
+    if _os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true":
+        judgment = fact_check_evaluator.evaluate_draft(
+            topic=state.topic,
+            draft=state.draft,
+            claims=state.claims,
+            citation_matches=state.citation_matches,
+            source_scores=state.source_scores,
+        )
+        # Merge LLM blocking issues with deterministic ones (deduplicated).
+        all_blocking = list(dict.fromkeys(blocking + judgment.blocking_issues))
+        passed = len(all_blocking) == 0
+    else:
+        all_blocking = blocking
+        passed = len(blocking) == 0
+
     state.fact_check_report = FactCheckReport(
         total_claims=len(matches),
         supported_count=supported,
         partially_supported_count=partial,
         unsupported_count=unsupported,
         matches=matches,
-        passed=len(blocking) == 0,
-        blocking_issues=blocking,
+        passed=passed,
+        blocking_issues=all_blocking,
     )
     return state
 
@@ -211,15 +249,22 @@ def package_article(state: BlogRunState) -> BlogRunState:
 
     title = state.outline.title
     slug = _slugify(title)
-    meta_description = f"A comprehensive overview of {state.topic}."
-    seo_keywords = list(state.outline.seo_keywords)
+
+    # Use draft SEO fields when available; fall back to outline/generic.
+    meta_description = (
+        state.draft_meta_description
+        or f"A comprehensive overview of {state.topic}."
+    )
+    seo_keywords = state.draft_seo_keywords or list(state.outline.seo_keywords)
+
+    revision_summary = state.revision_summary or "No revision performed."
 
     state.final_article_package = ArticlePackage(
         article_markdown=state.draft,
         source_list=state.source_scores,
         fact_check_report=state.fact_check_report,
         claim_support_statuses=state.citation_matches,
-        revision_summary="No revision required in stub run.",
+        revision_summary=revision_summary,
         title=title,
         slug=slug,
         meta_description=meta_description,

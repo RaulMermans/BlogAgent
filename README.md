@@ -19,8 +19,11 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Real search via Tavily (opt-in) | **Done** — requires `TAVILY_API_KEY` |
 | Real webpage extraction via httpx+BS4 | **Done** — runs on non-mock URLs |
 | Deterministic source scoring | **Done** |
-| Real LLM calls (Editor Agent, Fact-Check Evaluator) | Not yet — stubs only |
-| Revision loop | Not yet |
+| LLM client layer (mock default; Anthropic/OpenAI optional) | **Done** |
+| Editor Agent (research plan, outline, draft, revision) | **Done** — mock by default; LLM-gated via env |
+| Fact-Check Evaluator (claim extraction + judgment) | **Done** — mock by default; LLM-gated via env |
+| Heuristic claim extraction | **Done** |
+| Revision loop (max 1) | **Done** |
 | Persistence / database | Not yet |
 
 ---
@@ -60,11 +63,13 @@ User Topic
 → Evidence Table Builder
 → Editor Agent outline
 → Editor Agent draft
-→ Fact-Check Evaluator
 → claim_extractor
 → citation_matcher
+→ Fact-Check Evaluator
+→ [if not passed and revision_count < 1]
+    → Editor Agent revision
+    → claim_extractor + citation_matcher + fact-check (re-run)
 → blog_package_validator
-→ Editor Agent revision if needed
 → Final Article Package
 ```
 
@@ -102,7 +107,23 @@ Copy `.env.example` to `.env` and configure:
 cp .env.example .env
 ```
 
-Key variables:
+### LLM provider variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BLOGAGENT_LLM_PROVIDER` | `mock` | `mock` (no API key needed), `anthropic`, or `openai` |
+| `BLOGAGENT_LLM_MODEL` | _(provider default)_ | Override model name |
+| `BLOGAGENT_LLM_TIMEOUT_SECONDS` | `60` | Timeout for LLM API calls |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Required when provider is `anthropic` |
+| `OPENAI_API_KEY` | _(empty)_ | Required when provider is `openai` |
+| `BLOGAGENT_USE_LLM_EDITOR` | `false` | Enable real LLM calls for Editor Agent |
+| `BLOGAGENT_USE_LLM_FACTCHECK` | `false` | Enable real LLM calls for Fact-Check Evaluator |
+
+**Important:** If a provider is configured but the API key is missing or the package
+is not installed, the system falls back to mock mode with an explicit warning. Tests
+always run in mock mode and do not require any API key.
+
+### Search provider variables
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -110,11 +131,12 @@ Key variables:
 | `TAVILY_API_KEY` | _(empty)_ | Required when provider is `tavily` |
 | `BLOGAGENT_HTTP_TIMEOUT_SECONDS` | `15` | Timeout for web requests |
 | `BLOGAGENT_MAX_SEARCH_RESULTS` | `5` | Max results per query |
-| `ANTHROPIC_API_KEY` | _(empty)_ | Required when LLM stubs are replaced with real calls |
 
 ---
 
 ## Run Tests
+
+All tests run without API keys.
 
 ```bash
 # With uv
@@ -144,7 +166,19 @@ uv run python -m blogagent.evals.runner
 
 ## Current Limitations
 
-All LLM calls (Editor Agent, Fact-Check Evaluator) are deterministic stubs. Real web search and extraction are available but optional via environment config. The default mock mode produces valid placeholder output for testing.
+The **mock LLM provider is the default** — all LLM steps return deterministic output without
+any API calls. This is intentional and ensures tests are always safe to run.
+
+Real LLM calls are opt-in via `BLOGAGENT_USE_LLM_EDITOR=true` and/or
+`BLOGAGENT_USE_LLM_FACTCHECK=true`, combined with `BLOGAGENT_LLM_PROVIDER=anthropic`
+or `BLOGAGENT_LLM_PROVIDER=openai`.
+
+Fact-checking is always bounded by the evidence actually in the evidence table — the
+evaluator does not invent sources or accept claims without grounding.
+
+Citation matching is deterministic and heuristic (no-sources → unsupported;
+mock-only sources → partially_supported; real positive-score source → supported).
+Semantic claim-to-source matching is not implemented unless LLM fact-checking is enabled.
 
 See [docs/limitations.md](docs/limitations.md) for the complete list.
 
@@ -154,14 +188,15 @@ See [docs/limitations.md](docs/limitations.md) for the complete list.
 
 ```
 blogagent/
-  workflow/       State models, pipeline nodes, graph runner
-  agents/         Editor Agent and Fact-Check Evaluator stubs + prompts
-  tools/          Tool implementations + deterministic validators
-  evals/          Eval cases, runner, and graders
+  llm/        LLM client layer (provider selection, schemas, mock fallback)
+  agents/     Editor Agent and Fact-Check Evaluator (mock default; LLM-gated)
+  tools/      Tool implementations + deterministic validators
+  workflow/   State models, pipeline nodes, graph runner
+  evals/      Eval cases, runner, and graders
 
-app/ui/           Streamlit UI
+app/ui/       Streamlit UI
 
-tests/            Pytest test suite
-docs/             Architecture, eval plan, limitations
-examples/         Sample outputs and run traces
+tests/        Pytest test suite
+docs/         Architecture, eval plan, limitations
+examples/     Sample outputs and run traces
 ```

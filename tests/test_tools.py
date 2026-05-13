@@ -1,10 +1,12 @@
-"""Tests for tool modules: web_search, webpage_extract, source_score, citation_matcher."""
+"""Tests for tool modules: web_search, webpage_extract, source_score, citation_matcher,
+claim_extractor."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
+from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, SearchOutput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, ExtractOutput, webpage_extract
@@ -368,3 +370,70 @@ def test_citation_matcher_mixed_mock_and_real_marks_supported():
     ]
     output = citation_matcher(CitationMatchInput(claims=[_claim()], sources=sources))
     assert output.matches[0].status == CitationStatus.supported
+
+
+# ---------------------------------------------------------------------------
+# claim_extractor — heuristic mode (BLOGAGENT_USE_LLM_FACTCHECK=false, default)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_extractor_returns_claims_from_draft():
+    draft = (
+        "# Solar Energy\n\n## Introduction\n\nSolar energy is a renewable resource."
+        "\n\n## Key Facts\n\nIt is widely used worldwide."
+    )
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Solar Energy"))
+    assert len(output.claims) >= 1
+    assert output.error is None
+
+
+def test_claim_extractor_numerical_claim_is_high_importance():
+    draft = (
+        "# Solar Energy\n\n"
+        "## Key Facts\n\n"
+        "Solar power now accounts for more than 30% of new electricity capacity added globally."
+    )
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Solar Energy"))
+    high_claims = [c for c in output.claims if c.importance == ClaimImportance.high]
+    assert len(high_claims) >= 1, f"Expected high-importance claim, got: {output.claims}"
+
+
+def test_claim_extractor_ordinary_claim_can_be_medium_importance():
+    draft = (
+        "# Climate Change\n\n"
+        "## Introduction\n\n"
+        "Climate change is a long-term shift in global temperatures."
+    )
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Climate Change"))
+    medium_claims = [c for c in output.claims if c.importance == ClaimImportance.medium]
+    assert len(medium_claims) >= 1, f"Expected medium-importance claim, got: {output.claims}"
+
+
+def test_claim_extractor_caps_at_three_claims():
+    draft = (
+        "# Topic\n\n"
+        "## Section A\n\nFirst sentence. Second sentence. Third sentence.\n\n"
+        "## Section B\n\nFourth sentence. More than 50% of things are true.\n\n"
+        "## Section C\n\nFifth sentence.\n\n"
+        "## Section D\n\nSixth sentence with more than 100 examples.\n\n"
+        "## Section E\n\nSeventh sentence."
+    )
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Topic"))
+    assert len(output.claims) <= 3
+
+
+def test_claim_extractor_fallback_when_no_headings():
+    draft = "Some plain text with no headings."
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Topic"))
+    assert len(output.claims) >= 1
+
+
+def test_claim_extractor_comparative_claim_is_high_importance():
+    draft = (
+        "# Batteries\n\n"
+        "## Recent Developments\n\n"
+        "Battery capacity has more than doubled over the last decade."
+    )
+    output = claim_extractor(ClaimExtractInput(draft=draft, topic="Batteries"))
+    high_claims = [c for c in output.claims if c.importance == ClaimImportance.high]
+    assert len(high_claims) >= 1

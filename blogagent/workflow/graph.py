@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from blogagent.agents import editor_agent
 from blogagent.tools.validators import (
     validate_article_package,
     validate_minimum_sources,
@@ -24,7 +25,12 @@ from blogagent.workflow.nodes import (
 )
 from blogagent.workflow.state import BlogRunState
 
-PIPELINE = [
+_MAX_REVISIONS = 1
+
+# Deterministic pipeline steps run in order before the fact-check / revision cycle.
+# run_fact_check is NOT in this list — it is called explicitly in run_pipeline so
+# that tests can monkeypatch blogagent.workflow.graph.run_fact_check cleanly.
+_PRE_FACTCHECK = [
     intake_topic,
     check_external_effects,  # guardrail — sets state.blocked; pipeline short-circuits if True
     generate_research_questions,
@@ -36,17 +42,43 @@ PIPELINE = [
     write_draft,
     extract_claims,
     match_citations,
-    run_fact_check,
-    package_article,
 ]
 
 
 def run_pipeline(topic: str) -> BlogRunState:
     state = BlogRunState(topic=topic, run_id=str(uuid.uuid4()))
-    for step in PIPELINE:
+
+    for step in _PRE_FACTCHECK:
         state = step(state)
         if state.blocked:
-            break
+            return state
+
+    # Initial fact-check.
+    state = run_fact_check(state)
+
+    # Revision loop — runs at most _MAX_REVISIONS times.
+    if (
+        state.fact_check_report is not None
+        and not state.fact_check_report.passed
+        and state.revision_count < _MAX_REVISIONS
+    ):
+        assert state.outline is not None
+        revision = editor_agent.revise_article(
+            topic=state.topic,
+            draft=state.draft,
+            fact_check_report=state.fact_check_report,
+            citation_matches=state.citation_matches,
+        )
+        state.draft = revision.revised_markdown
+        state.revision_summary = revision.revision_summary
+        state.revision_count += 1
+
+        # Re-run claim extraction, citation matching, and fact-check post-revision.
+        state = extract_claims(state)
+        state = match_citations(state)
+        state = run_fact_check(state)
+
+    state = package_article(state)
     return state
 
 

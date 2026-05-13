@@ -1,0 +1,91 @@
+"""LLM provider implementations.
+
+Each provider wraps a specific API client and returns a ProviderResponse.
+Providers are selected and instantiated by the LLM client — do not call
+provider classes directly from application code.
+
+Supported providers:
+  anthropic  — requires `anthropic` package + ANTHROPIC_API_KEY
+  openai     — requires `openai` package + OPENAI_API_KEY
+
+Missing API keys or missing packages raise MissingAPIKeyError or
+ImportError respectively; the LLM client catches both and falls back
+to mock with a warning.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+class MissingAPIKeyError(RuntimeError):
+    """Raised when a required API key env var is not set."""
+
+
+@dataclass
+class ProviderResponse:
+    text: str
+    model: str
+    provider: str
+
+
+class AnthropicProvider:
+    name = "anthropic"
+
+    def __init__(self, api_key: str, model: str, timeout: int) -> None:
+        self.api_key = api_key
+        self._model = model
+        self.timeout = timeout
+
+    def generate(
+        self, system_prompt: str, user_prompt: str, temperature: float = 0.2
+    ) -> ProviderResponse:
+        try:
+            import anthropic  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "anthropic package is not installed. Run: pip install anthropic"
+            ) from exc
+
+        client = anthropic.Anthropic(api_key=self.api_key)
+        response = client.messages.create(
+            model=self._model,
+            max_tokens=4096,
+            temperature=temperature,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = response.content[0].text
+        return ProviderResponse(text=text, model=self._model, provider=self.name)
+
+
+class OpenAIProvider:
+    name = "openai"
+
+    def __init__(self, api_key: str, model: str, timeout: int) -> None:
+        self.api_key = api_key
+        self._model = model
+        self.timeout = timeout
+
+    def generate(
+        self, system_prompt: str, user_prompt: str, temperature: float = 0.2
+    ) -> ProviderResponse:
+        try:
+            import openai  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "openai package is not installed. Run: pip install openai"
+            ) from exc
+
+        client = openai.OpenAI(api_key=self.api_key, timeout=self.timeout)
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+        text = response.choices[0].message.content or ""
+        return ProviderResponse(text=text, model=self._model, provider=self.name)
