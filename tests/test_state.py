@@ -69,6 +69,62 @@ def test_blog_run_state_blocked_can_be_set():
     assert state.requires_approval is True
 
 
+def test_blog_run_state_has_trace_fields():
+    state = BlogRunState(topic="test")
+    assert state.warnings == []
+    assert state.provider_events == []
+    assert state.stage_timings == {}
+    assert state.execution_mode == "mock"
+
+
+def test_blog_run_state_trace_lists_are_independent():
+    s1 = BlogRunState(topic="A")
+    s2 = BlogRunState(topic="B")
+    s1.warnings.append("w1")
+    s1.provider_events.append("e1")
+    assert s2.warnings == []
+    assert s2.provider_events == []
+
+
+def test_blog_run_state_execution_mode_can_be_set():
+    state = BlogRunState(topic="test", execution_mode="live")
+    assert state.execution_mode == "live"
+
+
+def test_pipeline_state_has_provider_events_after_run():
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Photosynthesis")
+    assert len(state.provider_events) > 0
+
+
+def test_pipeline_state_has_stage_timings_after_run():
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Photosynthesis")
+    assert len(state.stage_timings) > 0
+    assert all(isinstance(v, float) for v in state.stage_timings.values())
+
+
+def test_pipeline_execution_mode_is_mock_by_default(monkeypatch):
+    from blogagent.workflow.graph import run_pipeline
+
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    state = run_pipeline("Solar Energy")
+    assert state.execution_mode == "mock"
+
+
+def test_pipeline_provider_events_include_search():
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Solar Energy")
+    search_events = [e for e in state.provider_events if "search:" in e]
+    assert len(search_events) >= 1
+
+
 # ---------------------------------------------------------------------------
 # ArticlePackage
 # ---------------------------------------------------------------------------

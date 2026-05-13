@@ -92,6 +92,33 @@ additional judgment, but is still bounded by the provided citations and sources.
 
 ---
 
+## Live LLM Quality
+
+Live LLM output quality (Anthropic/OpenAI providers) has **not been benchmarked** in the eval
+suite yet. The evals always run in mock mode. Live provider quality is expected to be
+substantially better than mock mode for research grounding, outline coherence, and draft
+readability — but this has not been measured.
+
+Known gaps when using live providers:
+- Citation matching is still heuristic unless `BLOGAGENT_USE_LLM_FACTCHECK=true` is also set.
+  Even with LLM fact-checking, per-claim semantic matching is not implemented.
+- The LLM receives only the evidence table, not the raw extracted webpage text. Long source
+  passages are truncated to keep prompt size reasonable.
+- Real provider calls may incur API cost. No token counting or cost tracking is implemented.
+
+---
+
+## Provider Events and Trace Visibility
+
+`BlogRunState` now includes `provider_events`, `warnings`, `stage_timings`, and `execution_mode`
+for diagnostic inspection after a run. These are surfaced via `--show-trace` in the CLI.
+
+These are **diagnostic fields only** — they are not a full observability or tracing system.
+They do not replace structured logging, are not persisted, and should not be used for
+production monitoring.
+
+---
+
 ## Recommended Next Steps
 
 1. Set `BLOGAGENT_LLM_PROVIDER=anthropic`, `BLOGAGENT_USE_LLM_EDITOR=true`, `BLOGAGENT_USE_LLM_FACTCHECK=true` and measure eval quality improvement.

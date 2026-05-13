@@ -5,6 +5,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+ExecutionMode = Literal["mock", "hybrid", "live"]
+
 
 class CitationStatus(str, Enum):
     supported = "supported"
@@ -128,3 +130,8 @@ class BlogRunState(BaseModel):
     blocked: bool = False
     block_reason: str = ""
     requires_approval: bool = False
+    # Run trace fields
+    warnings: list[str] = Field(default_factory=list)
+    provider_events: list[str] = Field(default_factory=list)
+    stage_timings: dict[str, float] = Field(default_factory=dict)
+    execution_mode: ExecutionMode = "mock"

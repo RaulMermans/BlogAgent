@@ -164,6 +164,56 @@ uv run python -m blogagent.evals.runner
 
 ---
 
+## Live Smoke Test
+
+The CLI provides a single-run smoke test with configurable provider modes. All examples
+below are safe to run — they do not publish externally and do not require API keys in
+mock mode.
+
+### Mock mode (default — no API keys needed)
+
+```bash
+uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
+```
+
+Prints a summary with title, source count, claim stats, revision count, execution mode,
+and (with `--show-trace`) the full provider event log and stage timings.
+
+### Anthropic editor only
+
+```bash
+BLOGAGENT_LLM_PROVIDER=anthropic \
+BLOGAGENT_USE_LLM_EDITOR=true \
+ANTHROPIC_API_KEY=your_key_here \
+uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
+```
+
+### Tavily search + Anthropic editor + Anthropic fact-check
+
+```bash
+BLOGAGENT_SEARCH_PROVIDER=tavily \
+TAVILY_API_KEY=your_key_here \
+BLOGAGENT_LLM_PROVIDER=anthropic \
+BLOGAGENT_USE_LLM_EDITOR=true \
+BLOGAGENT_USE_LLM_FACTCHECK=true \
+ANTHROPIC_API_KEY=your_key_here \
+uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
+```
+
+### Output flags
+
+```bash
+# Print full ArticlePackage as JSON
+uv run python -m blogagent.cli run "Solar energy trends" --json
+
+# Write JSON output to a file
+uv run python -m blogagent.cli run "Solar energy trends" --output examples/live_smoke_output.json
+```
+
+Do not include real API keys in committed files or shell history.
+
+---
+
 ## Current Limitations
 
 The **mock LLM provider is the default** — all LLM steps return deterministic output without

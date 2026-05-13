@@ -5,9 +5,12 @@ from blogagent.workflow.graph import run_pipeline, validate_final_state
 st.set_page_config(page_title="BlogAgent", layout="wide")
 st.title("BlogAgent")
 st.caption(
-    "Source-grounded editorial agent — mock mode by default. "
+    "Source-grounded editorial agent. "
+    "Mock mode is default — no API keys required. "
     "Optional Tavily search: set BLOGAGENT_SEARCH_PROVIDER=tavily + TAVILY_API_KEY. "
-    "Real LLM calls are not implemented yet."
+    "Optional LLM calls: set BLOGAGENT_LLM_PROVIDER=anthropic or openai + API key, "
+    "and BLOGAGENT_USE_LLM_EDITOR=true and/or BLOGAGENT_USE_LLM_FACTCHECK=true. "
+    "No external publishing available in MVP."
 )
 
 topic = st.text_input("Topic", placeholder="e.g. The history of the internet")

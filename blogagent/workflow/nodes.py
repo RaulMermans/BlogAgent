@@ -21,6 +21,32 @@ from blogagent.workflow.state import (
 
 _DEFAULT_MAX_RESULTS = 5
 
+
+# ---------------------------------------------------------------------------
+# Trace helpers
+# ---------------------------------------------------------------------------
+
+
+def _event(state: BlogRunState, msg: str) -> None:
+    state.provider_events.append(msg)
+
+
+def _warn(state: BlogRunState, msg: str) -> None:
+    state.warnings.append(msg)
+
+
+def _llm_editor_mode() -> str:
+    use_llm = os.getenv("BLOGAGENT_USE_LLM_EDITOR", "false").strip().lower() == "true"
+    provider = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
+    return f"provider={provider}" if use_llm else "mock"
+
+
+def _llm_factcheck_mode() -> str:
+    use_llm = os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
+    provider = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
+    return f"provider={provider}" if use_llm else "mock"
+
+
 # Phrases that indicate the user wants an external side effect rather than an article.
 _BLOCKED_PHRASES = (
     "publish",
@@ -90,6 +116,7 @@ def generate_research_questions(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce research questions."""
     result = editor_agent.generate_research_plan(topic=state.topic)
     state.research_questions = result.research_questions
+    _event(state, f"editor.research_plan: {_llm_editor_mode()}")
     return state
 
 
@@ -97,6 +124,9 @@ def run_web_search(state: BlogRunState) -> BlogRunState:
     max_results = int(os.getenv("BLOGAGENT_MAX_SEARCH_RESULTS", str(_DEFAULT_MAX_RESULTS)))
     output = web_search(SearchInput(query=state.topic, max_results=max_results))
     state.search_results = output.results
+    _event(state, f"search: provider={output.provider}, results={len(output.results)}")
+    if output.warning:
+        _warn(state, f"search fallback: {output.warning}")
     return state
 
 
@@ -154,6 +184,7 @@ def generate_outline(state: BlogRunState) -> BlogRunState:
         target_word_count=result.target_word_count,
         seo_keywords=result.seo_keywords,
     )
+    _event(state, f"editor.outline: {_llm_editor_mode()}")
     return state
 
 
@@ -177,6 +208,7 @@ def write_draft(state: BlogRunState) -> BlogRunState:
     state.draft = result.article_markdown
     state.draft_meta_description = result.meta_description
     state.draft_seo_keywords = result.seo_keywords
+    _event(state, f"editor.draft: {_llm_editor_mode()}")
     return state
 
 
@@ -240,6 +272,7 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         passed=passed,
         blocking_issues=all_blocking,
     )
+    _event(state, f"fact_check: {_llm_factcheck_mode()}")
     return state
 
 
