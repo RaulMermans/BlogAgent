@@ -34,7 +34,8 @@ Do not include any claims that are not supported by the evidence table.
 """
 
 FACT_CHECK_PROMPT = """\
-You are a fact-checking evaluator. Given a blog draft and evidence table, extract all factual claims.
+You are a fact-checking evaluator. Given a blog draft and evidence table, extract all factual \
+claims.
 
 Draft:
 {draft}

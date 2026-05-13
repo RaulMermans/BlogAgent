@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from bs4 import BeautifulSoup
 
 from pydantic import BaseModel
 
@@ -53,6 +56,7 @@ def webpage_extract(input: ExtractInput) -> ExtractOutput:
 # Mock extraction
 # ---------------------------------------------------------------------------
 
+
 def _is_mock_url(url: str) -> bool:
     return bool(_MOCK_DOMAINS.search(url))
 
@@ -77,6 +81,7 @@ def _mock_extract(input: ExtractInput) -> ExtractOutput:
 # ---------------------------------------------------------------------------
 # Real extraction via httpx + BeautifulSoup4
 # ---------------------------------------------------------------------------
+
 
 def _real_extract(input: ExtractInput) -> ExtractOutput:
     try:
@@ -143,7 +148,7 @@ def _error_packet(input: ExtractInput, domain: str, error: str) -> SourcePacket:
     )
 
 
-def _extract_title(soup: "BeautifulSoup", fallback: str) -> str:  # type: ignore[name-defined]
+def _extract_title(soup: "BeautifulSoup", fallback: str) -> str:
     og = soup.find("meta", property="og:title")
     if og and og.get("content"):
         return str(og["content"]).strip()
@@ -155,7 +160,7 @@ def _extract_title(soup: "BeautifulSoup", fallback: str) -> str:  # type: ignore
     return fallback
 
 
-def _extract_author(soup: "BeautifulSoup") -> str:  # type: ignore[name-defined]
+def _extract_author(soup: "BeautifulSoup") -> str:
     for attr in ("author", "article:author"):
         tag = soup.find("meta", attrs={"name": attr}) or soup.find("meta", property=attr)
         if tag and tag.get("content"):
@@ -166,7 +171,7 @@ def _extract_author(soup: "BeautifulSoup") -> str:  # type: ignore[name-defined]
     return ""
 
 
-def _extract_date(soup: "BeautifulSoup") -> str:  # type: ignore[name-defined]
+def _extract_date(soup: "BeautifulSoup") -> str:
     for attr in ("article:published_time", "datePublished"):
         tag = soup.find("meta", property=attr) or soup.find("meta", attrs={"name": attr})
         if tag and tag.get("content"):
@@ -177,7 +182,7 @@ def _extract_date(soup: "BeautifulSoup") -> str:  # type: ignore[name-defined]
     return ""
 
 
-def _extract_text(soup: "BeautifulSoup") -> str:  # type: ignore[name-defined]
+def _extract_text(soup: "BeautifulSoup") -> str:
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
     text = soup.get_text(separator=" ", strip=True)

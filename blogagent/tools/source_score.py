@@ -17,18 +17,47 @@ from pydantic import BaseModel
 
 from blogagent.workflow.state import SourcePacket, SourceScore
 
-_TRUSTED_DOMAINS = frozenset({
-    "wikipedia.org", "nature.com", "science.org", "ncbi.nlm.nih.gov",
-    "pubmed.ncbi.nlm.nih.gov", "britannica.com", "bbc.com", "reuters.com",
-    "apnews.com", "nytimes.com", "theguardian.com", "washingtonpost.com",
-    "sciencedirect.com", "arxiv.org", "ieee.org", "acm.org", "jstor.org",
-    "who.int", "cdc.gov", "nih.gov", "nasa.gov", "noaa.gov",
-})
+_TRUSTED_DOMAINS = frozenset(
+    {
+        "wikipedia.org",
+        "nature.com",
+        "science.org",
+        "ncbi.nlm.nih.gov",
+        "pubmed.ncbi.nlm.nih.gov",
+        "britannica.com",
+        "bbc.com",
+        "reuters.com",
+        "apnews.com",
+        "nytimes.com",
+        "theguardian.com",
+        "washingtonpost.com",
+        "sciencedirect.com",
+        "arxiv.org",
+        "ieee.org",
+        "acm.org",
+        "jstor.org",
+        "who.int",
+        "cdc.gov",
+        "nih.gov",
+        "nasa.gov",
+        "noaa.gov",
+    }
+)
 
-_MODERATE_DOMAINS = frozenset({
-    "medium.com", "substack.com", "forbes.com", "wired.com", "techcrunch.com",
-    "arstechnica.com", "theatlantic.com", "vox.com", "slate.com", "salon.com",
-})
+_MODERATE_DOMAINS = frozenset(
+    {
+        "medium.com",
+        "substack.com",
+        "forbes.com",
+        "wired.com",
+        "techcrunch.com",
+        "arstechnica.com",
+        "theatlantic.com",
+        "vox.com",
+        "slate.com",
+        "salon.com",
+    }
+)
 
 _HIGH_TEXT_THRESHOLD = 2_000
 _LOW_TEXT_THRESHOLD = 200
@@ -128,6 +157,7 @@ def _score_recency(date: str) -> float:
     if not date:
         return 0.5
     import re  # noqa: PLC0415
+
     m = re.search(r"(20\d{2})", date)
     if not m:
         return 0.5

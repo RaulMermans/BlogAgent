@@ -52,6 +52,7 @@ def web_search(input: SearchInput) -> SearchOutput:
 # Mock provider
 # ---------------------------------------------------------------------------
 
+
 def _mock_search(input: SearchInput) -> SearchOutput:
     slug = input.query.replace(" ", "-").lower()
     results = [
@@ -59,7 +60,7 @@ def _mock_search(input: SearchInput) -> SearchOutput:
             url=f"https://mock-source-{i + 1}.example.dev/{slug}",
             title=f"[MOCK] Source {i + 1}: {input.query}",
             snippet=f"Mock research content about {input.query} from source {i + 1}. "
-                    f"This is placeholder data for development and testing only.",
+            f"This is placeholder data for development and testing only.",
             domain=f"mock-source-{i + 1}.example.dev",
             is_mock=True,
         )
@@ -77,6 +78,7 @@ def _mock_fallback(input: SearchInput, warning: str) -> SearchOutput:
 # ---------------------------------------------------------------------------
 # Tavily provider
 # ---------------------------------------------------------------------------
+
 
 def _tavily_search(input: SearchInput) -> SearchOutput:
     api_key = os.getenv("TAVILY_API_KEY", "").strip()
@@ -131,6 +133,7 @@ def _tavily_search(input: SearchInput) -> SearchOutput:
 def _extract_domain(url: str) -> str:
     try:
         from urllib.parse import urlparse  # noqa: PLC0415
+
         return urlparse(url).netloc
     except Exception:
         return ""

@@ -4,10 +4,6 @@ from pydantic import ValidationError
 from blogagent.workflow.state import (
     ArticlePackage,
     BlogRunState,
-    CitationMatch,
-    CitationStatus,
-    Claim,
-    ClaimImportance,
     FactCheckReport,
     SourceScore,
 )
@@ -40,6 +36,7 @@ def make_source(i: int = 0) -> SourceScore:
 # BlogRunState
 # ---------------------------------------------------------------------------
 
+
 def test_blog_run_state_can_be_created():
     state = BlogRunState(topic="Climate Change")
     assert state.topic == "Climate Change"
@@ -64,7 +61,9 @@ def test_blog_run_state_has_blocked_fields():
 
 
 def test_blog_run_state_blocked_can_be_set():
-    state = BlogRunState(topic="test", blocked=True, block_reason="external effect", requires_approval=True)
+    state = BlogRunState(
+        topic="test", blocked=True, block_reason="external effect", requires_approval=True
+    )
     assert state.blocked is True
     assert state.block_reason == "external effect"
     assert state.requires_approval is True
@@ -73,6 +72,7 @@ def test_blog_run_state_blocked_can_be_set():
 # ---------------------------------------------------------------------------
 # ArticlePackage
 # ---------------------------------------------------------------------------
+
 
 def test_article_package_valid():
     pkg = ArticlePackage(

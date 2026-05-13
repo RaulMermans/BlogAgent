@@ -15,7 +15,7 @@ All model calls are stubs returning deterministic placeholder data:
 | Editor Agent — draft writing | Stub | Claude API call with `DRAFT_PROMPT` |
 | Editor Agent — revision | Stub | Claude API call with `REVISION_PROMPT` |
 | Fact-Check Evaluator — claim extraction | Stub | Claude API call with `FACT_CHECK_PROMPT` |
-| `citation_matcher` tool | Stub | LLM-backed semantic matching |
+| `citation_matcher` tool | Deterministic heuristic | LLM-backed semantic matching |
 
 ---
 
@@ -47,7 +47,7 @@ All model calls are stubs returning deterministic placeholder data:
 
 - All sources in mock mode use `*.example.dev` domains — not real URLs.
 - All mock source scores are `0.3` — not real credibility assessments.
-- All claims are marked `supported` — not real citation matching.
+- Citation matching is deterministic and heuristic (no LLM): no sources → unsupported; mock-only → partially_supported; real scored source → supported. Semantic claim-to-source matching is not implemented.
 - Draft content is `[Placeholder content for Section]` — not real prose.
 - `meta_description` is a template string — not LLM-generated.
 

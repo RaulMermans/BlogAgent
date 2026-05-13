@@ -51,6 +51,7 @@ def _pkg(**kwargs) -> ArticlePackage:
 
 # --- validate_article_package ---
 
+
 def test_validate_article_package_valid():
     assert validate_article_package(_pkg()) == []
 
@@ -82,6 +83,7 @@ def test_validate_article_package_empty_slug():
 
 # --- validate_minimum_sources ---
 
+
 def test_validate_minimum_sources_passes_with_three():
     assert validate_minimum_sources(_pkg()) == []
 
@@ -98,6 +100,7 @@ def test_validate_minimum_sources_custom_minimum():
 
 # --- validate_no_unsupported_high_importance_claims ---
 
+
 def test_no_unsupported_high_importance_passes_when_supported():
     claim = Claim(text="X is true.", importance=ClaimImportance.high)
     match = CitationMatch(
@@ -105,18 +108,14 @@ def test_no_unsupported_high_importance_passes_when_supported():
         status=CitationStatus.supported,
         supporting_sources=["https://example.com"],
     )
-    errors = validate_no_unsupported_high_importance_claims(
-        _pkg(claim_support_statuses=[match])
-    )
+    errors = validate_no_unsupported_high_importance_claims(_pkg(claim_support_statuses=[match]))
     assert errors == []
 
 
 def test_no_unsupported_high_importance_fails_when_unsupported():
     claim = Claim(text="X is true.", importance=ClaimImportance.high)
     match = CitationMatch(claim=claim, status=CitationStatus.unsupported)
-    errors = validate_no_unsupported_high_importance_claims(
-        _pkg(claim_support_statuses=[match])
-    )
+    errors = validate_no_unsupported_high_importance_claims(_pkg(claim_support_statuses=[match]))
     assert len(errors) == 1
     assert "X is true." in errors[0]
 
@@ -124,7 +123,5 @@ def test_no_unsupported_high_importance_fails_when_unsupported():
 def test_no_unsupported_high_importance_passes_for_medium_unsupported():
     claim = Claim(text="Y is probably true.", importance=ClaimImportance.medium)
     match = CitationMatch(claim=claim, status=CitationStatus.unsupported)
-    errors = validate_no_unsupported_high_importance_claims(
-        _pkg(claim_support_statuses=[match])
-    )
+    errors = validate_no_unsupported_high_importance_claims(_pkg(claim_support_statuses=[match]))
     assert errors == [], "Medium unsupported claims must not block finalization"

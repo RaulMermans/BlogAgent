@@ -1,10 +1,12 @@
 from blogagent.workflow.graph import run_pipeline, validate_final_state
-from blogagent.workflow.state import BlogRunState, CitationStatus, ClaimImportance, CitationMatch, Claim
-
+from blogagent.workflow.state import (
+    BlogRunState,
+)
 
 # ---------------------------------------------------------------------------
 # Pipeline basics
 # ---------------------------------------------------------------------------
+
 
 def test_pipeline_returns_state_with_correct_topic():
     state = run_pipeline("Climate Change")
@@ -77,6 +79,7 @@ def test_pipeline_run_id_is_set():
 # SEO fields
 # ---------------------------------------------------------------------------
 
+
 def test_pipeline_article_package_has_non_empty_title():
     state = run_pipeline("Photosynthesis")
     assert state.final_article_package is not None
@@ -104,6 +107,7 @@ def test_pipeline_article_package_has_seo_keywords():
 # ---------------------------------------------------------------------------
 # External side-effect guardrail
 # ---------------------------------------------------------------------------
+
 
 def test_pipeline_blocked_for_post_to_wordpress():
     state = run_pipeline("Post this article to WordPress immediately")
@@ -144,6 +148,7 @@ def test_blocked_state_fails_validation():
 # ---------------------------------------------------------------------------
 # Mock data tracing
 # ---------------------------------------------------------------------------
+
 
 def test_pipeline_search_results_are_mock_in_mock_mode():
     state = run_pipeline("Solar Energy")

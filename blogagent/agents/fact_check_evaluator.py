@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from blogagent.workflow.state import (
     BlogRunState,
-    Claim,
     CitationMatch,
     CitationStatus,
+    Claim,
     ClaimImportance,
 )
 

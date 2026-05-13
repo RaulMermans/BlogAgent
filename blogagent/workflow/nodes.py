@@ -13,10 +13,10 @@ from blogagent.workflow.state import (
     ArticlePackage,
     BlogOutline,
     BlogRunState,
-    EvidenceItem,
-    FactCheckReport,
     CitationStatus,
     ClaimImportance,
+    EvidenceItem,
+    FactCheckReport,
 )
 
 _DEFAULT_MAX_RESULTS = 5
@@ -54,6 +54,7 @@ def _slugify(text: str) -> str:
 # Guardrail
 # ---------------------------------------------------------------------------
 
+
 def check_external_effects(state: BlogRunState) -> BlogRunState:
     """Block topics that request external side effects (publishing, posting, etc.)."""
     t = state.topic.lower()
@@ -74,6 +75,7 @@ def check_external_effects(state: BlogRunState) -> BlogRunState:
 # Intake
 # ---------------------------------------------------------------------------
 
+
 def intake_topic(state: BlogRunState) -> BlogRunState:
     state.topic = state.topic.strip()
     return state
@@ -82,6 +84,7 @@ def intake_topic(state: BlogRunState) -> BlogRunState:
 # ---------------------------------------------------------------------------
 # Research
 # ---------------------------------------------------------------------------
+
 
 def generate_research_questions(state: BlogRunState) -> BlogRunState:
     state.research_questions = [
@@ -113,8 +116,7 @@ def extract_webpages(state: BlogRunState) -> BlogRunState:
 
 def score_sources(state: BlogRunState) -> BlogRunState:
     state.source_scores = [
-        source_score(ScoreInput(packet=p, topic=state.topic))
-        for p in state.selected_sources
+        source_score(ScoreInput(packet=p, topic=state.topic)) for p in state.selected_sources
     ]
     return state
 
@@ -137,6 +139,7 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
 # ---------------------------------------------------------------------------
 # Article generation (stubs — replace with LLM calls)
 # ---------------------------------------------------------------------------
+
 
 def generate_outline(state: BlogRunState) -> BlogRunState:
     state.outline = BlogOutline(
@@ -162,6 +165,7 @@ def write_draft(state: BlogRunState) -> BlogRunState:
 # Claim extraction and citation matching (stubs — replace with LLM calls)
 # ---------------------------------------------------------------------------
 
+
 def extract_claims(state: BlogRunState) -> BlogRunState:
     output = claim_extractor(ClaimExtractInput(draft=state.draft, topic=state.topic))
     state.claims = output.claims
@@ -178,6 +182,7 @@ def match_citations(state: BlogRunState) -> BlogRunState:
 # Fact check and packaging
 # ---------------------------------------------------------------------------
 
+
 def run_fact_check(state: BlogRunState) -> BlogRunState:
     matches = state.citation_matches
     supported = sum(1 for m in matches if m.status == CitationStatus.supported)
@@ -186,8 +191,7 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
     blocking = [
         f"Unsupported high-importance claim: {m.claim.text!r}"
         for m in matches
-        if m.status == CitationStatus.unsupported
-        and m.claim.importance == ClaimImportance.high
+        if m.status == CitationStatus.unsupported and m.claim.importance == ClaimImportance.high
     ]
     state.fact_check_report = FactCheckReport(
         total_claims=len(matches),
