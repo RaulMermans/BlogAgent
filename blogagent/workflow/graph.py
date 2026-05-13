@@ -4,6 +4,7 @@ import uuid
 
 from blogagent.workflow.nodes import (
     build_evidence_table,
+    check_external_effects,
     extract_claims,
     extract_webpages,
     generate_outline,
@@ -25,6 +26,7 @@ from blogagent.tools.validators import (
 
 PIPELINE = [
     intake_topic,
+    check_external_effects,  # guardrail — sets state.blocked; pipeline short-circuits if True
     generate_research_questions,
     run_web_search,
     extract_webpages,
@@ -43,6 +45,8 @@ def run_pipeline(topic: str) -> BlogRunState:
     state = BlogRunState(topic=topic, run_id=str(uuid.uuid4()))
     for step in PIPELINE:
         state = step(state)
+        if state.blocked:
+            break
     return state
 
 

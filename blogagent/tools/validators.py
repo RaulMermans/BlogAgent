@@ -13,6 +13,10 @@ def validate_article_package(package: ArticlePackage) -> list[str]:
         errors.append("fact_check_report is missing")
     if not package.revision_summary.strip():
         errors.append("revision_summary is empty")
+    if not package.title.strip():
+        errors.append("title is empty")
+    if not package.slug.strip():
+        errors.append("slug is empty")
     return errors
 
 

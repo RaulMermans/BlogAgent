@@ -8,6 +8,23 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 
 ---
 
+## Implementation Status
+
+| Layer | Status |
+|---|---|
+| Deterministic pipeline scaffold | **Done** |
+| Schema validation + guardrails | **Done** |
+| External side-effect blocking | **Done** |
+| Mock search + extraction (default) | **Done** |
+| Real search via Tavily (opt-in) | **Done** — requires `TAVILY_API_KEY` |
+| Real webpage extraction via httpx+BS4 | **Done** — runs on non-mock URLs |
+| Deterministic source scoring | **Done** |
+| Real LLM calls (Editor Agent, Fact-Check Evaluator) | Not yet — stubs only |
+| Revision loop | Not yet |
+| Persistence / database | Not yet |
+
+---
+
 ## MVP Architecture
 
 The pipeline uses a **hybrid deterministic workflow** with two model roles:
@@ -23,9 +40,9 @@ The pipeline uses a **hybrid deterministic workflow** with two model roles:
 
 | Tool | Permission | Purpose |
 |---|---|---|
-| `web_search` | read_only | Search for sources on the topic |
-| `webpage_extract` | read_only | Extract text from source URLs |
-| `source_score` | read_only | Score sources for credibility and relevance |
+| `web_search` | read_only | Search for sources (mock default; Tavily optional) |
+| `webpage_extract` | read_only | Extract text from source URLs (httpx + BS4) |
+| `source_score` | read_only | Score sources deterministically |
 | `claim_extractor` | read_only | Extract factual claims from the draft |
 | `citation_matcher` | read_only | Match claims to evidence sources |
 | `validators` | read_only | Deterministic validation of the final package |
@@ -35,6 +52,7 @@ The pipeline uses a **hybrid deterministic workflow** with two model roles:
 ```text
 User Topic
 → Intake Parser
+→ check_external_effects  (guardrail — blocks publishing requests)
 → Editor Agent research plan
 → web_search
 → webpage_extract
@@ -56,6 +74,9 @@ The final `ArticlePackage` always contains:
 - Fact-check report
 - Claim support statuses
 - Revision summary
+- SEO fields: `title`, `slug`, `meta_description`, `seo_keywords`
+
+Publishing to external systems is **blocked in MVP** and requires explicit user approval.
 
 ---
 
@@ -67,9 +88,29 @@ Requires Python 3.11+.
 # With uv (recommended)
 uv sync
 
-# With pip
+# With pip (installs runtime + dev extras)
 pip install -e ".[dev]"
 ```
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+```
+
+Key variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BLOGAGENT_SEARCH_PROVIDER` | `mock` | `mock` for deterministic tests; `tavily` for real search |
+| `TAVILY_API_KEY` | _(empty)_ | Required when provider is `tavily` |
+| `BLOGAGENT_HTTP_TIMEOUT_SECONDS` | `15` | Timeout for web requests |
+| `BLOGAGENT_MAX_SEARCH_RESULTS` | `5` | Max results per query |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Required when LLM stubs are replaced with real calls |
 
 ---
 
@@ -88,11 +129,7 @@ pytest
 ## Run the App
 
 ```bash
-# With uv
 uv run streamlit run app/ui/streamlit_app.py
-
-# With streamlit directly
-streamlit run app/ui/streamlit_app.py
 ```
 
 ---
@@ -100,16 +137,16 @@ streamlit run app/ui/streamlit_app.py
 ## Run Evals
 
 ```bash
-python -m blogagent.evals.runner
+uv run python -m blogagent.evals.runner
 ```
 
 ---
 
 ## Current Limitations
 
-All LLM calls (Editor Agent, Fact-Check Evaluator) and external tool calls (web search, webpage extraction, source scoring) are deterministic stubs. The scaffold produces valid placeholder output that exercises the full pipeline shape and passes all validators.
+All LLM calls (Editor Agent, Fact-Check Evaluator) are deterministic stubs. Real web search and extraction are available but optional via environment config. The default mock mode produces valid placeholder output for testing.
 
-See [docs/limitations.md](docs/limitations.md) for the complete list of what is not yet implemented.
+See [docs/limitations.md](docs/limitations.md) for the complete list.
 
 ---
 
@@ -119,7 +156,7 @@ See [docs/limitations.md](docs/limitations.md) for the complete list of what is 
 blogagent/
   workflow/       State models, pipeline nodes, graph runner
   agents/         Editor Agent and Fact-Check Evaluator stubs + prompts
-  tools/          Tool stubs + deterministic validators
+  tools/          Tool implementations + deterministic validators
   evals/          Eval cases, runner, and graders
 
 app/ui/           Streamlit UI

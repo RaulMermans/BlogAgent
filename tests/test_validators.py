@@ -43,6 +43,8 @@ def _pkg(**kwargs) -> ArticlePackage:
         fact_check_report=_fact_check(),
         claim_support_statuses=[],
         revision_summary="No revisions.",
+        title="Test Title",
+        slug="test-title",
     )
     return ArticlePackage(**{**defaults, **kwargs})
 
@@ -66,6 +68,16 @@ def test_validate_article_package_empty_revision_summary():
 def test_validate_article_package_empty_source_list():
     errors = validate_article_package(_pkg(source_list=[]))
     assert any("source_list" in e for e in errors)
+
+
+def test_validate_article_package_empty_title():
+    errors = validate_article_package(_pkg(title=""))
+    assert any("title" in e for e in errors)
+
+
+def test_validate_article_package_empty_slug():
+    errors = validate_article_package(_pkg(slug=""))
+    assert any("slug" in e for e in errors)
 
 
 # --- validate_minimum_sources ---

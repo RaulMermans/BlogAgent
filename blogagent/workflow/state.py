@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,7 @@ class SearchResult(BaseModel):
     title: str
     snippet: str
     domain: str
+    is_mock: bool = False
 
 
 class SourcePacket(BaseModel):
@@ -31,6 +32,12 @@ class SourcePacket(BaseModel):
     domain: str
     extracted_text: str
     word_count: int = 0
+    author: str = ""
+    date: str = ""
+    publisher: str = ""
+    is_mock: bool = False
+    extraction_status: Literal["success", "failed", "mock"] = "success"
+    error_message: Optional[str] = None
 
 
 class SourceScore(BaseModel):
@@ -42,6 +49,7 @@ class SourceScore(BaseModel):
     recency_score: float = Field(ge=0.0, le=1.0)
     overall_score: float = Field(ge=0.0, le=1.0)
     notes: str = ""
+    is_mock: bool = False
 
 
 class EvidenceItem(BaseModel):
@@ -89,6 +97,10 @@ class ArticlePackage(BaseModel):
     fact_check_report: FactCheckReport
     claim_support_statuses: list[CitationMatch]
     revision_summary: str
+    title: str = ""
+    slug: str = ""
+    meta_description: str = ""
+    seo_keywords: list[str] = Field(default_factory=list)
     run_id: str = ""
     created_at: str = ""
     topic: str = ""
@@ -109,3 +121,6 @@ class BlogRunState(BaseModel):
     final_article_package: Optional[ArticlePackage] = None
     revision_count: int = 0
     run_id: str = ""
+    blocked: bool = False
+    block_reason: str = ""
+    requires_approval: bool = False

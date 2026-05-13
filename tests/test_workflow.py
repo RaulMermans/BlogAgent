@@ -1,6 +1,10 @@
 from blogagent.workflow.graph import run_pipeline, validate_final_state
-from blogagent.workflow.state import CitationStatus, ClaimImportance, CitationMatch, Claim
+from blogagent.workflow.state import BlogRunState, CitationStatus, ClaimImportance, CitationMatch, Claim
 
+
+# ---------------------------------------------------------------------------
+# Pipeline basics
+# ---------------------------------------------------------------------------
 
 def test_pipeline_returns_state_with_correct_topic():
     state = run_pipeline("Climate Change")
@@ -57,7 +61,6 @@ def test_pipeline_passes_all_validators():
 
 
 def test_validate_final_state_fails_when_package_is_none():
-    from blogagent.workflow.state import BlogRunState
     state = BlogRunState(topic="X")
     errors = validate_final_state(state)
     assert errors != []
@@ -68,3 +71,87 @@ def test_pipeline_run_id_is_set():
     assert state.run_id != ""
     assert state.final_article_package is not None
     assert state.final_article_package.run_id == state.run_id
+
+
+# ---------------------------------------------------------------------------
+# SEO fields
+# ---------------------------------------------------------------------------
+
+def test_pipeline_article_package_has_non_empty_title():
+    state = run_pipeline("Photosynthesis")
+    assert state.final_article_package is not None
+    assert state.final_article_package.title != ""
+
+
+def test_pipeline_article_package_has_non_empty_slug():
+    state = run_pipeline("Photosynthesis")
+    assert state.final_article_package is not None
+    assert state.final_article_package.slug != ""
+
+
+def test_pipeline_article_package_slug_has_no_spaces():
+    state = run_pipeline("The History of Writing")
+    assert state.final_article_package is not None
+    assert " " not in state.final_article_package.slug
+
+
+def test_pipeline_article_package_has_seo_keywords():
+    state = run_pipeline("Solar Energy")
+    assert state.final_article_package is not None
+    assert isinstance(state.final_article_package.seo_keywords, list)
+
+
+# ---------------------------------------------------------------------------
+# External side-effect guardrail
+# ---------------------------------------------------------------------------
+
+def test_pipeline_blocked_for_post_to_wordpress():
+    state = run_pipeline("Post this article to WordPress immediately")
+    assert state.blocked is True
+    assert state.final_article_package is None
+    assert "blocked" in state.block_reason.lower() or "external" in state.block_reason.lower()
+
+
+def test_pipeline_blocked_for_publish_request():
+    state = run_pipeline("Publish my article on Medium now")
+    assert state.blocked is True
+    assert state.final_article_package is None
+
+
+def test_pipeline_blocked_sets_requires_approval():
+    state = run_pipeline("Tweet this article now")
+    assert state.blocked is True
+    assert state.requires_approval is True
+
+
+def test_pipeline_not_blocked_for_normal_topic():
+    state = run_pipeline("The water cycle")
+    assert state.blocked is False
+    assert state.final_article_package is not None
+
+
+def test_pipeline_not_blocked_for_post_war_history():
+    state = run_pipeline("Post-war economic recovery in Europe")
+    assert state.blocked is False
+
+
+def test_blocked_state_fails_validation():
+    state = run_pipeline("Post this article to WordPress immediately")
+    errors = validate_final_state(state)
+    assert errors != [], "Blocked state must fail validation (no final package)"
+
+
+# ---------------------------------------------------------------------------
+# Mock data tracing
+# ---------------------------------------------------------------------------
+
+def test_pipeline_search_results_are_mock_in_mock_mode():
+    state = run_pipeline("Solar Energy")
+    for result in state.search_results:
+        assert result.is_mock is True, f"Expected is_mock=True for {result.url}"
+
+
+def test_pipeline_selected_sources_are_mock_in_mock_mode():
+    state = run_pipeline("Solar Energy")
+    for source in state.selected_sources:
+        assert source.is_mock is True, f"Expected is_mock=True for {source.url}"
