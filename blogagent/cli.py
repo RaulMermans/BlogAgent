@@ -1,10 +1,12 @@
-"""CLI smoke-test entry point for BlogAgent.
+"""CLI entry point for BlogAgent.
 
 Usage:
     python -m blogagent.cli run "Why elephants are the heaviest land animals"
     python -m blogagent.cli run "..." --show-trace
     python -m blogagent.cli run "..." --json
     python -m blogagent.cli run "..." --output examples/live_smoke_output.json
+    python -m blogagent.cli compare examples/mock_elephants_output.json \
+        examples/live_elephants_output.json
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if args.json:
         if pkg:
-            payload = pkg.model_dump()
+            payload = _enrich_package(pkg.model_dump(), state)
         else:
             payload = {
                 "blocked": state.blocked,
@@ -76,12 +78,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         _print_trace(state)
 
     if args.output and pkg:
-        payload = json.dumps(pkg.model_dump(), indent=2)
+        payload = json.dumps(_enrich_package(pkg.model_dump(), state), indent=2)
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(payload)
         print(f"Output written:   {args.output}")
 
     return 0 if not errors else 1
+
+
+def _enrich_package(pkg_dict: dict, state: BlogRunState) -> dict:
+    """Add state-level fields to an ArticlePackage dict for richer --output files."""
+    pkg_dict["execution_mode"] = state.execution_mode
+    pkg_dict["revision_count"] = state.revision_count
+    pkg_dict["blocked"] = state.blocked
+    pkg_dict["block_reason"] = state.block_reason
+    pkg_dict["provider_events"] = list(state.provider_events)
+    pkg_dict["warnings"] = list(state.warnings)
+    return pkg_dict
 
 
 def _print_trace(state: BlogRunState) -> None:
@@ -103,6 +116,30 @@ def _print_trace(state: BlogRunState) -> None:
         for stage, t in state.stage_timings.items():
             print(f"  {stage}: {t:.3f}s")
     print("-----------------")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: compare
+# ---------------------------------------------------------------------------
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    from blogagent.evals.compare_outputs import compare_outputs, format_comparison_table
+
+    paths = [Path(p) for p in args.files]
+    metrics_list = compare_outputs(paths)
+
+    # Print errors for missing/invalid files
+    errors = [m for m in metrics_list if m.load_error]
+    ok = [m for m in metrics_list if not m.load_error]
+
+    print(format_comparison_table(metrics_list))
+
+    if errors and not ok:
+        return 2  # all files failed to load
+    if errors:
+        return 1  # some files failed
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +174,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write JSON output to this file path (creates parent dirs if needed).",
     )
+
+    compare_p = sub.add_parser(
+        "compare",
+        help="Compare two or more saved run output JSON files and print a quality table.",
+    )
+    compare_p.add_argument(
+        "files",
+        nargs="+",
+        metavar="FILE",
+        help="Paths to ArticlePackage JSON files produced by --output.",
+    )
+
     return parser
 
 
@@ -150,6 +199,9 @@ def main() -> None:
 
     if args.command == "run":
         sys.exit(cmd_run(args))
+
+    if args.command == "compare":
+        sys.exit(cmd_compare(args))
 
 
 if __name__ == "__main__":

@@ -214,6 +214,96 @@ Do not include real API keys in committed files or shell history.
 
 ---
 
+## Comparing mock vs live provider outputs
+
+BlogAgent can compare two or more saved run output JSON files and report a side-by-side
+quality summary. This is useful for checking whether switching from mock to a real LLM or
+search provider improved output quality.
+
+### Produce output files
+
+```bash
+# Mock mode (no API keys needed)
+uv run python -m blogagent.cli run "African Elephants" --output examples/my_mock_output.json
+
+# Live mode (requires API keys)
+BLOGAGENT_LLM_PROVIDER=anthropic \
+BLOGAGENT_USE_LLM_EDITOR=true \
+BLOGAGENT_SEARCH_PROVIDER=tavily \
+ANTHROPIC_API_KEY=your_key \
+TAVILY_API_KEY=your_key \
+uv run python -m blogagent.cli run "African Elephants" --output examples/my_live_output.json
+```
+
+The `--output` flag writes an enriched JSON that includes the `ArticlePackage` fields plus
+state-level metadata: `execution_mode`, `revision_count`, `provider_events`, and `warnings`.
+
+### Compare them
+
+```bash
+uv run python -m blogagent.cli compare examples/mock_elephants_output.json examples/live_elephants_output.json
+```
+
+Example output:
+
+```
+BlogAgent Output Comparison
+------------------------------------------------------------------
+                                  mock_elephants_output.json      live_elephants_output.json
+------------------------------------------------------------------
+METADATA
+  execution_mode                  mock                      live
+  blocked                         False                     False
+  revision_count                  0                         1
+  provider_events                 5                         5
+  warnings                        1                         0
+
+ARTICLE
+  has_title                       yes                       yes
+  has_meta_description            yes                       yes
+  word_count                      283                       682
+  heading_count                   5                         6
+
+SOURCES
+  total                           3                         4
+  mock                            3                         0
+  real                            0                         4
+
+CLAIMS
+  total                           3                         5
+  supported                       0                         4
+  partially_supported             3                         1
+  unsupported                     0                         0
+
+QUALITY SCORE  (max 100)
+  score                           75                        100
+  deductions:
+    all sources are mock          [x] mock_elephants_output [x] [ ] live_elephants_output
+    under 600 words (283)         [x] mock_elephants_output [ ] live_elephants_output
+```
+
+### Quality rubric
+
+Scores are deterministic — the same input always produces the same score.
+No LLM judge is used.
+
+| Check | Points |
+|---|---|
+| Valid title | +10 |
+| Valid meta description | +10 |
+| Article has at least one markdown heading | +10 |
+| Article is over 600 words | +15 |
+| At least 3 sources | +15 |
+| No unsupported high-importance claims | +20 |
+| Not all sources are mock placeholders | +10 |
+| Revision summary is non-empty | +10 |
+| **Total** | **100** |
+
+The score is a heuristic indicator, not a substitute for editorial review.
+See [docs/eval_plan.md](docs/eval_plan.md) for caveats.
+
+---
+
 ## Current Limitations
 
 The **mock LLM provider is the default** — all LLM steps return deterministic output without

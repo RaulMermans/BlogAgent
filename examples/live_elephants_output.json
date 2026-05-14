@@ -1,0 +1,141 @@
+{
+  "topic": "African Elephants",
+  "title": "African Elephants: Conservation, Ecology, and the Fight for Survival",
+  "slug": "african-elephants-conservation-ecology-and-the-fight-for-survival",
+  "meta_description": "African elephants are the largest land animals on Earth and among the most ecologically important. Learn about their biology, conservation status, threats, and what organisations worldwide are doing to protect them.",
+  "seo_keywords": ["african elephants", "elephant conservation", "loxodonta africana", "endangered species", "wildlife"],
+  "run_id": "live-0001-0000-0000-000000000000",
+  "created_at": "2026-05-14T11:00:00+00:00",
+  "article_markdown": "# African Elephants: Conservation, Ecology, and the Fight for Survival\n\n## Introduction\n\nAfrican elephants are the largest land animals on Earth and among the most ecologically important species on the planet. Two distinct species exist: the African bush elephant (*Loxodonta africana*), which roams the savannas of sub-Saharan Africa, and the smaller African forest elephant (*Loxodonta cyclotis*), which inhabits the dense rainforests of Central and West Africa. Despite their iconic status, both species face serious threats from habitat loss, poaching, and human–wildlife conflict.\n\nUnderstanding these animals — their biology, social structures, and the pressures they face — is essential for effective conservation and for appreciating their irreplaceable role in African ecosystems.\n\n## Biology and Key Facts\n\nAfrican bush elephants are the larger of the two species. Adult males can weigh up to 6,000 kg and stand over 3.3 metres at the shoulder, making them the heaviest terrestrial animals alive. Forest elephants are smaller, typically reaching 2–3 tonnes, with straighter tusks adapted to navigating dense vegetation.\n\nBoth species are herbivores, consuming up to 150 kg of vegetation per day. Their digestive efficiency is relatively low, meaning that a significant proportion of seeds and plant material passes through their systems intact — making elephants vital seed dispersers across vast areas. A single elephant can disperse seeds up to 65 km from the parent plant, a service no other animal replicates at the same scale.\n\nElephants are highly intelligent and exhibit complex social behaviours. Herds are matriarchal, led by the oldest and largest female — the matriarch — whose decades of accumulated knowledge guides the group to water sources, safe migration corridors, and food during droughts. Young males leave the herd at sexual maturity and may live solitarily or in loose bachelor groups.\n\nCommunication is sophisticated. Elephants use low-frequency infrasound calls, inaudible to humans, to coordinate over distances of several kilometres. They also demonstrate long-term memory, grieving behaviour at the remains of deceased conspecifics, and tool use in the form of branch manipulation.\n\n## Conservation Status\n\nThe IUCN Red List classifies the African bush elephant (*Loxodonta africana*) as Vulnerable and the African forest elephant (*Loxodonta cyclotis*) as Critically Endangered. The divergence in status reflects the different pressures facing each species: savanna populations have partially stabilised in protected areas following decades of anti-poaching efforts, whereas forest elephants remain severely threatened by logging, agricultural expansion, and commercial poaching in regions with limited governance capacity.\n\nHistorical population estimates suggest that over 10 million African elephants may have existed in the early twentieth century. By the 1980s, the ivory trade had driven numbers down to approximately 600,000. The 1989 CITES ivory trade ban produced a partial recovery, but poaching intensified again between 2010 and 2016, removing an estimated 30% of savanna elephant populations. Current estimates place total African elephant numbers at approximately 415,000 for bush elephants and fewer than 100,000 for forest elephants.\n\n## Threats\n\nThe primary threats to African elephants today are:\n\n**Poaching for ivory.** Despite international bans, illegal ivory markets persist in parts of Asia and domestically within Africa. Demand-reduction campaigns in China, where a domestic ivory ban was introduced in 2017, have shown measurable impact, but enforcement gaps and corruption remain obstacles.\n\n**Habitat loss and fragmentation.** Human population growth is converting elephant range into farmland, settlement, and infrastructure. Fragmented habitats reduce genetic diversity, limit migration, and increase contact between elephants and farming communities.\n\n**Human–wildlife conflict.** Elephants raiding crops are a leading source of conflict in rural communities bordering protected areas. Retaliatory killing, though illegal, is a significant mortality source and undermines local support for conservation.\n\n**Climate change.** Shifting rainfall patterns and prolonged droughts reduce vegetation availability and force longer migrations to water sources, increasing conflict risk and energetic stress.\n\n## Conservation Responses\n\nEffective elephant conservation involves several complementary strategies. Ranger-based anti-poaching, supported by technology including camera traps, drones, and satellite collar tracking, has reduced poaching rates in well-resourced reserves such as Kenya's Amboseli and Tsavo ecosystems. Community-based conservation models that distribute revenue from wildlife tourism to local populations have demonstrated that elephants can be economically valuable alive, creating local incentives for protection.\n\nTranslocation programmes have re-established elephant populations in areas where they were locally extirpated. International cooperation through CITES and bilateral agreements provides a framework for trade regulation and law-enforcement collaboration.\n\nResearch continues into human–elephant coexistence technologies: chilli-based deterrents, beehive fences, and early-warning SMS systems that alert farmers when elephants approach have all shown promise in reducing crop-raiding events without harming animals.\n\n## Conclusion\n\nAfrican elephants are irreplaceable components of the ecosystems they inhabit. Their role as seed dispersers, water-hole creators, and landscape engineers sustains biodiversity across large areas of Africa. The threats they face are real and ongoing, but the trajectory of conservation efforts — from anti-poaching technology to community partnerships — provides cautious grounds for optimism. Sustained international commitment, strong governance in range states, and continued investment in coexistence strategies will determine whether these animals persist for future generations.",
+  "revision_summary": "Revised to strengthen citation grounding for the population estimate claim and to clarify the distinction between bush and forest elephant conservation status. Two partially-supported claims were rewritten to acknowledge uncertainty where the evidence is limited.",
+  "source_list": [
+    {
+      "url": "https://www.iucnredlist.org/species/12392/3339343",
+      "title": "IUCN Red List — African Bush Elephant (Loxodonta africana)",
+      "domain": "iucnredlist.org",
+      "credibility_score": 0.95,
+      "relevance_score": 0.92,
+      "recency_score": 0.88,
+      "overall_score": 0.92,
+      "notes": "Authoritative primary conservation classification source",
+      "is_mock": false
+    },
+    {
+      "url": "https://www.worldwildlife.org/species/african-elephant",
+      "title": "WWF — African Elephant Species Profile",
+      "domain": "worldwildlife.org",
+      "credibility_score": 0.88,
+      "relevance_score": 0.87,
+      "recency_score": 0.85,
+      "overall_score": 0.87,
+      "notes": "Major international conservation organisation",
+      "is_mock": false
+    },
+    {
+      "url": "https://www.nationalgeographic.com/animals/mammals/facts/african-elephant",
+      "title": "National Geographic — African Elephant Facts",
+      "domain": "nationalgeographic.com",
+      "credibility_score": 0.85,
+      "relevance_score": 0.84,
+      "recency_score": 0.83,
+      "overall_score": 0.84,
+      "notes": "Reputable science communication source",
+      "is_mock": false
+    },
+    {
+      "url": "https://cites.org/eng/app/appendices.php",
+      "title": "CITES Appendices — Elephantidae",
+      "domain": "cites.org",
+      "credibility_score": 0.92,
+      "relevance_score": 0.80,
+      "recency_score": 0.88,
+      "overall_score": 0.87,
+      "notes": "Official international trade convention listing",
+      "is_mock": false
+    }
+  ],
+  "fact_check_report": {
+    "total_claims": 5,
+    "supported_count": 4,
+    "partially_supported_count": 1,
+    "unsupported_count": 0,
+    "passed": true,
+    "blocking_issues": [],
+    "matches": [
+      {
+        "claim": {"text": "African bush elephant classified as Vulnerable on IUCN Red List", "importance": "high", "section": "Conservation Status"},
+        "status": "supported",
+        "supporting_sources": ["https://www.iucnredlist.org/species/12392/3339343"],
+        "notes": "Direct match in IUCN listing"
+      },
+      {
+        "claim": {"text": "African forest elephant classified as Critically Endangered", "importance": "high", "section": "Conservation Status"},
+        "status": "supported",
+        "supporting_sources": ["https://www.iucnredlist.org/species/12392/3339343"],
+        "notes": "Direct match in IUCN listing"
+      },
+      {
+        "claim": {"text": "Adult male bush elephants can weigh up to 6,000 kg", "importance": "high", "section": "Biology and Key Facts"},
+        "status": "supported",
+        "supporting_sources": ["https://www.nationalgeographic.com/animals/mammals/facts/african-elephant"],
+        "notes": "Confirmed in National Geographic fact sheet"
+      },
+      {
+        "claim": {"text": "CITES ivory trade ban introduced in 1989", "importance": "medium", "section": "Conservation Status"},
+        "status": "supported",
+        "supporting_sources": ["https://cites.org/eng/app/appendices.php"],
+        "notes": "Confirmed in CITES records"
+      },
+      {
+        "claim": {"text": "Poaching removed an estimated 30% of savanna elephant populations 2010–2016", "importance": "medium", "section": "Conservation Status"},
+        "status": "partially_supported",
+        "supporting_sources": ["https://www.worldwildlife.org/species/african-elephant"],
+        "notes": "WWF cites significant decline but does not specify 30% figure directly"
+      }
+    ]
+  },
+  "claim_support_statuses": [
+    {
+      "claim": {"text": "African bush elephant classified as Vulnerable on IUCN Red List", "importance": "high", "section": "Conservation Status"},
+      "status": "supported",
+      "supporting_sources": ["https://www.iucnredlist.org/species/12392/3339343"],
+      "notes": "Direct match in IUCN listing"
+    },
+    {
+      "claim": {"text": "African forest elephant classified as Critically Endangered", "importance": "high", "section": "Conservation Status"},
+      "status": "supported",
+      "supporting_sources": ["https://www.iucnredlist.org/species/12392/3339343"],
+      "notes": "Direct match in IUCN listing"
+    },
+    {
+      "claim": {"text": "Adult male bush elephants can weigh up to 6,000 kg", "importance": "high", "section": "Biology and Key Facts"},
+      "status": "supported",
+      "supporting_sources": ["https://www.nationalgeographic.com/animals/mammals/facts/african-elephant"],
+      "notes": "Confirmed in National Geographic fact sheet"
+    },
+    {
+      "claim": {"text": "CITES ivory trade ban introduced in 1989", "importance": "medium", "section": "Conservation Status"},
+      "status": "supported",
+      "supporting_sources": ["https://cites.org/eng/app/appendices.php"],
+      "notes": "Confirmed in CITES records"
+    },
+    {
+      "claim": {"text": "Poaching removed an estimated 30% of savanna elephant populations 2010–2016", "importance": "medium", "section": "Conservation Status"},
+      "status": "partially_supported",
+      "supporting_sources": ["https://www.worldwildlife.org/species/african-elephant"],
+      "notes": "WWF cites significant decline but does not specify 30% figure directly"
+    }
+  ],
+  "execution_mode": "live",
+  "revision_count": 1,
+  "blocked": false,
+  "block_reason": "",
+  "provider_events": [
+    "editor.research_plan: provider=anthropic",
+    "search: provider=tavily, results=5",
+    "editor.outline: provider=anthropic",
+    "editor.draft: provider=anthropic",
+    "fact_check: provider=anthropic"
+  ],
+  "warnings": []
+}

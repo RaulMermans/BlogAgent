@@ -65,6 +65,64 @@ When the pipeline changes:
 
 ---
 
+## Provider Comparison
+
+The `compare` CLI command performs deterministic, heuristic comparison of two or more
+saved run output JSON files. It is designed for a specific use case: checking whether
+switching from mock to live providers changed output quality in measurable ways.
+
+### What the comparison measures
+
+| Metric | Source |
+|---|---|
+| Title and meta description presence | `ArticlePackage.title`, `.meta_description` |
+| Article word count and heading count | parsed from `article_markdown` |
+| Source count and mock source count | `source_list[*].is_mock` |
+| Supported / partially / unsupported claim counts | `fact_check_report` |
+| Revision count, blocked status | state-level fields (present in `--output` enriched JSON) |
+| Execution mode and provider events | state-level fields |
+| Warnings | state-level fields |
+| Quality score (0–100) | deterministic rubric (see below) |
+
+### Quality rubric
+
+The rubric awards points for structural and coverage properties of the output.
+It is **not** a measure of factual accuracy or prose quality.
+
+```
+valid title              +10
+valid meta description   +10
+article has headings     +10
+article over 600 words   +15
+at least 3 sources       +15
+no unsupported high-imp  +20
+not all mock sources     +10
+non-empty revision summ  +10
+────────────────────────────
+total                    100
+```
+
+### Limitations of provider comparison
+
+**This comparison layer is not a substitute for human editorial review.**
+
+- It measures structure and coverage, not factual accuracy. A well-structured article
+  with plausible-sounding but wrong facts can score 100/100.
+- Citation matching is heuristic. A "supported" status means the claim was associated
+  with a source URL — not that the URL's content actually backs the claim.
+- Mock output can score up to 90/100 if the article is long enough — the only guaranteed
+  deduction for mock mode is the "not pure mock sources" check (-10).
+- Scores are not comparable across different topics. A 75 on "African Elephants" and a
+  75 on "Quantum Computing" reflect different underlying quality levels.
+- The rubric will not detect fabricated statistics, hallucinated quotes, or subtle
+  factual errors introduced by an LLM. These require human review or semantic
+  citation-matching (not yet implemented).
+
+Use provider comparison to answer: **did switching providers produce a structurally
+better output?** Use human review to answer: **is the content actually trustworthy?**
+
+---
+
 ## Current Status
 
 All 8 eval cases pass on the current scaffold:

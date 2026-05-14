@@ -1,0 +1,108 @@
+{
+  "topic": "African Elephants",
+  "title": "Understanding African Elephants",
+  "slug": "understanding-african-elephants",
+  "meta_description": "An evidence-based overview of African Elephants, covering key facts, recent developments, and practical implications.",
+  "seo_keywords": ["african", "elephants"],
+  "run_id": "mock-0001-0000-0000-000000000000",
+  "created_at": "2026-05-14T10:00:00+00:00",
+  "article_markdown": "# Understanding African Elephants\n\n## Introduction\n\nAfrican Elephants is a subject that draws interest from researchers, practitioners, and curious readers alike. This article provides an evidence-based overview drawing on available sources.\n\n## Background\n\nThe study of African Elephants has a rich history. Understanding its origins and development helps contextualise current knowledge and ongoing debates.\n\nAccording to *Mock Source — African Elephants 1*: Information about African Elephants from Mock Source — African Elephants 1\n\nAccording to *Mock Source — African Elephants 2*: Information about African Elephants from Mock Source — African Elephants 2\n\n## Key Facts\n\nSeveral important facts characterise African Elephants. Multiple sources converge on the significance of this area and document its major dimensions.\n\nAccording to *Mock Source — African Elephants 1*: Information about African Elephants from Mock Source — African Elephants 1\n\nAccording to *Mock Source — African Elephants 2*: Information about African Elephants from Mock Source — African Elephants 2\n\n## Recent Developments\n\nIn recent years, African Elephants has seen notable advances. New research, tools, and applications continue to expand what is known and what is possible.\n\n## Conclusion\n\nThis overview reflects the available evidence on African Elephants. Readers seeking further depth should consult the primary sources cited.",
+  "revision_summary": "No revision performed.",
+  "source_list": [
+    {
+      "url": "https://mock.blogagent.local/african-elephants-1",
+      "title": "Mock Source — African Elephants 1",
+      "domain": "mock.blogagent.local",
+      "credibility_score": 0.5,
+      "relevance_score": 0.5,
+      "recency_score": 0.5,
+      "overall_score": 0.5,
+      "notes": "Mock placeholder source",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock.blogagent.local/african-elephants-2",
+      "title": "Mock Source — African Elephants 2",
+      "domain": "mock.blogagent.local",
+      "credibility_score": 0.5,
+      "relevance_score": 0.5,
+      "recency_score": 0.5,
+      "overall_score": 0.5,
+      "notes": "Mock placeholder source",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock.blogagent.local/african-elephants-3",
+      "title": "Mock Source — African Elephants 3",
+      "domain": "mock.blogagent.local",
+      "credibility_score": 0.5,
+      "relevance_score": 0.5,
+      "recency_score": 0.5,
+      "overall_score": 0.5,
+      "notes": "Mock placeholder source",
+      "is_mock": true
+    }
+  ],
+  "fact_check_report": {
+    "total_claims": 3,
+    "supported_count": 0,
+    "partially_supported_count": 3,
+    "unsupported_count": 0,
+    "passed": true,
+    "blocking_issues": [],
+    "matches": [
+      {
+        "claim": {"text": "African elephants are the largest land animals", "importance": "medium", "section": "Introduction"},
+        "status": "partially_supported",
+        "supporting_sources": ["https://mock.blogagent.local/african-elephants-1"],
+        "notes": "Mock source only"
+      },
+      {
+        "claim": {"text": "African elephants are classified as Vulnerable or Endangered", "importance": "medium", "section": "Key Facts"},
+        "status": "partially_supported",
+        "supporting_sources": ["https://mock.blogagent.local/african-elephants-2"],
+        "notes": "Mock source only"
+      },
+      {
+        "claim": {"text": "Elephant herds are led by a matriarch", "importance": "medium", "section": "Key Facts"},
+        "status": "partially_supported",
+        "supporting_sources": ["https://mock.blogagent.local/african-elephants-3"],
+        "notes": "Mock source only"
+      }
+    ]
+  },
+  "claim_support_statuses": [
+    {
+      "claim": {"text": "African elephants are the largest land animals", "importance": "medium", "section": "Introduction"},
+      "status": "partially_supported",
+      "supporting_sources": ["https://mock.blogagent.local/african-elephants-1"],
+      "notes": "Mock source only"
+    },
+    {
+      "claim": {"text": "African elephants are classified as Vulnerable or Endangered", "importance": "medium", "section": "Key Facts"},
+      "status": "partially_supported",
+      "supporting_sources": ["https://mock.blogagent.local/african-elephants-2"],
+      "notes": "Mock source only"
+    },
+    {
+      "claim": {"text": "Elephant herds are led by a matriarch", "importance": "medium", "section": "Key Facts"},
+      "status": "partially_supported",
+      "supporting_sources": ["https://mock.blogagent.local/african-elephants-3"],
+      "notes": "Mock source only"
+    }
+  ],
+  "execution_mode": "mock",
+  "revision_count": 0,
+  "blocked": false,
+  "block_reason": "",
+  "provider_events": [
+    "editor.research_plan: mock",
+    "search: provider=mock, results=3",
+    "editor.outline: mock",
+    "editor.draft: mock",
+    "fact_check: mock"
+  ],
+  "warnings": [
+    "LLM provider is mock — all article content is deterministic placeholder output"
+  ]
+}
