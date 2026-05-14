@@ -1,0 +1,142 @@
+{
+  "article_markdown": "# Understanding Why elephants are the heaviest land animals\n\n## Introduction\n\nWhy elephants are the heaviest land animals is a subject that draws interest from researchers, practitioners, and curious readers alike. This article provides an evidence-based overview drawing on available sources.\n\n## Key Facts\n\nSeveral important facts characterise Why elephants are the heaviest land animals. Multiple sources converge on the significance of this area and document its major dimensions.\n\nAccording to *[MOCK] Source 1: Why elephants are the heaviest land animals*: Information about Why elephants are the heaviest land animals from [MOCK] Source 1: Why elephants are the heaviest land animals\n\nAccording to *[MOCK] Source 2: Why elephants are the heaviest land animals*: Information about Why elephants are the heaviest land animals from [MOCK] Source 2: Why elephants are the heaviest land animals\n\n## Recent Developments\n\nIn recent years, Why elephants are the heaviest land animals has seen notable advances. New research, tools, and applications continue to expand what is known and what is possible.\n\n## Conclusion\n\nThis overview reflects the available evidence on Why elephants are the heaviest land animals. Readers seeking further depth should consult the primary sources cited.",
+  "source_list": [
+    {
+      "url": "https://mock-source-1.example.dev/why-elephants-are-the-heaviest-land-animals",
+      "title": "[MOCK] Source 1: Why elephants are the heaviest land animals",
+      "domain": "mock-source-1.example.dev",
+      "credibility_score": 0.3,
+      "relevance_score": 0.3,
+      "recency_score": 0.5,
+      "overall_score": 0.3,
+      "notes": "Mock source \u2014 scores are placeholders, not real assessments.",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock-source-2.example.dev/why-elephants-are-the-heaviest-land-animals",
+      "title": "[MOCK] Source 2: Why elephants are the heaviest land animals",
+      "domain": "mock-source-2.example.dev",
+      "credibility_score": 0.3,
+      "relevance_score": 0.3,
+      "recency_score": 0.5,
+      "overall_score": 0.3,
+      "notes": "Mock source \u2014 scores are placeholders, not real assessments.",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock-source-3.example.dev/why-elephants-are-the-heaviest-land-animals",
+      "title": "[MOCK] Source 3: Why elephants are the heaviest land animals",
+      "domain": "mock-source-3.example.dev",
+      "credibility_score": 0.3,
+      "relevance_score": 0.3,
+      "recency_score": 0.5,
+      "overall_score": 0.3,
+      "notes": "Mock source \u2014 scores are placeholders, not real assessments.",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock-source-4.example.dev/why-elephants-are-the-heaviest-land-animals",
+      "title": "[MOCK] Source 4: Why elephants are the heaviest land animals",
+      "domain": "mock-source-4.example.dev",
+      "credibility_score": 0.3,
+      "relevance_score": 0.3,
+      "recency_score": 0.5,
+      "overall_score": 0.3,
+      "notes": "Mock source \u2014 scores are placeholders, not real assessments.",
+      "is_mock": true
+    },
+    {
+      "url": "https://mock-source-5.example.dev/why-elephants-are-the-heaviest-land-animals",
+      "title": "[MOCK] Source 5: Why elephants are the heaviest land animals",
+      "domain": "mock-source-5.example.dev",
+      "credibility_score": 0.3,
+      "relevance_score": 0.3,
+      "recency_score": 0.5,
+      "overall_score": 0.3,
+      "notes": "Mock source \u2014 scores are placeholders, not real assessments.",
+      "is_mock": true
+    }
+  ],
+  "fact_check_report": {
+    "total_claims": 2,
+    "supported_count": 0,
+    "partially_supported_count": 2,
+    "unsupported_count": 0,
+    "matches": [
+      {
+        "claim": {
+          "text": "Key Facts is a key aspect of Why elephants are the heaviest land animals.",
+          "importance": "medium",
+          "section": "Key Facts"
+        },
+        "status": "partially_supported",
+        "supporting_sources": [
+          "https://mock-source-1.example.dev/why-elephants-are-the-heaviest-land-animals"
+        ],
+        "notes": "Only mock/placeholder sources available \u2014 treating as partially supported. Replace mock sources with real research before finalising."
+      },
+      {
+        "claim": {
+          "text": "Recent Developments is a key aspect of Why elephants are the heaviest land animals.",
+          "importance": "medium",
+          "section": "Recent Developments"
+        },
+        "status": "partially_supported",
+        "supporting_sources": [
+          "https://mock-source-1.example.dev/why-elephants-are-the-heaviest-land-animals"
+        ],
+        "notes": "Only mock/placeholder sources available \u2014 treating as partially supported. Replace mock sources with real research before finalising."
+      }
+    ],
+    "passed": true,
+    "blocking_issues": []
+  },
+  "claim_support_statuses": [
+    {
+      "claim": {
+        "text": "Key Facts is a key aspect of Why elephants are the heaviest land animals.",
+        "importance": "medium",
+        "section": "Key Facts"
+      },
+      "status": "partially_supported",
+      "supporting_sources": [
+        "https://mock-source-1.example.dev/why-elephants-are-the-heaviest-land-animals"
+      ],
+      "notes": "Only mock/placeholder sources available \u2014 treating as partially supported. Replace mock sources with real research before finalising."
+    },
+    {
+      "claim": {
+        "text": "Recent Developments is a key aspect of Why elephants are the heaviest land animals.",
+        "importance": "medium",
+        "section": "Recent Developments"
+      },
+      "status": "partially_supported",
+      "supporting_sources": [
+        "https://mock-source-1.example.dev/why-elephants-are-the-heaviest-land-animals"
+      ],
+      "notes": "Only mock/placeholder sources available \u2014 treating as partially supported. Replace mock sources with real research before finalising."
+    }
+  ],
+  "revision_summary": "No revision performed.",
+  "title": "Understanding Why elephants are the heaviest land animals",
+  "slug": "understanding-why-elephants-are-the-heaviest-land-animals",
+  "meta_description": "An evidence-based overview of Why elephants are the heaviest land animals, covering key facts, recent developments, and practical implications.",
+  "seo_keywords": [
+    "elephants"
+  ],
+  "run_id": "77b9efb6-9993-400a-a43f-99e9fd568540",
+  "created_at": "2026-05-14T19:11:34.974690+00:00",
+  "topic": "Why elephants are the heaviest land animals",
+  "execution_mode": "mock",
+  "revision_count": 0,
+  "blocked": false,
+  "block_reason": "",
+  "provider_events": [
+    "editor.research_plan: mock",
+    "search: provider=mock, results=5",
+    "editor.outline: mock",
+    "editor.draft: mock",
+    "fact_check: mock"
+  ],
+  "warnings": []
+}
