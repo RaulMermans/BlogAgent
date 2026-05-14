@@ -224,7 +224,13 @@ def extract_claims(state: BlogRunState) -> BlogRunState:
 
 
 def match_citations(state: BlogRunState) -> BlogRunState:
-    output = citation_matcher(CitationMatchInput(claims=state.claims, sources=state.source_scores))
+    output = citation_matcher(
+        CitationMatchInput(
+            claims=state.claims,
+            sources=state.source_scores,
+            source_packets=state.selected_sources,
+        )
+    )
     state.citation_matches = output.matches
     return state
 

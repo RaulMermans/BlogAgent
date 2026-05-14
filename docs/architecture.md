@@ -138,6 +138,25 @@ Publishing to external systems is forbidden in MVP. Any future publishing tool m
 
 ---
 
+## Citation Judge (Optional)
+
+`blogagent/agents/citation_judge.py` provides optional LLM-backed semantic citation verification.
+
+Controlled by `BLOGAGENT_USE_LLM_CITATION_JUDGE` (default: `false`).
+
+When enabled, `citation_matcher` calls `judge_citation_support(claim, source_excerpt, source_url)`
+per claim using the combined extracted text from available sources.
+
+The judge:
+- Uses `generate_structured()` with `CitationJudgmentOutput` (same LLM client as other agents)
+- Falls back to a deterministic keyword-overlap heuristic on any failure (no crash)
+- Never uses outside knowledge — judges only the provided source excerpt
+- Never invents sources or fabricates references
+
+The deterministic heuristic is always preserved as the default. The judge is additive.
+
+---
+
 ## Claim Extraction
 
 `claim_extractor` has two modes:
@@ -192,12 +211,32 @@ See [blogagent/tools/validators.py](../blogagent/tools/validators.py).
 
 ---
 
+## Vercel API
+
+`api/index.py` is a minimal FastAPI application for serverless deployment.
+
+It exposes:
+- `GET /health` — returns service status (always 200, no pipeline required)
+- `POST /run` — runs the BlogAgent pipeline on a `topic` string
+
+The API defaults to **mock-safe mode**: if no provider environment variables are set,
+all pipeline steps use mock mode with no API calls. Real providers can be enabled via
+Vercel environment variables (see README.md).
+
+The API response is compact: it includes the article markdown, source count, claim status
+counts, and diagnostic fields. Raw scraped webpage text is never returned.
+
+Publishing requests are blocked by the same `check_external_effects` guardrail used by the
+full pipeline.
+
+---
+
 ## What Is Not Here Yet
 
 - CMS publishing (blocked; requires approval gate)
 - Persistence / database
 - Async / streaming
 - Cost tracking
-- Semantic citation matching (LLM-backed)
+- Streamlit on Vercel (Vercel scaffold is FastAPI only)
 
 See [limitations.md](./limitations.md) for details.

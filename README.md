@@ -24,6 +24,11 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Fact-Check Evaluator (claim extraction + judgment) | **Done** — mock by default; LLM-gated via env |
 | Heuristic claim extraction | **Done** |
 | Revision loop (max 1) | **Done** |
+| Heuristic citation matching (deterministic) | **Done** |
+| Optional LLM semantic citation judge | **Done** — opt-in via `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` |
+| Mock/live output comparison CLI | **Done** |
+| GitHub Actions CI | **Done** — mock mode, no API keys required |
+| Vercel API scaffold | **Done** — mock-safe by default |
 | Persistence / database | Not yet |
 
 ---
@@ -118,6 +123,7 @@ cp .env.example .env
 | `OPENAI_API_KEY` | _(empty)_ | Required when provider is `openai` |
 | `BLOGAGENT_USE_LLM_EDITOR` | `false` | Enable real LLM calls for Editor Agent |
 | `BLOGAGENT_USE_LLM_FACTCHECK` | `false` | Enable real LLM calls for Fact-Check Evaluator |
+| `BLOGAGENT_USE_LLM_CITATION_JUDGE` | `false` | Enable LLM semantic per-claim citation verification (incurs API cost) |
 
 **Important:** If a provider is configured but the API key is missing or the package
 is not installed, the system falls back to mock mode with an explicit warning. Tests
@@ -301,6 +307,83 @@ No LLM judge is used.
 
 The score is a heuristic indicator, not a substitute for editorial review.
 See [docs/eval_plan.md](docs/eval_plan.md) for caveats.
+
+---
+
+## CI / Continuous Integration
+
+GitHub Actions runs automatically on every push and pull request.
+
+CI uses **mock mode** — no real API keys are required. The workflow:
+
+1. Checks out the repo
+2. Installs `uv` and Python 3.11 / 3.12
+3. Runs `uv sync --all-extras`
+4. Runs `uv run ruff check .` (lint)
+5. Runs `uv run pytest -q` (tests)
+6. Runs `uv run python -m blogagent.evals.runner` (evals)
+
+Real provider evals (Tavily search, Anthropic/OpenAI LLM) are **manual and local** until
+explicitly configured as repository secrets. Running them in CI requires adding the relevant
+API keys as GitHub secrets and overriding the mock-mode env vars in the workflow.
+
+---
+
+## Deployment
+
+### Streamlit UI (local / demo)
+
+The Streamlit UI is for **local use and demos only**. Run it with:
+
+```bash
+uv run streamlit run app/ui/streamlit_app.py
+```
+
+It is **not** the Vercel deployment target.
+
+### Vercel API (mock-safe serverless scaffold)
+
+BlogAgent ships a minimal FastAPI app under `api/index.py` for Vercel serverless deployment.
+
+- Defaults to **mock mode** — no environment variables required.
+- Does not publish externally.
+- Does not return raw scraped webpage content.
+- Publishing requests are blocked by the pipeline guardrail.
+
+**Deploy to Vercel:**
+
+```bash
+vercel deploy
+```
+
+No environment variables are required for mock mode. The API is safe to deploy and test
+without any API keys.
+
+**Required Vercel env vars for mock mode:** none.
+
+**Optional live provider env vars (cost-bearing):**
+
+| Variable | Purpose |
+|---|---|
+| `BLOGAGENT_SEARCH_PROVIDER=tavily` | Use real Tavily search |
+| `TAVILY_API_KEY` | Required for Tavily |
+| `BLOGAGENT_LLM_PROVIDER=anthropic` or `openai` | Use real LLM |
+| `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Required for chosen provider |
+| `BLOGAGENT_USE_LLM_EDITOR=true` | Enable LLM for Editor Agent |
+| `BLOGAGENT_USE_LLM_FACTCHECK=true` | Enable LLM for Fact-Check Evaluator |
+| `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` | Enable semantic per-claim citation verification |
+
+**Example local API call (mock mode):**
+
+```bash
+# Start the API locally with uvicorn
+uvicorn api.index:app --port 8000
+
+# Then call it
+curl -X POST http://localhost:8000/run \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"Why elephants are the heaviest land animals"}'
+```
 
 ---
 

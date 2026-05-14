@@ -245,11 +245,12 @@ def compare_outputs(paths: list[Path]) -> list[RunMetrics]:
 # Formatting
 # ---------------------------------------------------------------------------
 
-_COL_W = 26  # column width per file
+_COL_W = 30  # column width per file (extra space keeps headers readable)
+_COL_GAP = 2  # minimum gap between adjacent column values
 
 
 def _pad(value: str, width: int = _COL_W) -> str:
-    return value[:width].ljust(width)
+    return value[: width - _COL_GAP].ljust(width)
 
 
 def _row(label: str, *values: str, label_w: int = 34) -> str:
@@ -270,7 +271,7 @@ def format_comparison_table(metrics_list: list[RunMetrics]) -> str:
     if not ok_metrics:
         return "\n".join(lines) or "No valid outputs to compare."
 
-    sep_len = 34 + _COL_W * len(ok_metrics)
+    sep_len = 34 + _COL_W * len(ok_metrics) + 2
     sep = "-" * sep_len
 
     lines.append("")
@@ -338,11 +339,25 @@ def format_comparison_table(metrics_list: list[RunMetrics]) -> str:
     if all_notes:
         lines.append("  deductions:")
         for note in sorted(all_notes):
-            applicability = "  / ".join(
-                f"{'[x]' if note in m.quality_notes else '[ ]'} {m.filename[:18]}"
+            applicability = "    ".join(
+                f"{'[x]' if note in m.quality_notes else '[ ]'} {m.filename[:22]}"
                 for m in ok_metrics
             )
             lines.append(f"    {note:<38}{applicability}")
+
+    # Warn when live/hybrid runs have supported claims but citation judge was not active.
+    live_runs_with_supported = [
+        m
+        for m in ok_metrics
+        if m.execution_mode in ("live", "hybrid") and m.supported_count > 0
+    ]
+    if live_runs_with_supported:
+        lines.append(
+            "NOTE: Live/hybrid runs with 'supported' claims used heuristic citation matching."
+        )
+        lines.append(
+            "      Set BLOGAGENT_USE_LLM_CITATION_JUDGE=true for semantic verification."
+        )
 
     lines.append(sep)
     lines.append("")

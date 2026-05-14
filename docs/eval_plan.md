@@ -108,15 +108,18 @@ total                    100
 
 - It measures structure and coverage, not factual accuracy. A well-structured article
   with plausible-sounding but wrong facts can score 100/100.
-- Citation matching is heuristic. A "supported" status means the claim was associated
-  with a source URL — not that the URL's content actually backs the claim.
+- Citation matching is heuristic by default. A "supported" status means the claim was
+  associated with a source URL — not that the URL's content actually backs the claim.
+  Set `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` for semantic per-claim verification, which
+  incurs LLM API cost and still requires human review for high-stakes content.
+- The comparison table will emit a warning when live/hybrid runs with "supported" claims
+  are present and the citation judge was not active.
 - Mock output can score up to 90/100 if the article is long enough — the only guaranteed
   deduction for mock mode is the "not pure mock sources" check (-10).
 - Scores are not comparable across different topics. A 75 on "African Elephants" and a
   75 on "Quantum Computing" reflect different underlying quality levels.
 - The rubric will not detect fabricated statistics, hallucinated quotes, or subtle
-  factual errors introduced by an LLM. These require human review or semantic
-  citation-matching (not yet implemented).
+  factual errors introduced by an LLM. These require human review.
 
 Use provider comparison to answer: **did switching providers produce a structurally
 better output?** Use human review to answer: **is the content actually trustworthy?**

@@ -315,6 +315,53 @@ def test_format_table_shows_all_sections(tmp_path: Path):
         assert section in table, f"Missing section: {section}"
 
 
+def test_format_table_column_headers_not_glued_together(tmp_path: Path):
+    """Column headers for two adjacent files must have visible space between them."""
+    f1 = tmp_path / "mock_output.json"
+    f2 = tmp_path / "live_output.json"
+    f1.write_text(json.dumps(_minimal_package()))
+    f2.write_text(json.dumps(_minimal_package()))
+    metrics = compare_outputs([f1, f2])
+    table = format_comparison_table(metrics)
+    # The two filenames must not appear immediately adjacent (no space between them)
+    assert "mock_output.jsonlive_output.json" not in table
+
+
+def test_format_table_two_files_both_filenames_visible(tmp_path: Path):
+    """Both filenames should appear in the header row of a two-file comparison."""
+    f1 = tmp_path / "alpha_run.json"
+    f2 = tmp_path / "beta_run.json"
+    f1.write_text(json.dumps(_minimal_package()))
+    f2.write_text(json.dumps(_minimal_package()))
+    metrics = compare_outputs([f1, f2])
+    table = format_comparison_table(metrics)
+    assert "alpha_run.json" in table
+    assert "beta_run.json" in table
+
+
+def test_format_table_live_supported_shows_citation_judge_warning(tmp_path: Path):
+    """Live mode with supported claims should emit a citation judge warning."""
+    pkg = _minimal_package()
+    pkg["execution_mode"] = "live"
+    pkg["fact_check_report"]["supported_count"] = 2
+    f = tmp_path / "live_run.json"
+    f.write_text(json.dumps(pkg))
+    metrics = compare_outputs([f])
+    table = format_comparison_table(metrics)
+    assert "BLOGAGENT_USE_LLM_CITATION_JUDGE" in table
+
+
+def test_format_table_mock_mode_no_citation_judge_warning(tmp_path: Path):
+    """Mock mode should not show the citation judge warning."""
+    pkg = _minimal_package()
+    pkg["execution_mode"] = "mock"
+    f = tmp_path / "mock_run.json"
+    f.write_text(json.dumps(pkg))
+    metrics = compare_outputs([f])
+    table = format_comparison_table(metrics)
+    assert "BLOGAGENT_USE_LLM_CITATION_JUDGE" not in table
+
+
 # ---------------------------------------------------------------------------
 # Mock-only sources do not score as production-grounded
 # ---------------------------------------------------------------------------

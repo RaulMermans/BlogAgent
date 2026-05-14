@@ -1,0 +1,133 @@
+"""Vercel-compatible FastAPI entry point for BlogAgent.
+
+Exposes a minimal, mock-safe API for serverless deployment.
+All routes default to mock mode — no API keys required.
+
+Routes:
+    GET  /health   → service status
+    POST /run      → run the BlogAgent pipeline on a topic
+
+Live provider usage (Tavily search, Anthropic/OpenAI LLM) is optional and cost-bearing.
+Configure via Vercel environment variables (see README.md).
+
+Safety:
+- Publishing requests are blocked by the pipeline guardrail.
+- Raw scraped webpage text is never returned.
+- No persistence or external side effects in mock mode.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI(title="BlogAgent API", version="0.1.0")
+
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
+
+class RunRequest(BaseModel):
+    topic: str
+
+
+class RunResponse(BaseModel):
+    blocked: bool
+    block_reason: str
+    execution_mode: str
+    title: str
+    meta_description: str
+    article_markdown: str
+    source_count: int
+    claim_status_counts: dict[str, int]
+    revision_count: int
+    warnings: list[str]
+    provider_events: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "service": "BlogAgent", "mode": "mock-safe"}
+
+
+@app.post("/run", response_model=RunResponse)
+def run(request: RunRequest) -> Any:
+    topic = (request.topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic must be a non-empty string")
+
+    _ensure_mock_safe_defaults()
+
+    from blogagent.workflow.graph import run_pipeline  # noqa: PLC0415
+
+    state = run_pipeline(topic)
+
+    if state.blocked:
+        return RunResponse(
+            blocked=True,
+            block_reason=state.block_reason,
+            execution_mode=state.execution_mode,
+            title="",
+            meta_description="",
+            article_markdown="",
+            source_count=0,
+            claim_status_counts={"supported": 0, "partially_supported": 0, "unsupported": 0},
+            revision_count=0,
+            warnings=list(state.warnings),
+            provider_events=list(state.provider_events),
+        )
+
+    pkg = state.final_article_package
+    if pkg is None:
+        raise HTTPException(status_code=500, detail="Pipeline produced no article package")
+
+    report = pkg.fact_check_report
+    return RunResponse(
+        blocked=False,
+        block_reason="",
+        execution_mode=state.execution_mode,
+        title=pkg.title,
+        meta_description=pkg.meta_description,
+        article_markdown=pkg.article_markdown,
+        source_count=len(pkg.source_list),
+        claim_status_counts={
+            "supported": report.supported_count,
+            "partially_supported": report.partially_supported_count,
+            "unsupported": report.unsupported_count,
+        },
+        revision_count=state.revision_count,
+        warnings=list(state.warnings),
+        provider_events=list(state.provider_events),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_mock_safe_defaults() -> None:
+    """Set mock-safe env defaults if no provider is explicitly configured.
+
+    This keeps the Vercel API safe when env vars are absent.
+    Real providers are honoured when the caller has set them via Vercel env vars.
+    """
+    _setdefault("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    _setdefault("BLOGAGENT_LLM_PROVIDER", "mock")
+    _setdefault("BLOGAGENT_USE_LLM_EDITOR", "false")
+    _setdefault("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    _setdefault("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+
+
+def _setdefault(key: str, value: str) -> None:
+    if not os.environ.get(key):
+        os.environ[key] = value

@@ -25,6 +25,7 @@ from blogagent.llm.providers import (
     ProviderResponse,
 )
 from blogagent.llm.schemas import (
+    CitationJudgmentOutput,
     ClaimExtractionOutput,
     ClaimItem,
     DraftOutput,
@@ -112,6 +113,12 @@ _MOCK_DATA: dict[str, BaseModel] = {
         revision_summary=(
             "Mock revision: no LLM provider configured. Draft returned without changes."
         ),
+    ),
+    "CitationJudgmentOutput": CitationJudgmentOutput(
+        claim="(mock claim)",
+        support_status="partially_supported",
+        confidence="low",
+        explanation="Mock citation judgment — no LLM provider configured.",
     ),
 }
 

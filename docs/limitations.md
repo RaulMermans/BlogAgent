@@ -37,15 +37,27 @@ These are intentional. Connect a real LLM provider to produce research-grounded 
 
 ## Citation Matching
 
-Citation matching is deterministic and heuristic:
+The default citation matcher is deterministic and heuristic:
 
 - No sources → `unsupported`
 - Only mock sources → `partially_supported`
 - At least one real positive-score source → `supported`
 
-**Semantic claim-to-source matching is not implemented.** The heuristic assigns the same
-status to every claim based on the overall source pool. Claims are not individually matched
-to the most relevant source unless LLM fact-checking is enabled.
+The heuristic assigns the same status to every claim based on the overall source pool —
+claims are not individually matched to the most relevant source.
+
+**Optional: LLM semantic citation judge** (`BLOGAGENT_USE_LLM_CITATION_JUDGE=true`)
+
+When this flag is enabled and source packets with extracted text are available, the
+citation matcher calls `judge_citation_support()` per claim for semantic verification.
+This judges whether the source excerpt actually supports the specific claim text.
+
+Caveats:
+- Enabling the judge incurs LLM API cost.
+- The judge is bounded by the provided source excerpt — it cannot fetch new pages.
+- If the LLM provider fails or the API key is missing, the judge falls back to the
+  deterministic keyword-overlap heuristic with a logged warning. No crash.
+- The deterministic heuristic is always preserved as the default. Removing it is not planned.
 
 ---
 
@@ -89,6 +101,9 @@ additional judgment, but is still bounded by the provided citations and sources.
 - **Cost tracking**: No token counting or API cost tracking yet.
 - **Browser automation**: Not planned for MVP.
 - **Social posting**: Blocked by the external side-effect guardrail.
+- **Streamlit on Vercel**: The Streamlit UI is not currently deployed to Vercel. The Vercel
+  scaffold exposes a FastAPI API only. Deploying Streamlit to Vercel requires additional
+  configuration not yet implemented.
 
 ---
 
@@ -122,6 +137,7 @@ production monitoring.
 ## Recommended Next Steps
 
 1. Set `BLOGAGENT_LLM_PROVIDER=anthropic`, `BLOGAGENT_USE_LLM_EDITOR=true`, `BLOGAGENT_USE_LLM_FACTCHECK=true` and measure eval quality improvement.
-2. Add semantic citation matching (replace heuristic with LLM-backed per-claim matching).
+2. Set `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` alongside a real LLM provider and compare citation accuracy against the heuristic baseline using the `compare` CLI.
 3. Add real source grounding checks in evals (count real vs. mock sources, check claim support rates).
 4. Implement a persistence layer to store final article packages for review and comparison.
+5. Wire the Vercel API to a frontend for public portfolio demos.

@@ -92,6 +92,26 @@ Draft:
 {draft}
 """
 
+CITATION_JUDGE_PROMPT = """\
+You are a citation judge. Your only job is to determine whether the provided source excerpt
+supports the given claim.
+
+Rules:
+- Judge ONLY based on the provided source excerpt. Do not use outside knowledge.
+- Do not invent sources or fabricate references.
+- mark supported: the excerpt clearly and directly supports the claim.
+- mark partially_supported: the excerpt supports part of the claim but not all of it.
+- mark unsupported: the excerpt does not clearly support the claim.
+- confidence reflects how clearly the excerpt addresses the claim.
+
+Claim: {claim}
+
+Source URL: {source_url}
+
+Source Excerpt:
+{source_excerpt}
+"""
+
 REVISION_PROMPT = """\
 You are a senior editor revising a blog post based on fact-check feedback.
 

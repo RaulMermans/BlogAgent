@@ -46,6 +46,13 @@ class FactCheckJudgmentOutput(BaseModel):
     confidence: Literal["low", "medium", "high"] = "medium"
 
 
+class CitationJudgmentOutput(BaseModel):
+    claim: str
+    support_status: Literal["supported", "partially_supported", "unsupported"]
+    confidence: Literal["low", "medium", "high"]
+    explanation: str
+
+
 class RevisionOutput(BaseModel):
     revised_markdown: str
     revision_summary: str
