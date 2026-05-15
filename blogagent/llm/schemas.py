@@ -59,7 +59,15 @@ class RevisionOutput(BaseModel):
 
 
 class LLMResult(BaseModel):
-    """Wrapper returned by generate_structured()."""
+    """Wrapper returned by generate_structured() and agent functions.
+
+    Fields:
+        configured_provider: What BLOGAGENT_LLM_PROVIDER requested (or "mock" when LLM
+            was not attempted for the stage). May differ from provider when fallback occurred.
+        provider: The provider that actually produced the output ("mock", "anthropic", etc.).
+        is_mock: True when output came from the mock data registry (fallback or intentional).
+        warning: Set when a configured live provider fell back to mock.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -67,6 +75,7 @@ class LLMResult(BaseModel):
     provider: str
     model: str
     is_mock: bool
+    configured_provider: str | None = None  # what env requested; may differ from provider
     warning: str | None = None
     error: str | None = None
     raw_text: str | None = None

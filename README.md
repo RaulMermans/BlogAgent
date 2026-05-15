@@ -19,7 +19,7 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Real search via Tavily (opt-in) | **Done** — requires `TAVILY_API_KEY` |
 | Real webpage extraction via httpx+BS4 | **Done** — runs on non-mock URLs |
 | Deterministic source scoring | **Done** |
-| LLM client layer (mock default; Anthropic/OpenAI optional) | **Done** |
+| LLM client layer (mock default; Anthropic/OpenAI/Google optional) | **Done** |
 | Editor Agent (research plan, outline, draft, revision) | **Done** — mock by default; LLM-gated via env |
 | Fact-Check Evaluator (claim extraction + judgment) | **Done** — mock by default; LLM-gated via env |
 | Heuristic claim extraction | **Done** |
@@ -116,18 +116,23 @@ cp .env.example .env
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BLOGAGENT_LLM_PROVIDER` | `mock` | `mock` (no API key needed), `anthropic`, or `openai` |
-| `BLOGAGENT_LLM_MODEL` | _(provider default)_ | Override model name |
+| `BLOGAGENT_LLM_PROVIDER` | `mock` | `mock` (no key needed), `anthropic`, `openai`, or `google` |
+| `BLOGAGENT_LLM_MODEL` | _(provider default)_ | Override model name (takes priority over provider-specific model vars) |
 | `BLOGAGENT_LLM_TIMEOUT_SECONDS` | `60` | Timeout for LLM API calls |
 | `ANTHROPIC_API_KEY` | _(empty)_ | Required when provider is `anthropic` |
 | `OPENAI_API_KEY` | _(empty)_ | Required when provider is `openai` |
+| `GOOGLE_API_KEY` | _(empty)_ | Required when provider is `google` |
+| `BLOGAGENT_GOOGLE_MODEL` | `gemini-2.5-flash` | Google model when `BLOGAGENT_LLM_MODEL` is not set |
 | `BLOGAGENT_USE_LLM_EDITOR` | `false` | Enable real LLM calls for Editor Agent |
 | `BLOGAGENT_USE_LLM_FACTCHECK` | `false` | Enable real LLM calls for Fact-Check Evaluator |
 | `BLOGAGENT_USE_LLM_CITATION_JUDGE` | `false` | Enable LLM semantic per-claim citation verification (incurs API cost) |
 
-**Important:** If a provider is configured but the API key is missing or the package
-is not installed, the system falls back to mock mode with an explicit warning. Tests
-always run in mock mode and do not require any API key.
+**Fallback transparency:** If a provider is configured but the API key is missing or the
+package is not installed, the system falls back to mock with an explicit warning — no crash.
+The warning appears in `state.warnings` and in `provider_events` (visible via `--show-trace`).
+`execution_mode` reflects what **actually ran**, not what env vars requested.
+
+**Recommended affordable live provider:** Google Gemini (`BLOGAGENT_LLM_PROVIDER=google`).
 
 ### Search provider variables
 
@@ -185,6 +190,25 @@ uv run python -m blogagent.cli run "Why elephants are the heaviest land animals"
 Prints a summary with title, source count, claim stats, revision count, execution mode,
 and (with `--show-trace`) the full provider event log and stage timings.
 
+### Google live editor (recommended affordable provider)
+
+```bash
+BLOGAGENT_LLM_PROVIDER=google \
+BLOGAGENT_USE_LLM_EDITOR=true \
+GOOGLE_API_KEY=your_key_here \
+uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
+```
+
+### Google low-cost mode
+
+```bash
+BLOGAGENT_LLM_PROVIDER=google \
+BLOGAGENT_USE_LLM_EDITOR=true \
+GOOGLE_API_KEY=your_key_here \
+BLOGAGENT_GOOGLE_MODEL=gemini-2.5-flash-lite \
+uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
+```
+
 ### Anthropic editor only
 
 ```bash
@@ -217,6 +241,22 @@ uv run python -m blogagent.cli run "Solar energy trends" --output examples/live_
 ```
 
 Do not include real API keys in committed files or shell history.
+
+---
+
+## Provider benchmark protocol
+
+Before treating a run as a valid live benchmark:
+
+1. Export the provider key: `export GOOGLE_API_KEY=your_key`
+2. Run with `--show-trace` and check provider events:
+   - All `editor.*` events must show `actual_provider=google` (or `anthropic`/`openai`) and `fallback=false`
+   - `warnings` must be empty (warnings indicate unexpected fallbacks)
+   - `execution_mode` must be `live` or `hybrid`, not `mock`
+3. If any event shows `actual_provider=mock`, that stage used mock data — the run is not a valid live benchmark. Check warnings for the reason.
+4. Compare outputs only after confirming real provider execution.
+
+Mock output can appear identical to live output in terms of structure while containing only template prose. Always verify `actual_provider` before drawing quality conclusions.
 
 ---
 

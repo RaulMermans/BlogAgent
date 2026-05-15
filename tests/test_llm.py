@@ -1,4 +1,4 @@
-"""Tests for the LLM client layer.
+"""Tests for the LLM client layer and agent functions.
 
 All tests run in mock mode and do not require any API key.
 """
@@ -46,6 +46,15 @@ def test_mock_provider_name():
         output_model=ResearchPlanOutput,
     )
     assert result.provider == "mock"
+
+
+def test_mock_provider_configured_provider_is_mock():
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.configured_provider == "mock"
 
 
 def test_mock_research_plan_returns_questions():
@@ -120,6 +129,16 @@ def test_mock_result_has_no_error():
     assert result.error is None
 
 
+def test_mock_result_has_no_warning():
+    """Intentional mock mode (provider=mock) must produce no fallback warning."""
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.warning is None
+
+
 # ---------------------------------------------------------------------------
 # Missing API key — fall back to mock with warning, no crash
 # ---------------------------------------------------------------------------
@@ -149,6 +168,18 @@ def test_missing_anthropic_key_still_returns_data(monkeypatch):
     assert isinstance(result.data, ResearchPlanOutput)
 
 
+def test_missing_anthropic_key_configured_provider_is_anthropic(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.configured_provider == "anthropic"
+    assert result.provider == "mock"
+
+
 def test_missing_openai_key_falls_back_to_mock(monkeypatch):
     monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -173,6 +204,42 @@ def test_missing_openai_key_still_returns_data(monkeypatch):
     assert isinstance(result.data, ResearchPlanOutput)
 
 
+def test_missing_google_key_falls_back_to_mock(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.is_mock is True
+    assert result.warning is not None
+    assert "GOOGLE_API_KEY" in result.warning
+
+
+def test_missing_google_key_configured_provider_is_google(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.configured_provider == "google"
+    assert result.provider == "mock"
+
+
+def test_missing_google_key_still_returns_data(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert isinstance(result.data, ResearchPlanOutput)
+
+
 def test_unknown_provider_falls_back_to_mock(monkeypatch):
     monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "unknown_provider_xyz")
     result = generate_structured(
@@ -184,70 +251,207 @@ def test_unknown_provider_falls_back_to_mock(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Editor Agent functions (mock mode — BLOGAGENT_USE_LLM_EDITOR=false)
+# Google model selection
 # ---------------------------------------------------------------------------
+
+
+def test_google_model_selection_respects_blogagent_google_model(monkeypatch):
+    """BLOGAGENT_GOOGLE_MODEL is used when BLOGAGENT_LLM_MODEL is not set."""
+    from blogagent.llm.client import _build_provider
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setenv("BLOGAGENT_GOOGLE_MODEL", "gemini-2.5-flash-lite")
+    monkeypatch.delenv("BLOGAGENT_LLM_MODEL", raising=False)
+
+    provider = _build_provider("google")
+    assert provider._model == "gemini-2.5-flash-lite"
+
+
+def test_google_model_selection_llm_model_overrides(monkeypatch):
+    """BLOGAGENT_LLM_MODEL takes priority over BLOGAGENT_GOOGLE_MODEL."""
+    from blogagent.llm.client import _build_provider
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setenv("BLOGAGENT_LLM_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("BLOGAGENT_GOOGLE_MODEL", "gemini-2.5-flash-lite")
+
+    provider = _build_provider("google")
+    assert provider._model == "gemini-2.5-pro"
+
+
+def test_google_model_default_is_flash(monkeypatch):
+    """Default Google model is gemini-2.5-flash when no model vars are set."""
+    from blogagent.llm.client import _build_provider
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.delenv("BLOGAGENT_LLM_MODEL", raising=False)
+    monkeypatch.delenv("BLOGAGENT_GOOGLE_MODEL", raising=False)
+
+    provider = _build_provider("google")
+    assert provider._model == "gemini-2.5-flash"
+
+
+# ---------------------------------------------------------------------------
+# Google provider monkeypatching — live success path (no real API key)
+# ---------------------------------------------------------------------------
+
+
+def test_google_provider_can_return_structured_output(monkeypatch):
+    """Monkeypatch GoogleProvider.generate to verify the full success path."""
+    import json  # noqa: PLC0415
+
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse  # noqa: PLC0415
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        data = ResearchPlanOutput(
+            research_questions=["What makes Gemini fast?", "How does structured output work?"]
+        )
+        return ProviderResponse(
+            text=json.dumps(data.model_dump()),
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.is_mock is False
+    assert result.provider == "google"
+    assert result.configured_provider == "google"
+    assert isinstance(result.data, ResearchPlanOutput)
+    assert len(result.data.research_questions) == 2
+
+
+# ---------------------------------------------------------------------------
+# .env.example completeness
+# ---------------------------------------------------------------------------
+
+
+def test_env_example_has_google_api_key():
+    from pathlib import Path
+    env_example = (Path(__file__).parent.parent / ".env.example").read_text()
+    assert "GOOGLE_API_KEY" in env_example
+
+
+def test_env_example_has_google_model():
+    from pathlib import Path
+    env_example = (Path(__file__).parent.parent / ".env.example").read_text()
+    assert "BLOGAGENT_GOOGLE_MODEL" in env_example
+
+
+# ---------------------------------------------------------------------------
+# Editor Agent functions — now return LLMResult
+# ---------------------------------------------------------------------------
+
+
+def test_editor_generate_research_plan_returns_llm_result():
+    from blogagent.agents.editor_agent import generate_research_plan
+
+    result = generate_research_plan("Climate Change")
+    assert isinstance(result, LLMResult)
 
 
 def test_editor_generate_research_plan_returns_questions():
     from blogagent.agents.editor_agent import generate_research_plan
 
     result = generate_research_plan("Climate Change")
-    assert len(result.research_questions) >= 1
-    assert all(isinstance(q, str) for q in result.research_questions)
+    assert len(result.data.research_questions) >= 1
+    assert all(isinstance(q, str) for q in result.data.research_questions)
 
 
 def test_editor_generate_research_plan_mentions_topic():
     from blogagent.agents.editor_agent import generate_research_plan
 
     result = generate_research_plan("Quantum Computing")
-    combined = " ".join(result.research_questions).lower()
+    combined = " ".join(result.data.research_questions).lower()
     assert "quantum computing" in combined
+
+
+def test_editor_generate_research_plan_is_mock_in_default_mode():
+    from blogagent.agents.editor_agent import generate_research_plan
+
+    result = generate_research_plan("Topic")
+    assert result.is_mock is True
+    assert result.configured_provider == "mock"
+
+
+def test_editor_generate_research_plan_no_warning_in_mock_mode():
+    from blogagent.agents.editor_agent import generate_research_plan
+
+    result = generate_research_plan("Topic")
+    assert result.warning is None
+
+
+def test_editor_generate_outline_returns_llm_result():
+    from blogagent.agents.editor_agent import generate_outline
+
+    result = generate_outline(topic="Solar Energy", evidence_table=[], source_scores=[])
+    assert isinstance(result, LLMResult)
 
 
 def test_editor_generate_outline_returns_valid_outline():
     from blogagent.agents.editor_agent import generate_outline
 
     result = generate_outline(topic="Solar Energy", evidence_table=[], source_scores=[])
-    assert result.title != ""
-    assert len(result.sections) >= 1
-    assert result.target_word_count > 0
+    assert result.data.title != ""
+    assert len(result.data.sections) >= 1
+    assert result.data.target_word_count > 0
 
 
 def test_editor_generate_outline_title_contains_topic():
     from blogagent.agents.editor_agent import generate_outline
 
     result = generate_outline(topic="Solar Energy", evidence_table=[], source_scores=[])
-    assert "Solar Energy" in result.title
+    assert "Solar Energy" in result.data.title
+
+
+def test_editor_write_article_draft_returns_llm_result():
+    from blogagent.agents.editor_agent import generate_outline, write_article_draft
+
+    outline_result = generate_outline(topic="Photosynthesis", evidence_table=[], source_scores=[])
+    result = write_article_draft(
+        topic="Photosynthesis",
+        outline=outline_result.data,
+        evidence_table=[],
+        source_scores=[],
+    )
+    assert isinstance(result, LLMResult)
 
 
 def test_editor_write_article_draft_returns_markdown():
     from blogagent.agents.editor_agent import generate_outline, write_article_draft
 
-    outline = generate_outline(topic="Photosynthesis", evidence_table=[], source_scores=[])
+    outline_result = generate_outline(topic="Photosynthesis", evidence_table=[], source_scores=[])
     result = write_article_draft(
         topic="Photosynthesis",
-        outline=outline,
+        outline=outline_result.data,
         evidence_table=[],
         source_scores=[],
     )
-    assert result.article_markdown.strip() != ""
-    assert "#" in result.article_markdown
+    assert result.data.article_markdown.strip() != ""
+    assert "#" in result.data.article_markdown
 
 
 def test_editor_write_article_draft_returns_meta_description():
     from blogagent.agents.editor_agent import generate_outline, write_article_draft
 
-    outline = generate_outline(topic="Photosynthesis", evidence_table=[], source_scores=[])
+    outline_result = generate_outline(topic="Photosynthesis", evidence_table=[], source_scores=[])
     result = write_article_draft(
         topic="Photosynthesis",
-        outline=outline,
+        outline=outline_result.data,
         evidence_table=[],
         source_scores=[],
     )
-    assert result.meta_description.strip() != ""
+    assert result.data.meta_description.strip() != ""
 
 
-def test_editor_revise_article_returns_revision():
+def test_editor_revise_article_returns_llm_result():
     from blogagent.agents.editor_agent import revise_article
     from blogagent.workflow.state import FactCheckReport
 
@@ -265,14 +469,158 @@ def test_editor_revise_article_returns_revision():
         fact_check_report=report,
         citation_matches=[],
     )
-    assert isinstance(result.revised_markdown, str)
-    assert isinstance(result.revision_summary, str)
-    assert result.revision_summary.strip() != ""
+    assert isinstance(result, LLMResult)
+    assert isinstance(result.data.revised_markdown, str)
+    assert isinstance(result.data.revision_summary, str)
+    assert result.data.revision_summary.strip() != ""
+
+
+# ---------------------------------------------------------------------------
+# Editor Agent fallback transparency when USE_LLM_EDITOR=true but key missing
+# ---------------------------------------------------------------------------
+
+
+def test_editor_research_plan_fallback_warning_when_anthropic_key_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from blogagent.agents.editor_agent import generate_research_plan
+    result = generate_research_plan("Test Topic")
+
+    assert result.is_mock is True
+    assert result.configured_provider == "anthropic"
+    assert result.provider == "mock"
+    assert result.warning is not None
+    assert "ANTHROPIC_API_KEY" in result.warning
+
+
+def test_editor_research_plan_fallback_warning_when_google_key_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    from blogagent.agents.editor_agent import generate_research_plan
+    result = generate_research_plan("Test Topic")
+
+    assert result.is_mock is True
+    assert result.configured_provider == "google"
+    assert result.provider == "mock"
+    assert result.warning is not None
+    assert "GOOGLE_API_KEY" in result.warning
+
+
+# ---------------------------------------------------------------------------
+# Fallback transparency: provider_events in pipeline state
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_provider_events_include_configured_and_actual_provider():
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Solar Energy")
+    # Default mock mode: all events should have configured_provider=mock actual_provider=mock
+    llm_events = [e for e in state.provider_events if "actual_provider=" in e]
+    assert len(llm_events) >= 1
+    for event in llm_events:
+        assert "configured_provider=mock" in event
+        assert "actual_provider=mock" in event
+        assert "fallback=false" in event
+
+
+def test_pipeline_provider_events_show_fallback_when_anthropic_key_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Test Topic")
+    editor_events = [e for e in state.provider_events if e.startswith("editor.")]
+    assert len(editor_events) >= 1
+    for event in editor_events:
+        assert "configured_provider=anthropic" in event
+        assert "actual_provider=mock" in event
+        assert "fallback=true" in event
+
+
+def test_pipeline_warnings_include_fallback_reason_when_key_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Test Topic")
+    assert any("ANTHROPIC_API_KEY" in w for w in state.warnings)
+
+
+def test_pipeline_warnings_empty_in_pure_mock_mode():
+    """In default mock mode, no provider falls back — warnings list must be empty."""
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Solar Energy")
+    # Filter out search fallback warnings; we only care about LLM fallback warnings
+    llm_warnings = [w for w in state.warnings if "ANTHROPIC_API_KEY" in w or "GOOGLE_API_KEY" in w]
+    assert llm_warnings == []
+
+
+# ---------------------------------------------------------------------------
+# execution_mode semantics: computed from actual provider_events
+# ---------------------------------------------------------------------------
+
+
+def test_execution_mode_is_mock_in_default_mode():
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Climate Change")
+    assert state.execution_mode == "mock"
+
+
+def test_execution_mode_is_mock_when_live_provider_falls_back(monkeypatch):
+    """When configured live provider falls back to mock, execution_mode must be 'mock'
+    (no live provider succeeded — this run is not a valid live benchmark)."""
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Test Topic")
+    # All actual LLM calls used mock (key missing); search is also mock.
+    assert state.execution_mode == "mock"
+
+
+def test_execution_mode_not_derived_from_env_vars_alone(monkeypatch):
+    """execution_mode must reflect actual providers, not env var configuration."""
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "true")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "true")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Test Topic")
+    # Despite env vars requesting live, all fell back to mock.
+    assert state.execution_mode == "mock"
 
 
 # ---------------------------------------------------------------------------
 # Fact-check evaluator (mock mode — BLOGAGENT_USE_LLM_FACTCHECK=false)
 # ---------------------------------------------------------------------------
+
+
+def test_evaluate_draft_returns_llm_result():
+    from blogagent.agents.fact_check_evaluator import evaluate_draft
+
+    result = evaluate_draft(
+        topic="Solar Energy",
+        draft="# Solar\n\nFacts here.",
+        claims=[],
+        citation_matches=[],
+        source_scores=[],
+    )
+    assert isinstance(result, LLMResult)
 
 
 def test_evaluate_draft_unsupported_high_claim_triggers_blocking():
@@ -297,9 +645,9 @@ def test_evaluate_draft_unsupported_high_claim_triggers_blocking():
         citation_matches=[match],
         source_scores=[],
     )
-    assert result.passed is False
-    assert result.revision_required is True
-    assert len(result.blocking_issues) >= 1
+    assert result.data.passed is False
+    assert result.data.revision_required is True
+    assert len(result.data.blocking_issues) >= 1
 
 
 def test_evaluate_draft_supported_claim_passes():
@@ -328,7 +676,7 @@ def test_evaluate_draft_supported_claim_passes():
         citation_matches=[match],
         source_scores=[],
     )
-    assert result.passed is True
+    assert result.data.passed is True
 
 
 def test_evaluate_draft_unsupported_medium_claim_does_not_block():
@@ -353,8 +701,8 @@ def test_evaluate_draft_unsupported_medium_claim_does_not_block():
         citation_matches=[match],
         source_scores=[],
     )
-    assert result.passed is True
-    assert len(result.blocking_issues) == 0
+    assert result.data.passed is True
+    assert len(result.data.blocking_issues) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +722,6 @@ def test_revision_count_never_exceeds_one(monkeypatch):
     def patched_fact_check(state):
         call_order.append("fact_check")
         if len(call_order) == 1:
-            # Force failure on first call to trigger revision.
             state.fact_check_report = FactCheckReport(
                 total_claims=1,
                 supported_count=0,
@@ -389,9 +736,7 @@ def test_revision_count_never_exceeds_one(monkeypatch):
     monkeypatch.setattr(_graph, "run_fact_check", patched_fact_check)
 
     state = run_pipeline("Climate Change")
-    # revision_count must be 0 or 1, never higher
     assert state.revision_count <= 1
-    # Revision was triggered: fact_check called twice (initial + after revision)
     assert len(call_order) == 2
 
 
@@ -422,3 +767,29 @@ def test_revision_summary_set_after_revision(monkeypatch):
 
     state = run_pipeline("Climate Change")
     assert state.revision_summary.strip() != ""
+
+
+# ---------------------------------------------------------------------------
+# Regression: mock mode is clean, tests don't need real API keys
+# ---------------------------------------------------------------------------
+
+
+def test_mock_mode_has_no_llm_fallback_warning():
+    """Pure mock mode must not produce fallback warnings — they indicate unexpected fallback."""
+    from blogagent.agents.editor_agent import generate_research_plan
+    result = generate_research_plan("Test")
+    assert result.warning is None
+
+
+def test_pipeline_completes_without_api_keys(monkeypatch):
+    """Pipeline must complete in mock mode with no API keys."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+
+    from blogagent.workflow.graph import run_pipeline, validate_final_state
+    state = run_pipeline("Photosynthesis")
+    assert state.final_article_package is not None
+    errors = validate_final_state(state)
+    assert errors == []

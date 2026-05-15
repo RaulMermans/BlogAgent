@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 
 from blogagent.agents import editor_agent, fact_check_evaluator
+from blogagent.llm.schemas import LLMResult
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
@@ -35,16 +36,34 @@ def _warn(state: BlogRunState, msg: str) -> None:
     state.warnings.append(msg)
 
 
-def _llm_editor_mode() -> str:
-    use_llm = os.getenv("BLOGAGENT_USE_LLM_EDITOR", "false").strip().lower() == "true"
-    provider = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
-    return f"provider={provider}" if use_llm else "mock"
+def _llm_event(stage: str, result: LLMResult) -> str:
+    """Format a provider event string from an LLMResult.
+
+    Format: <stage>: configured_provider=X actual_provider=Y model=Z fallback=bool [warning="..."]
+    """
+    configured = result.configured_provider or "mock"
+    actual = result.provider
+    model = result.model
+    fallback = result.is_mock and configured != "mock"
+    parts = [
+        f"{stage}:",
+        f"configured_provider={configured}",
+        f"actual_provider={actual}",
+        f"model={model}",
+        f"fallback={str(fallback).lower()}",
+    ]
+    if result.warning:
+        parts.append(f'warning="{result.warning}"')
+    return " ".join(parts)
 
 
-def _llm_factcheck_mode() -> str:
-    use_llm = os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
-    provider = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
-    return f"provider={provider}" if use_llm else "mock"
+def _propagate_llm_warnings(state: BlogRunState, stage: str, result: LLMResult) -> None:
+    """Append fallback warnings from an LLMResult to state.warnings."""
+    configured = result.configured_provider or "mock"
+    if result.warning and configured != "mock":
+        _warn(state, f"{stage} fallback: {result.warning}")
+    if result.error:
+        _warn(state, f"{stage} error: {result.error}")
 
 
 # Phrases that indicate the user wants an external side effect rather than an article.
@@ -115,8 +134,9 @@ def intake_topic(state: BlogRunState) -> BlogRunState:
 def generate_research_questions(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce research questions."""
     result = editor_agent.generate_research_plan(topic=state.topic)
-    state.research_questions = result.research_questions
-    _event(state, f"editor.research_plan: {_llm_editor_mode()}")
+    state.research_questions = result.data.research_questions
+    _event(state, _llm_event("editor.research_plan", result))
+    _propagate_llm_warnings(state, "editor.research_plan", result)
     return state
 
 
@@ -179,12 +199,13 @@ def generate_outline(state: BlogRunState) -> BlogRunState:
     from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
 
     state.outline = BlogOutline(
-        title=result.title,
-        sections=result.sections,
-        target_word_count=result.target_word_count,
-        seo_keywords=result.seo_keywords,
+        title=result.data.title,
+        sections=result.data.sections,
+        target_word_count=result.data.target_word_count,
+        seo_keywords=result.data.seo_keywords,
     )
-    _event(state, f"editor.outline: {_llm_editor_mode()}")
+    _event(state, _llm_event("editor.outline", result))
+    _propagate_llm_warnings(state, "editor.outline", result)
     return state
 
 
@@ -205,10 +226,11 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         evidence_table=state.evidence_table,
         source_scores=state.source_scores,
     )
-    state.draft = result.article_markdown
-    state.draft_meta_description = result.meta_description
-    state.draft_seo_keywords = result.seo_keywords
-    _event(state, f"editor.draft: {_llm_editor_mode()}")
+    state.draft = result.data.article_markdown
+    state.draft_meta_description = result.data.meta_description
+    state.draft_seo_keywords = result.data.seo_keywords
+    _event(state, _llm_event("editor.draft", result))
+    _propagate_llm_warnings(state, "editor.draft", result)
     return state
 
 
@@ -252,22 +274,35 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         if m.status == CitationStatus.unsupported and m.claim.importance == ClaimImportance.high
     ]
 
-    import os as _os  # noqa: PLC0415
+    use_llm_factcheck = (
+        os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
+    )
 
-    if _os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true":
-        judgment = fact_check_evaluator.evaluate_draft(
+    if use_llm_factcheck:
+        llm_result = fact_check_evaluator.evaluate_draft(
             topic=state.topic,
             draft=state.draft,
             claims=state.claims,
             citation_matches=state.citation_matches,
             source_scores=state.source_scores,
         )
-        # Merge LLM blocking issues with deterministic ones (deduplicated).
-        all_blocking = list(dict.fromkeys(blocking + judgment.blocking_issues))
-        passed = len(all_blocking) == 0
+        judgment = llm_result.data
+        _event(state, _llm_event("fact_check", llm_result))
+        _propagate_llm_warnings(state, "fact_check", llm_result)
+
+        if judgment is not None:
+            all_blocking = list(dict.fromkeys(blocking + judgment.blocking_issues))
+        else:
+            all_blocking = blocking
     else:
         all_blocking = blocking
-        passed = len(blocking) == 0
+        _event(
+            state,
+            "fact_check: configured_provider=mock actual_provider=mock "
+            "model=mock-1.0 fallback=false",
+        )
+
+    passed = len(all_blocking) == 0
 
     state.fact_check_report = FactCheckReport(
         total_claims=len(matches),
@@ -278,7 +313,6 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         passed=passed,
         blocking_issues=all_blocking,
     )
-    _event(state, f"fact_check: {_llm_factcheck_mode()}")
     return state
 
 
@@ -289,7 +323,6 @@ def package_article(state: BlogRunState) -> BlogRunState:
     title = state.outline.title
     slug = _slugify(title)
 
-    # Use draft SEO fields when available; fall back to outline/generic.
     meta_description = (
         state.draft_meta_description
         or f"A comprehensive overview of {state.topic}."

@@ -12,12 +12,25 @@ Real LLM calls are opt-in:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BLOGAGENT_LLM_PROVIDER` | `mock` | Set to `anthropic` or `openai` for real calls |
+| `BLOGAGENT_LLM_PROVIDER` | `mock` | Set to `anthropic`, `openai`, or `google` for real calls |
 | `BLOGAGENT_USE_LLM_EDITOR` | `false` | Set to `true` to enable LLM for research plan, outline, draft, revision |
 | `BLOGAGENT_USE_LLM_FACTCHECK` | `false` | Set to `true` to enable LLM for claim extraction and judgment |
 
 If a provider is configured but the API key is missing or the package is not installed,
-the system falls back to mock mode with an explicit warning. No crash.
+the system falls back to mock mode with an **explicit warning**. No crash.
+
+Fallback transparency: every LLM stage records `configured_provider`, `actual_provider`,
+and `fallback` in `state.provider_events`. When fallback occurs, the warning is also in
+`state.warnings`. Use `--show-trace` in the CLI to inspect these.
+
+`execution_mode` reflects what **actually ran**, not what env vars requested:
+- `mock` — all actual providers were mock (includes unexpected fallbacks)
+- `hybrid` — some live providers succeeded, some stages used mock
+- `live` — every stage used a live provider; no mock fallback
+
+**Google Gemini** (`BLOGAGENT_LLM_PROVIDER=google`) is recommended as the affordable
+default live provider. Requires `GOOGLE_API_KEY` and `google-genai` package.
+Model selection: `BLOGAGENT_LLM_MODEL` > `BLOGAGENT_GOOGLE_MODEL` > `gemini-2.5-flash`.
 
 ---
 
@@ -134,10 +147,22 @@ production monitoring.
 
 ---
 
+## Provider Events and Benchmark Validity
+
+Before treating a run as a "live benchmark":
+
+1. Run with `--show-trace` and inspect `provider_events`.
+2. Every LLM stage must show `actual_provider=google` (or `anthropic`/`openai`) and `fallback=false`.
+3. If `actual_provider=mock` appears in any stage, that stage used mock data — the run is not a valid live benchmark.
+4. `warnings` must be empty for a clean live run; warnings indicate unexpected fallbacks.
+5. `execution_mode` must be `live` (all stages) or `hybrid` (some stages) — not `mock`.
+
+---
+
 ## Recommended Next Steps
 
-1. Set `BLOGAGENT_LLM_PROVIDER=anthropic`, `BLOGAGENT_USE_LLM_EDITOR=true`, `BLOGAGENT_USE_LLM_FACTCHECK=true` and measure eval quality improvement.
-2. Set `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` alongside a real LLM provider and compare citation accuracy against the heuristic baseline using the `compare` CLI.
-3. Add real source grounding checks in evals (count real vs. mock sources, check claim support rates).
-4. Implement a persistence layer to store final article packages for review and comparison.
-5. Wire the Vercel API to a frontend for public portfolio demos.
+1. Set `BLOGAGENT_LLM_PROVIDER=google`, `BLOGAGENT_USE_LLM_EDITOR=true`, `GOOGLE_API_KEY=...` and run `--show-trace` to verify live execution.
+2. Set `BLOGAGENT_USE_LLM_FACTCHECK=true` alongside a real provider and measure eval quality improvement.
+3. Set `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` alongside a real LLM provider and compare citation accuracy against the heuristic baseline using the `compare` CLI.
+4. Add real source grounding checks in evals (count real vs. mock sources, check claim support rates).
+5. Implement a persistence layer to store final article packages for review and comparison.

@@ -56,9 +56,13 @@ generate_structured(
 
 | Value | Behavior |
 |---|---|
-| `mock` (default) | Deterministic structured output, no API call. `is_mock=True`. |
+| `mock` (default) | Deterministic structured output, no API call. `is_mock=True`, `configured_provider="mock"`. |
 | `anthropic` | Calls Anthropic API. Requires `ANTHROPIC_API_KEY`. Falls back to mock if key is missing. |
 | `openai` | Calls OpenAI API. Requires `OPENAI_API_KEY`. Falls back to mock if key is missing. |
+| `google` | Calls Google Gemini API via `google-genai`. Requires `GOOGLE_API_KEY`. Falls back to mock if key is missing. Recommended affordable live provider. |
+
+Every `LLMResult` exposes `configured_provider` (what was requested) and `provider` (what ran).
+When fallback occurs, `is_mock=True` and `warning` contains the reason (e.g. "GOOGLE_API_KEY is not set").
 
 The mock provider has registered responses for every output schema. All tests run against the mock provider.
 
@@ -166,6 +170,30 @@ The deterministic heuristic is always preserved as the default. The judge is add
 
 ---
 
+## Provider Events and execution_mode
+
+`BlogRunState.provider_events` contains one entry per stage that called an LLM or search provider. Each event records the configured provider, the actual provider, the model used, and whether a fallback occurred:
+
+```
+editor.research_plan: configured_provider=mock actual_provider=mock model=mock-1.0 fallback=false
+editor.draft: configured_provider=anthropic actual_provider=mock model=mock-1.0 fallback=true warning="ANTHROPIC_API_KEY is not set"
+editor.outline: configured_provider=google actual_provider=google model=gemini-2.5-flash fallback=false
+```
+
+When a configured live provider falls back to mock, the warning is also appended to `state.warnings`.
+
+`execution_mode` is computed **after** the pipeline runs by inspecting the actual provider used in each event:
+
+| Value | Meaning |
+|---|---|
+| `mock` | All actual providers were mock (no live provider succeeded) |
+| `hybrid` | At least one live provider succeeded; at least one stage used mock |
+| `live` | Every stage used a live provider; no mock fallback occurred |
+
+This means `execution_mode=mock` when a configured live provider falls back due to a missing key. Do not report hybrid merely because env vars requested live behavior.
+
+---
+
 ## State Object
 
 `BlogRunState` is a Pydantic model passed through every step. Each step receives the full state and returns the modified state. No global mutable state.
@@ -178,6 +206,8 @@ Key fields:
 - `draft_seo_keywords: list[str]` — keywords from `DraftOutput`
 - `revision_summary: str` — what changed in revision
 - `revision_count: int` — number of revisions performed (capped at 1)
+- `warnings: list[str]` — fallback warnings from LLM stages; empty in pure mock mode
+- `provider_events: list[str]` — one entry per stage with actual provider details
 
 See [blogagent/workflow/state.py](../blogagent/workflow/state.py) for the full schema.
 

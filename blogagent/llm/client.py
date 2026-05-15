@@ -7,6 +7,12 @@ Provider is selected via BLOGAGENT_LLM_PROVIDER (default: "mock").
 If provider is configured but the API key is missing or the package is
 not installed, the call falls back to mock with an explicit warning.
 Tests run entirely in mock mode and do not require any API key.
+
+Every returned LLMResult includes:
+    configured_provider — what BLOGAGENT_LLM_PROVIDER requested
+    provider            — what actually produced the output
+    is_mock             — True when output came from mock data registry
+    warning             — set when a configured live provider fell back to mock
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from pydantic import BaseModel
 
 from blogagent.llm.providers import (
     AnthropicProvider,
+    GoogleProvider,
     MissingAPIKeyError,
     OpenAIProvider,
     ProviderResponse,
@@ -138,16 +145,19 @@ def generate_structured(
 
     Falls back to mock if the provider is "mock", the API key is missing,
     the package is not installed, or the call fails for any reason.
+
+    Every returned LLMResult has configured_provider set to the value of
+    BLOGAGENT_LLM_PROVIDER so callers can distinguish configured vs actual.
     """
     provider_name = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
 
     if provider_name == "mock":
-        return _mock_result(output_model)
+        return _mock_result(output_model, configured_provider="mock")
 
     try:
         provider = _build_provider(provider_name)
     except (MissingAPIKeyError, ValueError) as exc:
-        return _mock_fallback(output_model, warning=str(exc))
+        return _mock_fallback(output_model, configured_provider=provider_name, warning=str(exc))
 
     # Augment system prompt with JSON schema so the model knows the output shape.
     schema_str = json.dumps(output_model.model_json_schema(), indent=2)
@@ -165,16 +175,19 @@ def generate_structured(
             provider=provider_name,
             model=response.model,
             is_mock=False,
+            configured_provider=provider_name,
             raw_text=response.text,
         )
     except ImportError as exc:
         return _mock_fallback(
             output_model,
+            configured_provider=provider_name,
             warning=f"{provider_name} package not installed: {exc}",
         )
     except Exception as exc:  # noqa: BLE001
         return _mock_fallback(
             output_model,
+            configured_provider=provider_name,
             error=f"LLM call failed ({type(exc).__name__}: {exc}); using mock fallback.",
         )
 
@@ -184,7 +197,9 @@ def generate_structured(
 # ---------------------------------------------------------------------------
 
 
-def _build_provider(name: str) -> AnthropicProvider | OpenAIProvider:
+def _build_provider(
+    name: str,
+) -> AnthropicProvider | OpenAIProvider | GoogleProvider:
     timeout = int(os.getenv("BLOGAGENT_LLM_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
     model_override = os.getenv("BLOGAGENT_LLM_MODEL", "").strip()
 
@@ -206,8 +221,22 @@ def _build_provider(name: str) -> AnthropicProvider | OpenAIProvider:
         model = model_override or "gpt-4o-mini"
         return OpenAIProvider(api_key=api_key, model=model, timeout=timeout)
 
+    if name == "google":
+        api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        if not api_key:
+            raise MissingAPIKeyError(
+                "GOOGLE_API_KEY is not set; falling back to mock LLM output."
+            )
+        # Model priority: BLOGAGENT_LLM_MODEL > BLOGAGENT_GOOGLE_MODEL > default
+        model = (
+            model_override
+            or os.getenv("BLOGAGENT_GOOGLE_MODEL", "").strip()
+            or "gemini-2.5-flash"
+        )
+        return GoogleProvider(api_key=api_key, model=model, timeout=timeout)
+
     raise ValueError(
-        f"Unknown LLM provider '{name}'. Supported: mock, anthropic, openai."
+        f"Unknown LLM provider '{name}'. Supported: mock, anthropic, openai, google."
     )
 
 
@@ -221,13 +250,14 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> Any:
     return output_model.model_validate(data)
 
 
-def _mock_result(output_model: type[BaseModel]) -> LLMResult:
+def _mock_result(output_model: type[BaseModel], *, configured_provider: str = "mock") -> LLMResult:
     data = _MOCK_DATA.get(output_model.__name__)
     return LLMResult(
         data=data,
         provider=_MOCK_PROVIDER,
         model=_MOCK_MODEL,
         is_mock=True,
+        configured_provider=configured_provider,
         warning=(
             None if data is not None
             else f"No mock data registered for {output_model.__name__}"
@@ -238,6 +268,7 @@ def _mock_result(output_model: type[BaseModel]) -> LLMResult:
 def _mock_fallback(
     output_model: type[BaseModel],
     *,
+    configured_provider: str,
     warning: str | None = None,
     error: str | None = None,
 ) -> LLMResult:
@@ -247,6 +278,7 @@ def _mock_fallback(
         provider=_MOCK_PROVIDER,
         model=_MOCK_MODEL,
         is_mock=True,
+        configured_provider=configured_provider,
         warning=warning,
         error=error,
     )

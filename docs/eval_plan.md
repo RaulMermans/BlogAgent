@@ -126,6 +126,23 @@ better output?** Use human review to answer: **is the content actually trustwort
 
 ---
 
+## Provider Benchmark Protocol
+
+Before running a live provider benchmark, verify the run is actually live:
+
+1. Export the provider API key: `export GOOGLE_API_KEY=your_key` (or `ANTHROPIC_API_KEY`).
+2. Run with `--show-trace`:
+   ```bash
+   BLOGAGENT_LLM_PROVIDER=google BLOGAGENT_USE_LLM_EDITOR=true GOOGLE_API_KEY=... \
+   uv run python -m blogagent.cli run "Topic" --show-trace
+   ```
+3. Confirm all `editor.*` events show `actual_provider=google` and `fallback=false`.
+4. If any event shows `actual_provider=mock`, the run is **not** a valid live benchmark — check warnings for the reason (usually a missing key).
+5. Compare outputs only after confirming real provider execution.
+6. `execution_mode` must be `live` or `hybrid` (not `mock`) for a meaningful comparison.
+
+---
+
 ## Current Status
 
 All 8 eval cases pass on the current scaffold:

@@ -4,6 +4,13 @@ Each function checks BLOGAGENT_USE_LLM_EDITOR:
   false (default) → deterministic mock output; safe for all tests, no API key needed.
   true            → calls the LLM client; falls back to mock if the call fails.
 
+All public functions return LLMResult so callers can inspect:
+    result.data              — the parsed output schema
+    result.is_mock           — True when mock data was used
+    result.configured_provider — what provider was requested
+    result.provider          — what provider actually ran
+    result.warning           — set when a configured live provider fell back to mock
+
 Drafts must not invent citations. They reference source facts only from the
 evidence table passed in as arguments.
 """
@@ -11,12 +18,12 @@ evidence table passed in as arguments.
 from __future__ import annotations
 
 import os
-import warnings
 
 from blogagent.agents import prompts
 from blogagent.llm import client as llm_client
 from blogagent.llm.schemas import (
     DraftOutput,
+    LLMResult,
     OutlineOutput,
     ResearchPlanOutput,
     RevisionOutput,
@@ -28,9 +35,39 @@ from blogagent.workflow.state import (
     SourceScore,
 )
 
+_MOCK_MODEL = "mock-1.0"
+_MOCK_PROVIDER = "mock"
+
 
 def _use_llm() -> bool:
     return os.getenv("BLOGAGENT_USE_LLM_EDITOR", "false").strip().lower() == "true"
+
+
+def _mock_llm_result(data: object, configured_provider: str = "mock") -> LLMResult:
+    """Wrap deterministic mock data in an LLMResult with no fallback warning."""
+    return LLMResult(
+        data=data,
+        provider=_MOCK_PROVIDER,
+        model=_MOCK_MODEL,
+        is_mock=True,
+        configured_provider=configured_provider,
+    )
+
+
+def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
+    """Wrap topic-specific mock data in an LLMResult that preserves fallback metadata."""
+    fallback_warning = base.warning or (
+        f"LLM call failed: {base.error}" if base.error else None
+    )
+    return LLMResult(
+        data=data,
+        provider=_MOCK_PROVIDER,
+        model=_MOCK_MODEL,
+        is_mock=True,
+        configured_provider=base.configured_provider,
+        warning=fallback_warning,
+        error=base.error,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -38,23 +75,19 @@ def _use_llm() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def generate_research_plan(topic: str) -> ResearchPlanOutput:
+def generate_research_plan(topic: str) -> LLMResult:
     """Return 5 targeted research questions for the topic."""
     if not _use_llm():
-        return _mock_research_plan(topic)
+        return _mock_llm_result(_mock_research_plan(topic))
 
     result = llm_client.generate_structured(
         system_prompt=prompts.RESEARCH_PLAN_PROMPT.format(topic=topic),
         user_prompt="Generate the research plan as a JSON object.",
         output_model=ResearchPlanOutput,
     )
-    if result.error or result.data is None:
-        warnings.warn(
-            f"LLM research plan failed: {result.error or 'no data'}; using mock fallback.",
-            stacklevel=2,
-        )
-        return _mock_research_plan(topic)
-    return result.data
+    if result.is_mock:
+        return _fallback_llm_result(_mock_research_plan(topic), result)
+    return result
 
 
 def _mock_research_plan(topic: str) -> ResearchPlanOutput:
@@ -78,10 +111,10 @@ def generate_outline(
     topic: str,
     evidence_table: list[EvidenceItem],
     source_scores: list[SourceScore],
-) -> OutlineOutput:
+) -> LLMResult:
     """Return a structured blog outline grounded in the evidence table."""
     if not _use_llm():
-        return _mock_outline(topic, evidence_table)
+        return _mock_llm_result(_mock_outline(topic, evidence_table))
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
     result = llm_client.generate_structured(
@@ -91,18 +124,13 @@ def generate_outline(
         user_prompt="Generate the blog outline as a JSON object.",
         output_model=OutlineOutput,
     )
-    if result.error or result.data is None:
-        warnings.warn(
-            f"LLM outline failed: {result.error or 'no data'}; using mock fallback.",
-            stacklevel=2,
-        )
-        return _mock_outline(topic, evidence_table)
-    return result.data
+    if result.is_mock:
+        return _fallback_llm_result(_mock_outline(topic, evidence_table), result)
+    return result
 
 
 def _mock_outline(topic: str, evidence_table: list[EvidenceItem]) -> OutlineOutput:
     sections = ["Introduction", "Key Facts", "Recent Developments", "Conclusion"]
-    # Add an Evidence section when we have real evidence items
     real_items = [e for e in evidence_table if e.confidence > 0.3]
     if real_items:
         sections = ["Introduction", "Background", "Key Facts", "Recent Developments", "Conclusion"]
@@ -125,7 +153,7 @@ def write_article_draft(
     outline: OutlineOutput,
     evidence_table: list[EvidenceItem],
     source_scores: list[SourceScore],
-) -> DraftOutput:
+) -> LLMResult:
     """Write a full article draft grounded in the evidence table.
 
     In mock mode the draft is substantive prose (not placeholder text) so
@@ -133,7 +161,7 @@ def write_article_draft(
     invent citations; it references only facts present in evidence_table.
     """
     if not _use_llm():
-        return _mock_draft(topic, outline, evidence_table)
+        return _mock_llm_result(_mock_draft(topic, outline, evidence_table))
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
     result = llm_client.generate_structured(
@@ -148,13 +176,9 @@ def write_article_draft(
         ),
         output_model=DraftOutput,
     )
-    if result.error or result.data is None:
-        warnings.warn(
-            f"LLM draft failed: {result.error or 'no data'}; using mock fallback.",
-            stacklevel=2,
-        )
-        return _mock_draft(topic, outline, evidence_table)
-    return result.data
+    if result.is_mock:
+        return _fallback_llm_result(_mock_draft(topic, outline, evidence_table), result)
+    return result
 
 
 def _mock_draft(
@@ -196,7 +220,6 @@ def _mock_draft(
         lines.append("")
         body = mock_body.get(section, f"{section} covers an important dimension of {topic}.")
         lines.append(body)
-        # Append evidence facts for the first two evidence items, if any
         if section in ("Key Facts", "Background"):
             for item in evidence_table[:2]:
                 if item.confidence > 0:
@@ -228,10 +251,10 @@ def revise_article(
     draft: str,
     fact_check_report: FactCheckReport,
     citation_matches: list[CitationMatch],
-) -> RevisionOutput:
+) -> LLMResult:
     """Revise the draft to address blocking fact-check issues."""
     if not _use_llm():
-        return _mock_revision(draft, fact_check_report)
+        return _mock_llm_result(_mock_revision(draft, fact_check_report))
 
     issues = "\n".join(fact_check_report.blocking_issues) or "No specific blocking issues listed."
     result = llm_client.generate_structured(
@@ -242,13 +265,9 @@ def revise_article(
         ),
         output_model=RevisionOutput,
     )
-    if result.error or result.data is None:
-        warnings.warn(
-            f"LLM revision failed: {result.error or 'no data'}; returning draft unchanged.",
-            stacklevel=2,
-        )
-        return _mock_revision(draft, fact_check_report)
-    return result.data
+    if result.is_mock:
+        return _fallback_llm_result(_mock_revision(draft, fact_check_report), result)
+    return result
 
 
 def _mock_revision(draft: str, fact_check_report: FactCheckReport) -> RevisionOutput:

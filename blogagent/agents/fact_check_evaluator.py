@@ -5,24 +5,32 @@ evaluate_draft() checks BLOGAGENT_USE_LLM_FACTCHECK:
   true            → calls the LLM client for richer judgment; falls back to
                     deterministic logic if the call fails.
 
+Returns LLMResult so callers can inspect configured_provider, actual provider,
+is_mock, and any fallback warning.
+
 The evaluator never invents sources. It judges only against the provided
 claims, citation matches, and source scores.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-import warnings
 
 from blogagent.agents import prompts
 from blogagent.llm import client as llm_client
-from blogagent.llm.schemas import FactCheckJudgmentOutput
+from blogagent.llm.schemas import FactCheckJudgmentOutput, LLMResult
 from blogagent.workflow.state import (
     CitationMatch,
     CitationStatus,
     ClaimImportance,
     SourceScore,
 )
+
+logger = logging.getLogger(__name__)
+
+_MOCK_MODEL = "mock-1.0"
+_MOCK_PROVIDER = "mock"
 
 
 def _use_llm() -> bool:
@@ -35,18 +43,26 @@ def evaluate_draft(
     claims: list,
     citation_matches: list[CitationMatch],
     source_scores: list[SourceScore],
-) -> FactCheckJudgmentOutput:
-    """Return a structured fact-check judgment.
+) -> LLMResult:
+    """Return LLMResult whose .data is a FactCheckJudgmentOutput.
 
     In deterministic mode, derives judgment purely from citation_matches.
     Unsupported high-importance claims always produce a blocking issue.
     """
     if not _use_llm():
-        return _deterministic_judgment(citation_matches)
+        judgment = _deterministic_judgment(citation_matches)
+        return LLMResult(
+            data=judgment,
+            provider=_MOCK_PROVIDER,
+            model=_MOCK_MODEL,
+            is_mock=True,
+            configured_provider="mock",
+        )
 
     # Build a compact summary of claims and citation status for the LLM prompt.
     claim_summary = _format_claim_summary(claims, citation_matches)
     source_summary = _format_source_summary(source_scores)
+    configured_provider = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
 
     result = llm_client.generate_structured(
         system_prompt=prompts.FACT_CHECK_JUDGMENT_PROMPT.format(
@@ -61,13 +77,25 @@ def evaluate_draft(
         ),
         output_model=FactCheckJudgmentOutput,
     )
-    if result.error or result.data is None:
-        warnings.warn(
-            f"LLM fact-check failed: {result.error or 'no data'}; using deterministic fallback.",
-            stacklevel=2,
+
+    if result.is_mock or result.data is None:
+        # LLM fell back to mock; use deterministic judgment with topic-specific logic.
+        judgment = _deterministic_judgment(citation_matches)
+        fallback_warning = result.warning or (
+            f"LLM fact-check failed: {result.error}" if result.error else None
         )
-        return _deterministic_judgment(citation_matches)
-    return result.data
+        logger.warning("LLM fact-check fell back to deterministic: %s", fallback_warning)
+        return LLMResult(
+            data=judgment,
+            provider=_MOCK_PROVIDER,
+            model=_MOCK_MODEL,
+            is_mock=True,
+            configured_provider=configured_provider,
+            warning=fallback_warning,
+            error=result.error,
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

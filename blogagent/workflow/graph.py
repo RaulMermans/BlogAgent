@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
 
@@ -11,6 +10,8 @@ from blogagent.tools.validators import (
     validate_no_unsupported_high_importance_claims,
 )
 from blogagent.workflow.nodes import (
+    _event,
+    _propagate_llm_warnings,
     build_evidence_table,
     check_external_effects,
     extract_claims,
@@ -30,17 +31,39 @@ from blogagent.workflow.state import BlogRunState
 _MAX_REVISIONS = 1
 
 
-def _determine_execution_mode() -> str:
-    use_editor = os.getenv("BLOGAGENT_USE_LLM_EDITOR", "false").strip().lower() == "true"
-    use_factcheck = os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
-    use_real_search = os.getenv("BLOGAGENT_SEARCH_PROVIDER", "mock").strip().lower() != "mock"
-    any_real = use_editor or use_factcheck or use_real_search
-    all_real = use_editor and use_factcheck and use_real_search
-    if not any_real:
+def _compute_execution_mode(state: BlogRunState) -> str:
+    """Derive execution_mode from what providers actually ran.
+
+    Rules:
+      mock   — all actual_provider values are "mock" (no live provider succeeded)
+      hybrid — at least one live provider succeeded AND at least one stage used mock
+      live   — every stage that ran used a live provider; no mock fallback
+
+    This is computed after the pipeline runs, not from env vars, so it reflects
+    what actually happened rather than what was configured.
+    """
+    live_actual = False
+    mock_actual = False
+
+    for event in state.provider_events:
+        if "actual_provider=" in event:
+            # LLM stage event: "editor.research_plan: ... actual_provider=X ..."
+            if "actual_provider=mock" in event:
+                mock_actual = True
+            else:
+                live_actual = True
+        elif event.startswith("search:"):
+            # Search event: "search: provider=X, results=N"
+            if "provider=mock" in event:
+                mock_actual = True
+            else:
+                live_actual = True
+
+    if not live_actual:
         return "mock"
-    if all_real:
-        return "live"
-    return "hybrid"
+    if mock_actual:
+        return "hybrid"
+    return "live"
 
 
 # Deterministic pipeline steps run in order before the fact-check / revision cycle.
@@ -63,13 +86,14 @@ _PRE_FACTCHECK = [
 
 def run_pipeline(topic: str) -> BlogRunState:
     state = BlogRunState(topic=topic, run_id=str(uuid.uuid4()))
-    state.execution_mode = _determine_execution_mode()  # type: ignore[assignment]
+    # execution_mode starts as "mock" and is updated after the pipeline finishes.
 
     for step in _PRE_FACTCHECK:
         t0 = time.monotonic()
         state = step(state)
         state.stage_timings[step.__name__] = round(time.monotonic() - t0, 3)
         if state.blocked:
+            state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
             return state
 
     # Initial fact-check.
@@ -85,16 +109,19 @@ def run_pipeline(topic: str) -> BlogRunState:
     ):
         assert state.outline is not None
         t0 = time.monotonic()
-        revision = editor_agent.revise_article(
+        llm_result = editor_agent.revise_article(
             topic=state.topic,
             draft=state.draft,
             fact_check_report=state.fact_check_report,
             citation_matches=state.citation_matches,
         )
         state.stage_timings["revise_article"] = round(time.monotonic() - t0, 3)
-        state.draft = revision.revised_markdown
-        state.revision_summary = revision.revision_summary
+        state.draft = llm_result.data.revised_markdown
+        state.revision_summary = llm_result.data.revision_summary
         state.revision_count += 1
+        from blogagent.workflow.nodes import _llm_event  # noqa: PLC0415
+        _event(state, _llm_event("editor.revision", llm_result))
+        _propagate_llm_warnings(state, "editor.revision", llm_result)
 
         # Re-run claim extraction, citation matching, and fact-check post-revision.
         state = extract_claims(state)
@@ -104,6 +131,9 @@ def run_pipeline(topic: str) -> BlogRunState:
     t0 = time.monotonic()
     state = package_article(state)
     state.stage_timings["package_article"] = round(time.monotonic() - t0, 3)
+
+    # Compute execution_mode from what actually ran.
+    state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
     return state
 
 
