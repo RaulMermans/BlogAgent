@@ -16,6 +16,29 @@ from api.index import app  # noqa: E402
 client = TestClient(app, raise_server_exceptions=True)
 
 # ---------------------------------------------------------------------------
+# GET /
+# ---------------------------------------------------------------------------
+
+
+def test_root_returns_200():
+    response = client.get("/")
+    assert response.status_code == 200
+
+
+def test_root_returns_service_info():
+    response = client.get("/")
+    body = response.json()
+    assert body["service"] == "BlogAgent"
+    assert body["status"] == "ok"
+    assert "description" in body
+    assert "endpoints" in body
+    endpoints = body["endpoints"]
+    assert "health" in endpoints
+    assert "run_post" in endpoints
+    assert "run_get" in endpoints
+
+
+# ---------------------------------------------------------------------------
 # GET /health
 # ---------------------------------------------------------------------------
 
@@ -146,6 +169,77 @@ def test_run_blocked_response_has_empty_article(monkeypatch):
     body = response.json()
     assert body["article_markdown"] == ""
     assert body["source_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /run — browser-friendly route
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_no_topic_returns_200():
+    response = client.get("/run")
+    assert response.status_code == 200
+
+
+def test_get_run_no_topic_returns_usage_hint():
+    response = client.get("/run")
+    body = response.json()
+    assert "detail" in body
+    assert "example_get" in body
+    assert "example_post_body" in body
+
+
+def test_get_run_empty_topic_returns_usage_hint():
+    response = client.get("/run?topic=")
+    body = response.json()
+    assert "detail" in body
+
+
+def test_get_run_with_topic_returns_200(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.get("/run?topic=Why elephants are the heaviest land animals")
+    assert response.status_code == 200
+
+
+def test_get_run_with_topic_has_compact_fields(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.get("/run?topic=Solar energy")
+    body = response.json()
+    for field in (
+        "blocked",
+        "block_reason",
+        "execution_mode",
+        "title",
+        "meta_description",
+        "article_markdown",
+        "source_count",
+        "claim_status_counts",
+        "revision_count",
+        "warnings",
+        "provider_events",
+    ):
+        assert field in body, f"Missing field: {field}"
+
+
+def test_get_run_publishing_topic_returns_blocked(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.get("/run?topic=Post this article to WordPress now")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["blocked"] is True
+    assert body["block_reason"] != ""
 
 
 # ---------------------------------------------------------------------------

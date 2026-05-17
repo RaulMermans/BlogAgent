@@ -413,13 +413,40 @@ without any API keys.
 | `BLOGAGENT_USE_LLM_FACTCHECK=true` | Enable LLM for Fact-Check Evaluator |
 | `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` | Enable semantic per-claim citation verification |
 
+**Browser tests (open these URLs directly):**
+
+```
+/health
+/
+/run
+/run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals
+```
+
+- `/health` — returns `{"status":"ok",...}`
+- `/` — returns service info and available endpoints
+- `/run` — returns usage instructions with example GET and POST
+- `/run?topic=...` — runs the full BlogAgent pipeline and returns the compact response
+
+**Terminal POST test:**
+
+```bash
+curl -X POST https://YOUR-VERCEL-URL.vercel.app/run \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"Why elephants are the heaviest land animals"}'
+```
+
 **Example local API call (mock mode):**
 
 ```bash
 # Start the API locally with uvicorn
 uvicorn api.index:app --port 8000
 
-# Then call it
+# GET routes (browser-friendly)
+curl http://localhost:8000/
+curl http://localhost:8000/run
+curl "http://localhost:8000/run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals"
+
+# POST route
 curl -X POST http://localhost:8000/run \
   -H "Content-Type: application/json" \
   -d '{"topic":"Why elephants are the heaviest land animals"}'

@@ -4,8 +4,10 @@ Exposes a minimal, mock-safe API for serverless deployment.
 All routes default to mock mode — no API keys required.
 
 Routes:
+    GET  /         → service info
     GET  /health   → service status
-    POST /run      → run the BlogAgent pipeline on a topic
+    GET  /run      → browser-friendly: no topic → usage hint; topic param → run pipeline
+    POST /run      → run the BlogAgent pipeline on a topic (JSON body)
 
 Live provider usage (Tavily search, Anthropic/OpenAI LLM) is optional and cost-bearing.
 Configure via Vercel environment variables (see README.md).
@@ -22,6 +24,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="BlogAgent API", version="0.1.0")
@@ -54,9 +57,38 @@ class RunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    return {
+        "service": "BlogAgent",
+        "status": "ok",
+        "description": "Source-grounded editorial agent API",
+        "endpoints": {
+            "health": "GET /health",
+            "run_post": "POST /run",
+            "run_get": "GET /run?topic=...",
+        },
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "BlogAgent", "mode": "mock-safe"}
+
+
+@app.get("/run")
+def run_get(topic: str | None = None) -> Any:
+    if not topic or not topic.strip():
+        return JSONResponse(
+            content={
+                "detail": "Use POST /run with JSON body or GET /run?topic=...",
+                "example_get": "/run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals",
+                "example_post_body": {
+                    "topic": "Why elephants are the heaviest land animals"
+                },
+            }
+        )
+    return _run_topic(topic.strip())
 
 
 @app.post("/run", response_model=RunResponse)
@@ -64,7 +96,15 @@ def run(request: RunRequest) -> Any:
     topic = (request.topic or "").strip()
     if not topic:
         raise HTTPException(status_code=400, detail="topic must be a non-empty string")
+    return _run_topic(topic)
 
+
+# ---------------------------------------------------------------------------
+# Shared pipeline runner
+# ---------------------------------------------------------------------------
+
+
+def _run_topic(topic: str) -> RunResponse:
     _ensure_mock_safe_defaults()
 
     from blogagent.workflow.graph import run_pipeline  # noqa: PLC0415
