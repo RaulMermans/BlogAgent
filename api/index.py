@@ -405,11 +405,17 @@ def _build_app_html() -> str:
   <div id="topic-section" class="form-card" style="display:none">
     <label for="topic">Topic</label>
     <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
-    <button id="gen-btn" onclick="generate()">Generate Blog Post</button>
+    <button type="button" id="generateButton">Generate Blog Post</button>
   </div>
 
+  <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;">API health: checking…</div>
   <div id="status"></div>
   <div id="error-box"></div>
+
+  <details style="margin-bottom:0.8rem;">
+    <summary>Debug</summary>
+    <pre id="debugOutput" class="details-body" style="margin-top:0.4rem;"></pre>
+  </details>
 
   <div id="output">
     <div class="form-card">
@@ -472,11 +478,14 @@ def _build_app_html() -> str:
   let _lastTopic = "";
 
   function init() {
+    document.getElementById('generateButton').addEventListener('click', generate);
     if (localStorage.getItem(SECRET_SAVED_KEY) === 'true') {
       showReady();
+      setStatus('Ready');
     } else {
       showLogin();
     }
+    checkHealth();
   }
 
   function showLogin() {
@@ -497,6 +506,7 @@ def _build_app_html() -> str:
     localStorage.setItem(SECRET_KEY, val);
     localStorage.setItem(SECRET_SAVED_KEY, 'true');
     showReady();
+    setStatus('Ready');
   }
 
   function clearSecret() {
@@ -506,14 +516,38 @@ def _build_app_html() -> str:
     showLogin();
   }
 
+  async function checkHealth() {
+    const el = document.getElementById('api-health');
+    try {
+      const resp = await fetch('/health');
+      if (resp.ok) {
+        el.textContent = 'API health: ok';
+        el.style.color = '#166534';
+      } else {
+        el.textContent = 'API health: unavailable';
+        el.style.color = '#b91c1c';
+      }
+    } catch (_) {
+      el.textContent = 'API health: unavailable';
+      el.style.color = '#b91c1c';
+    }
+  }
+
   async function generate() {
     const secret = localStorage.getItem(SECRET_KEY) || '';
     const topic = document.getElementById('topic').value.trim();
-    if (!topic) { showError('Please enter a topic.'); return; }
+    if (!topic) { showError('Please enter a topic'); return; }
 
     clearOutput();
-    setStatus('Generating blog post…');
-    document.getElementById('gen-btn').disabled = true;
+    setStatus('Generating...');
+    document.getElementById('generateButton').disabled = true;
+
+    const debugInfo = {
+      url: '/run',
+      status: null,
+      error: null,
+      secret_sent: secret.length > 0
+    };
 
     try {
       const resp = await fetch('/run', {
@@ -525,27 +559,48 @@ def _build_app_html() -> str:
         body: JSON.stringify({topic})
       });
 
-      const data = await resp.json();
+      debugInfo.status = resp.status;
+
+      let data;
+      try { data = await resp.json(); } catch (_) { data = {}; }
 
       if (resp.status === 401) {
-        showError('Invalid or missing worker secret.');
+        debugInfo.error = 'Invalid or missing worker secret';
+        setDebug(debugInfo);
+        showError('Invalid or missing worker secret');
         clearSecret();
         return;
       }
       if (!resp.ok) {
-        showError('Error ' + resp.status + ': ' + (data.detail || JSON.stringify(data)));
+        const msg = (data && data.detail) ? data.detail : JSON.stringify(data);
+        debugInfo.error = msg;
+        setDebug(debugInfo);
+        showError('Request failed: ' + resp.status + ' ' + msg);
         return;
       }
 
       _lastResponse = data;
       _lastTopic = topic;
+      setDebug(debugInfo);
       renderOutput(data);
-      setStatus('');
+      setStatus('Success');
     } catch (err) {
+      debugInfo.error = err.message;
+      setDebug(debugInfo);
       showError('Network error: ' + err.message);
     } finally {
-      document.getElementById('gen-btn').disabled = false;
+      document.getElementById('generateButton').disabled = false;
     }
+  }
+
+  function setDebug(info) {
+    const el = document.getElementById('debugOutput');
+    el.textContent = [
+      'url: ' + info.url,
+      'status: ' + (info.status !== null ? info.status : 'n/a'),
+      'error: ' + (info.error || 'none'),
+      'secret_sent: ' + info.secret_sent
+    ].join('\\n');
   }
 
   function renderOutput(d) {
@@ -655,7 +710,7 @@ def _build_app_html() -> str:
     document.getElementById('warnings-details').style.display = 'none';
   }
 
-  init();
+  document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>"""
