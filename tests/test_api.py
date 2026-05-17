@@ -536,3 +536,54 @@ def test_blog_evaluator_rubric_exists():
     assert (
         _ROOT / ".claude" / "skills" / "blog-output-evaluator" / "references" / "rubric.md"
     ).exists()
+
+
+# ---------------------------------------------------------------------------
+# Browser UI — generate button and JS event wiring
+# ---------------------------------------------------------------------------
+
+
+def test_ui_html_has_generate_button_id():
+    response = client.get("/")
+    assert 'id="generateButton"' in response.text
+
+
+def test_ui_html_has_status_div():
+    response = client.get("/")
+    assert 'id="status"' in response.text
+
+
+def test_ui_html_has_debug_output():
+    response = client.get("/")
+    assert 'id="debugOutput"' in response.text
+
+
+def test_ui_html_uses_addeventlistener_for_generate():
+    response = client.get("/")
+    assert "addEventListener" in response.text
+    assert "generate" in response.text
+
+
+def test_ui_html_uses_domcontentloaded():
+    response = client.get("/")
+    assert "DOMContentLoaded" in response.text
+
+
+def test_ui_html_calls_fetch_run():
+    response = client.get("/")
+    assert "fetch('/run'" in response.text or 'fetch("/run"' in response.text
+
+
+def test_ui_html_sends_x_blogagent_secret_in_fetch():
+    response = client.get("/")
+    assert "X-BlogAgent-Secret" in response.text
+
+
+def test_ui_html_has_api_health_element():
+    response = client.get("/")
+    assert 'id="api-health"' in response.text
+
+
+def test_generate_button_has_type_button():
+    response = client.get("/")
+    assert 'type="button"' in response.text

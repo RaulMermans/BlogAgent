@@ -408,6 +408,24 @@ Provider events and raw JSON are collapsed in `<details>` sections and do not do
 
 ---
 
+## Troubleshooting
+
+### If clicking Generate does nothing
+
+1. Open Vercel logs (or browser DevTools → Network tab) and check for a `POST /run` request.
+2. If no `POST /run` appears in the logs, the frontend JavaScript did not fire — check the browser console (F12) for JavaScript errors.
+3. Test `POST /run` directly with curl to rule out a backend issue:
+   ```bash
+   curl -X POST https://YOUR-VERCEL-URL.vercel.app/run \
+     -H "Content-Type: application/json" \
+     -H "X-BlogAgent-Secret: your-secret" \
+     -d '{"topic":"Why elephants are the heaviest land animals"}'
+   ```
+4. Confirm the worker secret saved in your browser matches `BLOGAGENT_WORKER_SECRET` on Vercel. A wrong secret returns `401` and clears the saved secret automatically.
+5. Expand the **Debug** section on the page — it shows the request URL, response status, any error message, and whether a secret was sent.
+
+---
+
 ## Worker Secret
 
 By default `/run` is unprotected. Set `BLOGAGENT_WORKER_SECRET` to add a lightweight
