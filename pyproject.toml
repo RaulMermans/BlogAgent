@@ -39,7 +39,11 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = [
+extend-exclude = [
+    ".venv",
+    "venv",
+    ".git",
+    "__pycache__",
     ".claude/skills/skill-creator",
 ]
 
