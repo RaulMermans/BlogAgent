@@ -282,3 +282,187 @@ def test_vercel_json_exists():
 
 def test_api_entrypoint_exists():
     assert (_ROOT / "api" / "index.py").exists(), "api/index.py must exist"
+
+
+# ---------------------------------------------------------------------------
+# GET /app — browser UI
+# ---------------------------------------------------------------------------
+
+
+def test_app_returns_200():
+    response = client.get("/app")
+    assert response.status_code == 200
+
+
+def test_app_returns_html():
+    response = client.get("/app")
+    assert "text/html" in response.headers.get("content-type", "")
+
+
+def test_app_contains_worker_secret_input():
+    response = client.get("/app")
+    assert "secret" in response.text.lower()
+    assert 'type="password"' in response.text
+
+
+def test_app_contains_topic_input():
+    response = client.get("/app")
+    assert "topic" in response.text.lower()
+    assert "<textarea" in response.text
+
+
+def test_app_contains_generate_button():
+    response = client.get("/app")
+    assert "Generate" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Worker secret — unprotected (BLOGAGENT_WORKER_SECRET unset)
+# ---------------------------------------------------------------------------
+
+
+def test_run_works_without_secret_when_env_unset(monkeypatch):
+    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post("/run", json={"topic": "Solar energy"})
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Worker secret — protected (BLOGAGENT_WORKER_SECRET set)
+# ---------------------------------------------------------------------------
+
+
+def test_run_returns_401_when_secret_configured_and_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post("/run", json={"topic": "Solar energy"})
+    assert response.status_code == 401
+    assert "worker secret" in response.json()["detail"].lower()
+
+
+def test_run_returns_401_when_secret_configured_and_wrong(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post(
+        "/run",
+        json={"topic": "Solar energy"},
+        headers={"X-BlogAgent-Secret": "wrong"},
+    )
+    assert response.status_code == 401
+
+
+def test_run_succeeds_when_secret_correct_via_header(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post(
+        "/run",
+        json={"topic": "Solar energy"},
+        headers={"X-BlogAgent-Secret": "supersecret"},
+    )
+    assert response.status_code == 200
+
+
+def test_get_run_succeeds_with_correct_worker_secret_query_param(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.get("/run?topic=Solar energy&worker_secret=supersecret")
+    assert response.status_code == 200
+
+
+def test_get_run_returns_401_with_wrong_worker_secret(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/run?topic=Solar energy&worker_secret=wrong")
+    assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Public routes stay public when secret is configured
+# ---------------------------------------------------------------------------
+
+
+def test_health_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/health")
+    assert response.status_code == 200
+
+
+def test_root_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/")
+    assert response.status_code == 200
+
+
+def test_app_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/app")
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# RunResponse includes slug and seo_keywords
+# ---------------------------------------------------------------------------
+
+
+def test_run_response_includes_slug(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post("/run", json={"topic": "Solar energy"})
+    body = response.json()
+    assert "slug" in body
+
+
+def test_run_response_includes_seo_keywords(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post("/run", json={"topic": "Solar energy"})
+    body = response.json()
+    assert "seo_keywords" in body
+    assert isinstance(body["seo_keywords"], list)
+
+
+# ---------------------------------------------------------------------------
+# Skill file existence tests
+# ---------------------------------------------------------------------------
+
+
+def test_skill_creator_exists():
+    assert (_ROOT / ".claude" / "skills" / "skill-creator" / "SKILL.md").exists()
+
+
+def test_blog_seo_skill_exists():
+    assert (_ROOT / ".claude" / "skills" / "blog-post-seo-writing" / "SKILL.md").exists()
+
+
+def test_blog_evaluator_skill_exists():
+    assert (_ROOT / ".claude" / "skills" / "blog-output-evaluator" / "SKILL.md").exists()
+
+
+def test_blog_output_template_exists():
+    template = (
+        _ROOT / ".claude" / "skills" / "blog-post-seo-writing"
+        / "references" / "blog-output-template.md"
+    )
+    assert template.exists()
+
+
+def test_blog_evaluator_rubric_exists():
+    assert (
+        _ROOT / ".claude" / "skills" / "blog-output-evaluator" / "references" / "rubric.md"
+    ).exists()

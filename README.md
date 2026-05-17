@@ -369,6 +369,103 @@ API keys as GitHub secrets and overriding the mock-mode env vars in the workflow
 
 ---
 
+## Browser Interface
+
+BlogAgent ships a minimal browser UI at `/app`.
+
+```
+/app
+```
+
+Open it in any browser. No framework, no React, no Next.js — just a single FastAPI-rendered HTML page.
+
+The interface lets you:
+- Enter an optional worker secret
+- Enter a topic
+- Click **Generate Blog Post**
+- See the title, slug, meta description, SEO keywords, article markdown, and claim/source stats
+- Copy the article markdown to clipboard
+- Download the article as `.md`
+- Download the full JSON response
+
+Provider events and raw JSON are collapsed in `<details>` sections and do not dominate the view.
+
+---
+
+## Worker Secret
+
+By default `/run` is unprotected. Set `BLOGAGENT_WORKER_SECRET` to add a lightweight
+demo gate that prevents casual use of the generation endpoint:
+
+```bash
+BLOGAGENT_WORKER_SECRET=your-secret
+```
+
+**Behavior:**
+
+| Env var state | Effect |
+|---|---|
+| Unset or empty | `/run` works without a secret |
+| Set to a value | POST `/run` and GET `/run?topic=...` require a matching secret |
+
+**How to pass the secret:**
+
+- Header: `X-BlogAgent-Secret: your-secret` (preferred — used by the browser UI)
+- JSON body field: `worker_secret` (POST only)
+- Query param: `worker_secret=your-secret` (GET only)
+
+If missing or wrong, the endpoint returns `401 {"detail": "Invalid or missing worker secret"}`.
+
+**Always public regardless of secret:** `GET /`, `GET /health`, `GET /app`.
+
+This is lightweight demo protection, not production auth. It has no sessions, no accounts,
+no OAuth, and no rate limiting.
+
+---
+
+## How to request a blog post
+
+### Via the browser UI
+
+1. Open `/app` in a browser
+2. Enter your worker secret (if configured)
+3. Enter a topic
+4. Click **Generate Blog Post**
+5. Use **Copy article markdown**, **Download .md**, or **Download full JSON**
+
+### Via curl
+
+```bash
+# Without secret
+curl -X POST https://YOUR-VERCEL-URL.vercel.app/run \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"Why elephants are the heaviest land animals"}'
+
+# With secret
+curl -X POST https://YOUR-VERCEL-URL.vercel.app/run \
+  -H "Content-Type: application/json" \
+  -H "X-BlogAgent-Secret: your-secret" \
+  -d '{"topic":"Why elephants are the heaviest land animals"}'
+```
+
+---
+
+## Skills
+
+BlogAgent ships three Claude Code skills under `.claude/skills/`:
+
+| Skill | Purpose |
+|---|---|
+| `skill-creator` | Sourced from [anthropics/skills](https://github.com/anthropics/skills). Teaches Claude Code how to create, test, and iterate on project skills. |
+| `blog-post-seo-writing` | Defines how BlogAgent should structure SEO-ready article outputs: title, slug, meta description, heading rules, keyword density, and publish-readiness checklist. |
+| `blog-output-evaluator` | Defines a 9-dimension rubric for judging BlogAgent article quality. Produces a structured score and blocking issue list. |
+
+Skills are **scaffolding for Claude Code development workflows** — they do not automatically
+change runtime pipeline behavior. Claude Code reads them during development to apply
+consistent editorial standards and evaluation criteria when reviewing or improving BlogAgent outputs.
+
+---
+
 ## Deployment
 
 ### Streamlit UI (local / demo)
@@ -418,12 +515,14 @@ without any API keys.
 ```
 /health
 /
+/app
 /run
 /run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals
 ```
 
 - `/health` — returns `{"status":"ok",...}`
 - `/` — returns service info and available endpoints
+- `/app` — browser UI for generating blog posts (HTML, no framework)
 - `/run` — returns usage instructions with example GET and POST
 - `/run?topic=...` — runs the full BlogAgent pipeline and returns the compact response
 

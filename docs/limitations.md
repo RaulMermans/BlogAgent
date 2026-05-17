@@ -117,6 +117,35 @@ additional judgment, but is still bounded by the provided citations and sources.
 - **Streamlit on Vercel**: The Streamlit UI is not currently deployed to Vercel. The Vercel
   scaffold exposes a FastAPI API only. Deploying Streamlit to Vercel requires additional
   configuration not yet implemented.
+- **Production auth**: The `BLOGAGENT_WORKER_SECRET` mechanism is a lightweight demo gate —
+  no sessions, accounts, OAuth, or rate limiting. Not suitable for production without
+  additional infrastructure.
+
+## Browser UI
+
+`GET /app` is a single-page HTML interface rendered by FastAPI. It has no framework
+dependency and no server-side state. Limitations:
+
+- Source URLs are not shown in the UI (the compact `/run` response does not include them).
+  Use the CLI with `--json` or the **Download full JSON** button for source details.
+- Markdown is rendered with `white-space: pre-wrap` — headings and bold text are not
+  visually styled. A markdown renderer is not included in the MVP.
+- The UI is not responsive on very narrow viewports (< 400 px).
+
+## Claude Code Skills
+
+`.claude/skills/` contains three skills for Claude Code development workflows.
+
+**Important:** skill files do not automatically change runtime pipeline behavior.
+They are read by Claude Code during development to apply consistent editorial
+standards and evaluation criteria. They have no effect on the pipeline unless a
+developer explicitly references them in their Claude Code session.
+
+Current gaps:
+- No evals or test cases have been run against the `blog-post-seo-writing` or
+  `blog-output-evaluator` skills yet. Quality of the skills has not been measured.
+- The `skill-creator` skill's optimization scripts require the `claude` CLI — they
+  are not available in the Vercel deployment environment.
 
 ---
 

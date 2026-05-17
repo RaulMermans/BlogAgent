@@ -246,7 +246,10 @@ See [blogagent/tools/validators.py](../blogagent/tools/validators.py).
 `api/index.py` is a minimal FastAPI application for serverless deployment.
 
 It exposes:
+- `GET /` — service info
 - `GET /health` — returns service status (always 200, no pipeline required)
+- `GET /app` — browser UI rendered as a single FastAPI `HTMLResponse`; no framework, no React
+- `GET /run?topic=...` — browser-friendly pipeline trigger
 - `POST /run` — runs the BlogAgent pipeline on a `topic` string
 
 The API defaults to **mock-safe mode**: if no provider environment variables are set,
@@ -254,10 +257,43 @@ all pipeline steps use mock mode with no API calls. Real providers can be enable
 Vercel environment variables (see README.md).
 
 The API response is compact: it includes the article markdown, source count, claim status
-counts, and diagnostic fields. Raw scraped webpage text is never returned.
+counts, slug, SEO keywords, and diagnostic fields. Raw scraped webpage text is never returned.
 
 Publishing requests are blocked by the same `check_external_effects` guardrail used by the
 full pipeline.
+
+### Worker secret (optional)
+
+Set `BLOGAGENT_WORKER_SECRET` to protect `/run` endpoints with a lightweight demo gate.
+When set, `POST /run` and `GET /run?topic=...` require the secret via `X-BlogAgent-Secret`
+header, `worker_secret` JSON body field, or `worker_secret` query param.
+
+`GET /`, `GET /health`, and `GET /app` are always public.
+
+This is not production auth — there are no sessions, accounts, or rate limiting.
+
+### Browser UI
+
+`GET /app` returns a single-page HTML interface. It calls `POST /run` with `fetch()`,
+renders the article in a blog card using `white-space: pre-wrap`, and provides buttons
+to copy the markdown, download `.md`, and download the full JSON response.
+Provider events and raw JSON are accessible via `<details>` sections.
+
+---
+
+## Claude Code Skills
+
+Three skills live under `.claude/skills/`:
+
+| Skill | Source | Purpose |
+|---|---|---|
+| `skill-creator` | [anthropics/skills](https://github.com/anthropics/skills) | Teach Claude Code how to create, test, and improve project skills |
+| `blog-post-seo-writing` | Project-specific | Define the editorial standard for BlogAgent article outputs |
+| `blog-output-evaluator` | Project-specific | 9-dimension rubric for grading BlogAgent article quality |
+
+Skill files are **development scaffolding**: they do not automatically change runtime pipeline
+behavior. Claude Code reads them when developing or reviewing BlogAgent to apply consistent
+standards. Runtime pipeline behavior is controlled by Python code and env vars only.
 
 ---
 
@@ -268,5 +304,6 @@ full pipeline.
 - Async / streaming
 - Cost tracking
 - Streamlit on Vercel (Vercel scaffold is FastAPI only)
+- Production auth (the worker secret is a lightweight demo gate only)
 
 See [limitations.md](./limitations.md) for details.
