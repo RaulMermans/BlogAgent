@@ -371,18 +371,34 @@ API keys as GitHub secrets and overriding the mock-mode env vars in the workflow
 
 ## Browser Interface
 
-BlogAgent ships a minimal browser UI at `/app`.
+BlogAgent ships a minimal browser UI. The main app URL is `/` — open it directly:
 
 ```
-/app
+https://blog-agent-liart.vercel.app/
 ```
 
-Open it in any browser. No framework, no React, no Next.js — just a single FastAPI-rendered HTML page.
+`/app` is an alias for the same page. `/info` returns API metadata as JSON.
 
-The interface lets you:
-- Enter an optional worker secret
-- Enter a topic
-- Click **Generate Blog Post**
+No framework, no React, no Next.js — just a single FastAPI-rendered HTML page.
+
+### Worker secret login
+
+The interface uses the worker secret as a lightweight login gate:
+
+1. On first visit, you see a **Worker Secret** input and a **Save Secret** button.
+2. Enter your secret (or leave blank if `BLOGAGENT_WORKER_SECRET` is not configured) and click **Save Secret**.
+3. The secret is saved in `localStorage` under the key `blogagent_worker_secret`. It is never displayed again — the UI shows **Secret saved locally** instead.
+4. The topic textarea and **Generate Blog Post** button appear after the secret is saved.
+5. Each generate request sends the saved secret in the `X-BlogAgent-Secret` header.
+6. If the server returns `401`, the UI shows **Invalid or missing worker secret** and returns to the login state (localStorage is cleared).
+7. To change or remove the secret, click **Logout / Clear Secret**.
+
+**This is not production authentication.** There are no user accounts, sessions, OAuth, or rate limiting. `localStorage` is convenient but not high-security — do not store sensitive credentials here.
+
+### What the interface lets you do
+
+- Enter and save a worker secret (localStorage, browser-local only)
+- Enter a topic and generate a blog post
 - See the title, slug, meta description, SEO keywords, article markdown, and claim/source stats
 - Copy the article markdown to clipboard
 - Download the article as `.md`
@@ -416,7 +432,7 @@ BLOGAGENT_WORKER_SECRET=your-secret
 
 If missing or wrong, the endpoint returns `401 {"detail": "Invalid or missing worker secret"}`.
 
-**Always public regardless of secret:** `GET /`, `GET /health`, `GET /app`.
+**Always public regardless of secret:** `GET /`, `GET /app`, `GET /info`, `GET /health`.
 
 This is lightweight demo protection, not production auth. It has no sessions, no accounts,
 no OAuth, and no rate limiting.
@@ -427,8 +443,8 @@ no OAuth, and no rate limiting.
 
 ### Via the browser UI
 
-1. Open `/app` in a browser
-2. Enter your worker secret (if configured)
+1. Open `/` (or `/app`) in a browser
+2. Enter your worker secret and click **Save Secret** (leave blank if not configured)
 3. Enter a topic
 4. Click **Generate Blog Post**
 5. Use **Copy article markdown**, **Download .md**, or **Download full JSON**
@@ -513,16 +529,18 @@ without any API keys.
 **Browser tests (open these URLs directly):**
 
 ```
-/health
 /
 /app
+/info
+/health
 /run
 /run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals
 ```
 
+- `/` — browser UI for generating blog posts (HTML, no framework) — **main app URL**
+- `/app` — alias for `/`
+- `/info` — returns service info and available endpoints as JSON
 - `/health` — returns `{"status":"ok",...}`
-- `/` — returns service info and available endpoints
-- `/app` — browser UI for generating blog posts (HTML, no framework)
 - `/run` — returns usage instructions with example GET and POST
 - `/run?topic=...` — runs the full BlogAgent pipeline and returns the compact response
 

@@ -118,13 +118,26 @@ additional judgment, but is still bounded by the provided citations and sources.
   scaffold exposes a FastAPI API only. Deploying Streamlit to Vercel requires additional
   configuration not yet implemented.
 - **Production auth**: The `BLOGAGENT_WORKER_SECRET` mechanism is a lightweight demo gate —
-  no sessions, accounts, OAuth, or rate limiting. Not suitable for production without
-  additional infrastructure.
+  no sessions, accounts, OAuth, or rate limiting. The browser UI saves the secret in
+  `localStorage`, which is convenient but not high-security. Not suitable for production
+  without additional infrastructure.
 
 ## Browser UI
 
-`GET /app` is a single-page HTML interface rendered by FastAPI. It has no framework
-dependency and no server-side state. Limitations:
+`GET /` is the main browser UI entry point. `GET /app` is an alias. Both return the same
+single-page HTML interface rendered by FastAPI. `GET /info` returns API metadata as JSON.
+
+The interface uses the worker secret as a lightweight login:
+- The secret is saved in `localStorage` under `blogagent_worker_secret`. It is never
+  transmitted to the server except as the `X-BlogAgent-Secret` request header.
+- `localStorage` is convenient but not high-security: any script running on the same
+  origin can read it. Do not store highly sensitive credentials here.
+- There are no user accounts, sessions, OAuth, tokens, or rate limiting. This is a
+  demo gate, not production authentication.
+- Clearing site data / localStorage in the browser removes the saved secret. Visiting
+  the page again shows the login form.
+
+Other browser UI limitations:
 
 - Source URLs are not shown in the UI (the compact `/run` response does not include them).
   Use the CLI with `--json` or the **Download full JSON** button for source details.

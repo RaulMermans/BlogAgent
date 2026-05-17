@@ -16,7 +16,7 @@ from api.index import app  # noqa: E402
 client = TestClient(app, raise_server_exceptions=True)
 
 # ---------------------------------------------------------------------------
-# GET /
+# GET / — browser UI (main entry point)
 # ---------------------------------------------------------------------------
 
 
@@ -25,8 +25,29 @@ def test_root_returns_200():
     assert response.status_code == 200
 
 
-def test_root_returns_service_info():
+def test_root_returns_html():
     response = client.get("/")
+    assert "text/html" in response.headers.get("content-type", "")
+
+
+def test_root_and_app_return_same_content():
+    root_resp = client.get("/")
+    app_resp = client.get("/app")
+    assert root_resp.text == app_resp.text
+
+
+# ---------------------------------------------------------------------------
+# GET /info — service info JSON
+# ---------------------------------------------------------------------------
+
+
+def test_info_returns_200():
+    response = client.get("/info")
+    assert response.status_code == 200
+
+
+def test_info_returns_service_info():
+    response = client.get("/info")
     body = response.json()
     assert body["service"] == "BlogAgent"
     assert body["status"] == "ok"
@@ -36,6 +57,14 @@ def test_root_returns_service_info():
     assert "health" in endpoints
     assert "run_post" in endpoints
     assert "run_get" in endpoints
+    assert "info" in endpoints
+    assert "app" in endpoints
+
+
+def test_info_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/info")
+    assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +314,7 @@ def test_api_entrypoint_exists():
 
 
 # ---------------------------------------------------------------------------
-# GET /app — browser UI
+# GET /app — browser UI (alias for /)
 # ---------------------------------------------------------------------------
 
 
@@ -314,6 +343,47 @@ def test_app_contains_topic_input():
 def test_app_contains_generate_button():
     response = client.get("/app")
     assert "Generate" in response.text
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — localStorage login behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_ui_html_contains_localstorage():
+    response = client.get("/")
+    assert "localStorage" in response.text
+
+
+def test_ui_html_contains_save_secret_button():
+    response = client.get("/")
+    assert "Save Secret" in response.text
+
+
+def test_ui_html_contains_logout_button():
+    response = client.get("/")
+    text = response.text
+    assert "Logout" in text or "Clear Secret" in text
+
+
+def test_ui_html_sends_x_blogagent_secret_header():
+    response = client.get("/")
+    assert "X-BlogAgent-Secret" in response.text
+
+
+def test_ui_html_uses_localstorage_key_for_secret():
+    response = client.get("/")
+    assert "blogagent_worker_secret" in response.text
+
+
+def test_ui_html_shows_login_state_initially():
+    response = client.get("/")
+    assert "login-section" in response.text
+
+
+def test_ui_html_has_secret_banner():
+    response = client.get("/")
+    assert "secret-banner" in response.text
 
 
 # ---------------------------------------------------------------------------

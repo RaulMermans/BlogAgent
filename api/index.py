@@ -4,9 +4,10 @@ Exposes a minimal, mock-safe API for serverless deployment.
 All routes default to mock mode — no API keys required.
 
 Routes:
-    GET  /         → service info
+    GET  /         → browser UI (HTML) — main entry point
+    GET  /app      → browser UI (HTML) — alias for /
+    GET  /info     → service info JSON
     GET  /health   → service status
-    GET  /app      → browser UI (HTML)
     GET  /run      → browser-friendly: no topic → usage hint; topic param → run pipeline
     POST /run      → run the BlogAgent pipeline on a topic (JSON body)
 
@@ -14,7 +15,7 @@ Worker secret (optional):
     Set BLOGAGENT_WORKER_SECRET to require a secret on /run endpoints.
     Pass via header X-BlogAgent-Secret, JSON body field worker_secret,
     or query param worker_secret (GET /run only).
-    /health, /, and /app remain public regardless.
+    /health, /, /app, and /info remain public regardless.
 
 Safety:
 - Publishing requests are blocked by the pipeline guardrail.
@@ -86,15 +87,26 @@ def _check_worker_secret(request: Request, body_secret: str = "", query_secret: 
 # ---------------------------------------------------------------------------
 
 
-@app.get("/")
-def root() -> dict[str, Any]:
+@app.get("/", response_class=HTMLResponse)
+def root() -> HTMLResponse:
+    return HTMLResponse(content=_build_app_html())
+
+
+@app.get("/app", response_class=HTMLResponse)
+def app_ui() -> HTMLResponse:
+    return HTMLResponse(content=_build_app_html())
+
+
+@app.get("/info")
+def info() -> dict[str, Any]:
     return {
         "service": "BlogAgent",
         "status": "ok",
         "description": "Source-grounded editorial agent API",
         "endpoints": {
             "health": "GET /health",
-            "app": "GET /app",
+            "app": "GET / or GET /app",
+            "info": "GET /info",
             "run_post": "POST /run",
             "run_get": "GET /run?topic=...",
         },
@@ -104,12 +116,6 @@ def root() -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "BlogAgent", "mode": "mock-safe"}
-
-
-@app.get("/app", response_class=HTMLResponse)
-def app_ui() -> HTMLResponse:
-    html = _build_app_html()
-    return HTMLResponse(content=html)
 
 
 @app.get("/run")
@@ -254,6 +260,35 @@ def _build_app_html() -> str:
     button:hover { background: #1d4ed8; }
     button:disabled { background: #93c5fd; cursor: not-allowed; }
 
+    .hint {
+      font-size: 0.82rem;
+      color: #888;
+      margin-bottom: 1rem;
+      font-style: italic;
+    }
+    .secret-saved-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .secret-saved-label {
+      font-size: 0.9rem;
+      color: #166534;
+      font-weight: 600;
+    }
+    .btn-logout {
+      padding: 0.4rem 0.9rem;
+      background: #f1f5f9;
+      color: #1e293b;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-logout:hover { background: #e2e8f0; }
+
     #status { margin: 1rem 0; font-size: 0.95rem; color: #555; min-height: 1.4em; }
     #error-box {
       display: none;
@@ -350,13 +385,26 @@ def _build_app_html() -> str:
   <h1>BlogAgent</h1>
   <p class="subtitle">Source-grounded blog post generator</p>
 
-  <div class="form-card">
-    <label for="secret">Worker Secret <span style="font-weight:400;color:#888">(leave blank if not configured)</span></label>
-    <input type="password" id="secret" placeholder="Optional: enter BLOGAGENT_WORKER_SECRET" autocomplete="current-password" />
+  <!-- Login section: shown when no secret is saved in localStorage -->
+  <div id="login-section" class="form-card">
+    <label for="secret-input">Worker Secret</label>
+    <input type="password" id="secret-input" placeholder="Enter worker secret (or leave blank if not configured)" autocomplete="current-password" />
+    <p class="hint">This is a lightweight demo gate, not a production login. The secret is saved only in your browser's localStorage.</p>
+    <button onclick="saveSecret()">Save Secret</button>
+  </div>
 
+  <!-- Secret banner: shown after secret is saved -->
+  <div id="secret-banner" class="form-card" style="display:none">
+    <div class="secret-saved-row">
+      <span class="secret-saved-label">Secret saved locally.</span>
+      <button class="btn-logout" onclick="clearSecret()">Logout / Clear Secret</button>
+    </div>
+  </div>
+
+  <!-- Topic section: shown after secret is saved -->
+  <div id="topic-section" class="form-card" style="display:none">
     <label for="topic">Topic</label>
     <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
-
     <button id="gen-btn" onclick="generate()">Generate Blog Post</button>
   </div>
 
@@ -417,11 +465,49 @@ def _build_app_html() -> str:
 </div>
 
 <script>
+  const SECRET_KEY = 'blogagent_worker_secret';
+  const SECRET_SAVED_KEY = 'blogagent_secret_saved';
+
   let _lastResponse = null;
   let _lastTopic = "";
 
+  function init() {
+    if (localStorage.getItem(SECRET_SAVED_KEY) === 'true') {
+      showReady();
+    } else {
+      showLogin();
+    }
+  }
+
+  function showLogin() {
+    document.getElementById('login-section').style.display = '';
+    document.getElementById('secret-banner').style.display = 'none';
+    document.getElementById('topic-section').style.display = 'none';
+    clearOutput();
+  }
+
+  function showReady() {
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('secret-banner').style.display = '';
+    document.getElementById('topic-section').style.display = '';
+  }
+
+  function saveSecret() {
+    const val = document.getElementById('secret-input').value;
+    localStorage.setItem(SECRET_KEY, val);
+    localStorage.setItem(SECRET_SAVED_KEY, 'true');
+    showReady();
+  }
+
+  function clearSecret() {
+    localStorage.removeItem(SECRET_KEY);
+    localStorage.removeItem(SECRET_SAVED_KEY);
+    document.getElementById('secret-input').value = '';
+    showLogin();
+  }
+
   async function generate() {
-    const secret = document.getElementById('secret').value.trim();
+    const secret = localStorage.getItem(SECRET_KEY) || '';
     const topic = document.getElementById('topic').value.trim();
     if (!topic) { showError('Please enter a topic.'); return; }
 
@@ -434,7 +520,7 @@ def _build_app_html() -> str:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(secret ? {'X-BlogAgent-Secret': secret} : {})
+          'X-BlogAgent-Secret': secret
         },
         body: JSON.stringify({topic})
       });
@@ -442,7 +528,8 @@ def _build_app_html() -> str:
       const data = await resp.json();
 
       if (resp.status === 401) {
-        showError('Worker secret is missing or incorrect.');
+        showError('Invalid or missing worker secret.');
+        clearSecret();
         return;
       }
       if (!resp.ok) {
@@ -567,6 +654,8 @@ def _build_app_html() -> str:
     document.getElementById('output').style.display = 'none';
     document.getElementById('warnings-details').style.display = 'none';
   }
+
+  init();
 </script>
 </body>
 </html>"""
