@@ -117,10 +117,12 @@ additional judgment, but is still bounded by the provided citations and sources.
 - **Streamlit on Vercel**: The Streamlit UI is not currently deployed to Vercel. The Vercel
   scaffold exposes a FastAPI API only. Deploying Streamlit to Vercel requires additional
   configuration not yet implemented.
-- **Production auth**: The `BLOGAGENT_WORKER_SECRET` mechanism is a lightweight demo gate —
-  no sessions, accounts, OAuth, or rate limiting. The browser UI saves the secret in
-  `localStorage`, which is convenient but not high-security. Not suitable for production
-  without additional infrastructure.
+- **Production auth**: The `BLOGAGENT_WORKER_SECRET` mechanism is a lightweight demo gate,
+  not real authentication — there is no audit identity, no user accounts, no server-side
+  sessions, no cookies, no roles, and no OAuth. The browser UI saves the verified secret
+  in `sessionStorage`, which reduces persistence (cleared when the tab closes) compared
+  to `localStorage` but is still readable by any script on the same origin. Not suitable
+  for production without additional infrastructure.
 
 ## Browser UI
 
@@ -128,14 +130,17 @@ additional judgment, but is still bounded by the provided citations and sources.
 single-page HTML interface rendered by FastAPI. `GET /info` returns API metadata as JSON.
 
 The interface uses the worker secret as a lightweight login:
-- The secret is saved in `localStorage` under `blogagent_worker_secret`. It is never
-  transmitted to the server except as the `X-BlogAgent-Secret` request header.
-- `localStorage` is convenient but not high-security: any script running on the same
-  origin can read it. Do not store highly sensitive credentials here.
-- There are no user accounts, sessions, OAuth, tokens, or rate limiting. This is a
-  demo gate, not production authentication.
-- Clearing site data / localStorage in the browser removes the saved secret. Visiting
-  the page again shows the login form.
+- The page boots into a private access screen when `BLOGAGENT_WORKER_SECRET` is set —
+  the topic input and generate tool are hidden until `POST /auth/verify` returns `200`.
+- The verified secret is saved in `sessionStorage` under `blogagent_worker_secret`. It is
+  sent to the server only as the request body of `POST /auth/verify` and as the
+  `X-BlogAgent-Secret` header on `POST /run`.
+- `sessionStorage` reduces persistence (cleared when the tab is closed) but is still
+  readable by any script on the same origin. This is not real authentication.
+- There are no user accounts, server-side sessions, cookies, OAuth, tokens, audit
+  identity, roles, or rate limiting.
+- Clearing the tab / session storage removes the saved secret. Visiting the page again
+  shows the login form.
 
 Other browser UI limitations:
 

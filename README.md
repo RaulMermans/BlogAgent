@@ -383,21 +383,22 @@ No framework, no React, no Next.js — just a single FastAPI-rendered HTML page.
 
 ### Worker secret login
 
-The interface uses the worker secret as a lightweight login gate:
+The interface boots into a **private access screen** when `BLOGAGENT_WORKER_SECRET` is set on the deployment. The topic input and generate tool stay hidden until the user enters the correct secret.
 
-1. On first visit, you see a **Worker Secret** input and a **Save Secret** button.
-2. Enter your secret (or leave blank if `BLOGAGENT_WORKER_SECRET` is not configured) and click **Save Secret**.
-3. The secret is saved in `localStorage` under the key `blogagent_worker_secret`. It is never displayed again — the UI shows **Secret saved locally** instead.
-4. The topic textarea and **Generate Blog Post** button appear after the secret is saved.
-5. Each generate request sends the saved secret in the `X-BlogAgent-Secret` header.
-6. If the server returns `401`, the UI shows **Invalid or missing worker secret** and returns to the login state (localStorage is cleared).
-7. To change or remove the secret, click **Logout / Clear Secret**.
+1. On first visit, the page calls `GET /auth-status`. If `worker_secret_required` is `false` (no secret configured), the tool is shown immediately.
+2. If a secret is required, you see only the **Worker Secret** input and a **Login** button.
+3. Clicking **Login** sends the entered value to `POST /auth/verify`. The server compares it against `BLOGAGENT_WORKER_SECRET` using a constant-time comparison.
+4. On `200`, the secret is stored in `sessionStorage` under the key `blogagent_worker_secret` and the UI flips to the authenticated state showing **Logged in**, the topic textarea, and **Generate Blog Post**.
+5. On `401`, the UI shows **Invalid or missing worker secret** and stays on the login screen.
+6. Each generate request sends the stored secret in the `X-BlogAgent-Secret` header.
+7. If `POST /run` returns `401`, the UI clears `sessionStorage`, returns to the login screen, and shows **Session expired or invalid worker secret. Log in again.**
+8. To log out, click **Logout** — this clears `sessionStorage` (and any leftover `localStorage` keys from earlier versions).
 
-**This is not production authentication.** There are no user accounts, sessions, OAuth, or rate limiting. `localStorage` is convenient but not high-security — do not store sensitive credentials here.
+**This is not production authentication.** Wrong secrets do not unlock the tool. There are no user accounts, sessions, OAuth, cookies, or rate limiting. `sessionStorage` reduces persistence compared to `localStorage` (it's cleared when the tab closes) but is still readable by any script on the same origin — do not use this gate for sensitive credentials.
 
 ### What the interface lets you do
 
-- Enter and save a worker secret (localStorage, browser-local only)
+- Log in with a worker secret (verified server-side; stored in `sessionStorage`)
 - Enter a topic and generate a blog post
 - See the title, slug, meta description, SEO keywords, article markdown, and claim/source stats
 - Copy the article markdown to clipboard
@@ -429,7 +430,8 @@ Provider events and raw JSON are collapsed in `<details>` sections and do not do
 ## Worker Secret
 
 By default `/run` is unprotected. Set `BLOGAGENT_WORKER_SECRET` to add a lightweight
-demo gate that prevents casual use of the generation endpoint:
+demo gate that prevents casual use of the generation endpoint and locks the browser
+UI behind a private access screen:
 
 ```bash
 BLOGAGENT_WORKER_SECRET=your-secret
@@ -439,21 +441,28 @@ BLOGAGENT_WORKER_SECRET=your-secret
 
 | Env var state | Effect |
 |---|---|
-| Unset or empty | `/run` works without a secret |
-| Set to a value | POST `/run` and GET `/run?topic=...` require a matching secret |
+| Unset or empty | `/run` works without a secret; the UI shows the tool immediately |
+| Set to a value | The browser UI boots into a login screen; `POST /run` and `GET /run?topic=...` require a matching secret |
 
-**How to pass the secret:**
+**How the browser UI uses the secret:**
+
+- On load, the UI calls `GET /auth-status` to discover whether a secret is required.
+- The login screen sends the typed secret to `POST /auth/verify`. On success it is stored in `sessionStorage` under `blogagent_worker_secret`. Wrong secrets do not unlock the tool.
+- Every generate request sends the stored secret in the `X-BlogAgent-Secret` header.
+- A `401` from `/run` clears `sessionStorage` and returns the UI to the login screen.
+
+**How to pass the secret to the API directly:**
 
 - Header: `X-BlogAgent-Secret: your-secret` (preferred — used by the browser UI)
 - JSON body field: `worker_secret` (POST only)
 - Query param: `worker_secret=your-secret` (GET only)
 
-If missing or wrong, the endpoint returns `401 {"detail": "Invalid or missing worker secret"}`.
+Comparison is constant-time (`secrets.compare_digest`). If missing or wrong, the endpoint returns `401 {"detail": "Invalid or missing worker secret"}`.
 
-**Always public regardless of secret:** `GET /`, `GET /app`, `GET /info`, `GET /health`.
+**Always public regardless of secret:** `GET /`, `GET /app`, `GET /info`, `GET /health`, `GET /auth-status`.
 
 This is lightweight demo protection, not production auth. It has no sessions, no accounts,
-no OAuth, and no rate limiting.
+no cookies, no OAuth, and no rate limiting. `sessionStorage` is browser-readable.
 
 ---
 
@@ -462,7 +471,7 @@ no OAuth, and no rate limiting.
 ### Via the browser UI
 
 1. Open `/` (or `/app`) in a browser
-2. Enter your worker secret and click **Save Secret** (leave blank if not configured)
+2. If a worker secret is configured, enter it and click **Login** (otherwise you are taken straight to the tool)
 3. Enter a topic
 4. Click **Generate Blog Post**
 5. Use **Copy article markdown**, **Download .md**, or **Download full JSON**
