@@ -346,24 +346,33 @@ def test_app_contains_generate_button():
 
 
 # ---------------------------------------------------------------------------
-# UI HTML — localStorage login behaviour
+# UI HTML — sessionStorage private-access-screen behaviour
 # ---------------------------------------------------------------------------
 
 
-def test_ui_html_contains_localstorage():
+def test_ui_html_uses_sessionstorage():
     response = client.get("/")
-    assert "localStorage" in response.text
+    assert "sessionStorage" in response.text
 
 
-def test_ui_html_contains_save_secret_button():
+def test_ui_html_contains_login_button():
     response = client.get("/")
-    assert "Save Secret" in response.text
+    assert "Login" in response.text
 
 
 def test_ui_html_contains_logout_button():
     response = client.get("/")
-    text = response.text
-    assert "Logout" in text or "Clear Secret" in text
+    assert "Logout" in response.text
+
+
+def test_ui_html_does_not_contain_secret_saved_locally():
+    response = client.get("/")
+    assert "Secret saved locally" not in response.text
+
+
+def test_ui_html_does_not_contain_save_secret_button():
+    response = client.get("/")
+    assert "Save Secret" not in response.text
 
 
 def test_ui_html_sends_x_blogagent_secret_header():
@@ -371,19 +380,127 @@ def test_ui_html_sends_x_blogagent_secret_header():
     assert "X-BlogAgent-Secret" in response.text
 
 
-def test_ui_html_uses_localstorage_key_for_secret():
+def test_ui_html_uses_sessionstorage_key_for_secret():
     response = client.get("/")
-    assert "blogagent_worker_secret" in response.text
+    text = response.text
+    assert "blogagent_worker_secret" in text
+    # The active storage path must be sessionStorage; ensure key is used with it.
+    assert (
+        "sessionStorage.getItem(SECRET_KEY)" in text
+        or "sessionStorage.getItem('blogagent_worker_secret')" in text
+    )
 
 
-def test_ui_html_shows_login_state_initially():
+def test_ui_html_shows_login_section_initially():
     response = client.get("/")
     assert "login-section" in response.text
 
 
-def test_ui_html_has_secret_banner():
+def test_ui_html_has_authenticated_app_container():
     response = client.get("/")
-    assert "secret-banner" in response.text
+    assert "authenticated-app" in response.text
+
+
+def test_ui_html_calls_auth_status_endpoint():
+    response = client.get("/")
+    assert "/auth-status" in response.text
+
+
+def test_ui_html_calls_auth_verify_endpoint():
+    response = client.get("/")
+    assert "/auth/verify" in response.text
+
+
+def test_ui_html_topic_textarea_hidden_until_authenticated():
+    """The topic textarea must live inside the authenticated-app container,
+    not at the page root, so it is hidden until auth verifies."""
+    text = client.get("/").text
+    # Authenticated container appears before the topic textarea in the DOM.
+    auth_idx = text.find('id="authenticated-app"')
+    topic_idx = text.find('id="topic"')
+    assert auth_idx != -1 and topic_idx != -1
+    assert auth_idx < topic_idx
+    # Authenticated container starts hidden via inline CSS rule.
+    assert "#authenticated-app { display: none; }" in text
+
+
+def test_ui_html_has_private_access_copy():
+    response = client.get("/")
+    assert "Private demo access" in response.text
+
+
+# ---------------------------------------------------------------------------
+# GET /auth-status (always public)
+# ---------------------------------------------------------------------------
+
+
+def test_auth_status_returns_false_when_secret_unset(monkeypatch):
+    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+    assert response.json() == {"worker_secret_required": False}
+
+
+def test_auth_status_returns_true_when_secret_set(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+    assert response.json() == {"worker_secret_required": True}
+
+
+def test_auth_status_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/verify
+# ---------------------------------------------------------------------------
+
+
+def test_auth_verify_returns_200_when_no_secret_configured(monkeypatch):
+    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
+    response = client.post("/auth/verify", json={"worker_secret": ""})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["worker_secret_required"] is False
+
+
+def test_auth_verify_returns_200_when_no_secret_configured_ignores_input(monkeypatch):
+    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
+    response = client.post("/auth/verify", json={"worker_secret": "anything"})
+    assert response.status_code == 200
+
+
+def test_auth_verify_returns_401_when_secret_configured_and_missing(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post("/auth/verify", json={})
+    assert response.status_code == 401
+    assert "worker secret" in response.json()["detail"].lower()
+
+
+def test_auth_verify_returns_401_when_secret_configured_and_wrong(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post("/auth/verify", json={"worker_secret": "wrong"})
+    assert response.status_code == 401
+    assert "worker secret" in response.json()["detail"].lower()
+
+
+def test_auth_verify_returns_200_when_secret_configured_and_correct(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post("/auth/verify", json={"worker_secret": "supersecret"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["worker_secret_required"] is True
+
+
+def test_auth_verify_does_not_leak_expected_secret(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret-leak-canary")
+    response = client.post("/auth/verify", json={"worker_secret": "wrong"})
+    assert "supersecret-leak-canary" not in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -589,90 +706,9 @@ def test_generate_button_has_type_button():
     assert 'type="button"' in response.text
 
 
-# ---------------------------------------------------------------------------
-# GET /auth-status
-# ---------------------------------------------------------------------------
-
-
-def test_auth_status_returns_false_when_env_unset(monkeypatch):
-    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
-    response = client.get("/auth-status")
-    assert response.status_code == 200
-    assert response.json()["worker_secret_required"] is False
-
-
-def test_auth_status_returns_true_when_secret_set(monkeypatch):
-    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
-    response = client.get("/auth-status")
-    assert response.status_code == 200
-    assert response.json()["worker_secret_required"] is True
-
-
-def test_auth_status_does_not_reveal_secret(monkeypatch):
-    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
-    response = client.get("/auth-status")
-    assert "supersecret" not in response.text
-
-
-def test_auth_status_remains_public_when_secret_configured(monkeypatch):
-    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
-    response = client.get("/auth-status")
-    assert response.status_code == 200
-
-
-# ---------------------------------------------------------------------------
-# UI HTML — localStorage single-source-of-truth fix
-# ---------------------------------------------------------------------------
-
-
-def test_ui_html_init_reads_actual_secret_key():
-    """init() must gate on the real secret value, not just the saved flag."""
-    response = client.get("/")
-    html = response.text
-    assert 'localStorage.getItem(SECRET_KEY)' in html
-
-
-def test_ui_html_does_not_use_saved_flag_as_login_gate():
-    """getItem(SECRET_SAVED_KEY) must not appear — only removeItem is allowed."""
-    response = client.get("/")
-    assert 'getItem(SECRET_SAVED_KEY)' not in response.text
-
-
-def test_ui_html_blocks_generate_when_no_stored_secret():
-    response = client.get("/")
-    assert "Please enter and save your worker secret first" in response.text
-
-
-def test_ui_html_secret_sent_reflects_stored_value():
-    """debug output must show secret_sent based on the stored secret, not a hard-coded bool."""
-    response = client.get("/")
-    assert "secret_sent: secret.length > 0" in response.text
-
-
-def test_ui_html_removes_secret_key_on_logout():
-    response = client.get("/")
-    assert "removeItem(SECRET_KEY)" in response.text
-
-
-def test_ui_html_removes_saved_flag_on_logout():
-    """clearSecret() must also purge the old blogagent_secret_saved flag."""
-    response = client.get("/")
-    assert "removeItem(SECRET_SAVED_KEY)" in response.text
-
-
-def test_ui_html_401_clears_secret_key():
-    """401 handler must clear blogagent_worker_secret from localStorage."""
-    response = client.get("/")
-    html = response.text
-    # Both removeItem(SECRET_KEY) and removeItem(SECRET_SAVED_KEY) must appear
-    assert html.count("removeItem(SECRET_KEY)") >= 2
-
-
-def test_ui_html_save_secret_rejects_empty_input():
-    response = client.get("/")
-    assert "Please enter a worker secret" in response.text
-
-
-def test_ui_html_has_auth_status_element():
-    response = client.get("/")
-    assert 'id="auth-status"' in response.text
+# Note: tests for the old localStorage-based login flow that arrived via
+# the merge from main have been removed. They asserted on UI strings and
+# storage keys that no longer exist after the switch to the sessionStorage
+# private-access-screen design. The replacement coverage lives in the
+# "UI HTML — sessionStorage private-access-screen behaviour", "GET
+# /auth-status", and "POST /auth/verify" sections above.

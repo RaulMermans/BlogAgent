@@ -4,18 +4,20 @@ Exposes a minimal, mock-safe API for serverless deployment.
 All routes default to mock mode — no API keys required.
 
 Routes:
-    GET  /         → browser UI (HTML) — main entry point
-    GET  /app      → browser UI (HTML) — alias for /
-    GET  /info     → service info JSON
-    GET  /health   → service status
-    GET  /run      → browser-friendly: no topic → usage hint; topic param → run pipeline
-    POST /run      → run the BlogAgent pipeline on a topic (JSON body)
+    GET  /              → browser UI (HTML) — main entry point
+    GET  /app           → browser UI (HTML) — alias for /
+    GET  /info          → service info JSON
+    GET  /health        → service status
+    GET  /auth-status   → whether a worker secret is required (public)
+    POST /auth/verify   → verify a submitted worker secret
+    GET  /run           → browser-friendly: no topic → usage hint; topic param → run pipeline
+    POST /run           → run the BlogAgent pipeline on a topic (JSON body)
 
 Worker secret (optional):
     Set BLOGAGENT_WORKER_SECRET to require a secret on /run endpoints.
     Pass via header X-BlogAgent-Secret, JSON body field worker_secret,
     or query param worker_secret (GET /run only).
-    /health, /, /app, and /info remain public regardless.
+    /health, /, /app, /info, and /auth-status remain public regardless.
 
 Safety:
 - Publishing requests are blocked by the pipeline guardrail.
@@ -26,6 +28,7 @@ Safety:
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,6 +44,10 @@ app = FastAPI(title="BlogAgent API", version="0.1.0")
 
 class RunRequest(BaseModel):
     topic: str
+    worker_secret: str = ""
+
+
+class AuthVerifyRequest(BaseModel):
     worker_secret: str = ""
 
 
@@ -65,20 +72,31 @@ class RunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _worker_secret_required() -> str:
+    """Return the configured worker secret, or '' if no secret is required."""
+    return os.environ.get("BLOGAGENT_WORKER_SECRET", "").strip()
+
+
+def _secrets_match(provided: str, expected: str) -> bool:
+    """Constant-time comparison of two secret strings."""
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _check_worker_secret(request: Request, body_secret: str = "", query_secret: str = "") -> None:
     """Raise 401 if BLOGAGENT_WORKER_SECRET is set and the request doesn't match.
 
     Checks (in order): X-BlogAgent-Secret header, body field, query param.
     Does nothing when the env var is unset or empty.
+    Uses constant-time comparison.
     """
-    required = os.environ.get("BLOGAGENT_WORKER_SECRET", "").strip()
+    required = _worker_secret_required()
     if not required:
         return
 
     header_secret = request.headers.get("X-BlogAgent-Secret", "")
     provided = header_secret or body_secret or query_secret
 
-    if provided != required:
+    if not _secrets_match(provided, required):
         raise HTTPException(status_code=401, detail="Invalid or missing worker secret")
 
 
@@ -105,9 +123,10 @@ def info() -> dict[str, Any]:
         "description": "Source-grounded editorial agent API",
         "endpoints": {
             "health": "GET /health",
-            "auth_status": "GET /auth-status",
             "app": "GET / or GET /app",
             "info": "GET /info",
+            "auth_status": "GET /auth-status",
+            "auth_verify": "POST /auth/verify",
             "run_post": "POST /run",
             "run_get": "GET /run?topic=...",
         },
@@ -121,12 +140,17 @@ def health() -> dict[str, str]:
 
 @app.get("/auth-status")
 def auth_status() -> dict[str, bool]:
-    """Public endpoint: indicates whether a worker secret is required.
+    return {"worker_secret_required": bool(_worker_secret_required())}
 
-    Never reveals the secret itself.
-    """
-    required = os.environ.get("BLOGAGENT_WORKER_SECRET", "").strip()
-    return {"worker_secret_required": bool(required)}
+
+@app.post("/auth/verify")
+def auth_verify(body: AuthVerifyRequest) -> dict[str, bool]:
+    required = _worker_secret_required()
+    if not required:
+        return {"ok": True, "worker_secret_required": False}
+    if not _secrets_match(body.worker_secret or "", required):
+        raise HTTPException(status_code=401, detail="Invalid or missing worker secret")
+    return {"ok": True, "worker_secret_required": True}
 
 
 @app.get("/run")
@@ -277,13 +301,13 @@ def _build_app_html() -> str:
       margin-bottom: 1rem;
       font-style: italic;
     }
-    .secret-saved-row {
+    .logged-in-row {
       display: flex;
       align-items: center;
       gap: 1rem;
       flex-wrap: wrap;
     }
-    .secret-saved-label {
+    .logged-in-label {
       font-size: 0.9rem;
       color: #166534;
       font-weight: 600;
@@ -312,6 +336,7 @@ def _build_app_html() -> str:
     }
 
     #output { display: none; }
+    #authenticated-app { display: none; }
 
     .meta-row { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
     .meta-item { flex: 1; min-width: 200px; }
@@ -396,167 +421,243 @@ def _build_app_html() -> str:
   <h1>BlogAgent</h1>
   <p class="subtitle">Source-grounded blog post generator</p>
 
-  <!-- Login section: shown when no secret is saved in localStorage -->
+  <!-- Private access screen: the ONLY thing visible until auth is verified -->
   <div id="login-section" class="form-card">
     <label for="secret-input">Worker Secret</label>
-    <input type="password" id="secret-input" placeholder="Enter worker secret (or leave blank if not configured)" autocomplete="current-password" />
-    <p class="hint">This is a lightweight demo gate, not a production login. The secret is saved only in your browser's localStorage.</p>
-    <button onclick="saveSecret()">Save Secret</button>
+    <input type="password" id="secret-input" placeholder="Enter worker secret" autocomplete="current-password" />
+    <p class="hint">Private demo access. This is a lightweight gate, not production auth.</p>
+    <button type="button" id="loginButton" onclick="login()">Login</button>
+    <div id="login-status" style="margin-top:0.8rem;font-size:0.9rem;color:#555;min-height:1.2em;">Checking access...</div>
+    <div id="login-error" style="margin-top:0.5rem;font-size:0.9rem;color:#b91c1c;min-height:1.2em;"></div>
   </div>
 
-  <!-- Secret banner: shown after secret is saved -->
-  <div id="secret-banner" class="form-card" style="display:none">
-    <div class="secret-saved-row">
-      <span class="secret-saved-label">Secret saved locally.</span>
-      <button class="btn-logout" onclick="clearSecret()">Logout / Clear Secret</button>
-    </div>
-  </div>
-
-  <!-- Topic section: shown after secret is saved -->
-  <div id="topic-section" class="form-card" style="display:none">
-    <label for="topic">Topic</label>
-    <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
-    <button type="button" id="generateButton">Generate Blog Post</button>
-  </div>
-
-  <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.3rem;">API health: checking…</div>
-  <div id="auth-status" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;"></div>
-  <div id="status"></div>
-  <div id="error-box"></div>
-
-  <details style="margin-bottom:0.8rem;">
-    <summary>Debug</summary>
-    <pre id="debugOutput" class="details-body" style="margin-top:0.4rem;"></pre>
-  </details>
-
-  <div id="output">
-    <div class="form-card">
-      <div id="title-display" style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;"></div>
-
-      <div class="meta-row">
-        <div class="meta-item">
-          <div class="meta-label">Slug</div>
-          <div class="meta-value" id="slug-display"></div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Meta Description</div>
-          <div class="meta-value" id="meta-display"></div>
-        </div>
-      </div>
-
-      <div class="meta-item" style="margin-bottom:1rem;">
-        <div class="meta-label">SEO Keywords</div>
-        <div class="keywords" id="keywords-display"></div>
-      </div>
-
-      <div class="stats-row" id="stats-row"></div>
-
-      <div class="action-row">
-        <button class="btn-secondary" onclick="copyMarkdown()">Copy article markdown</button>
-        <button class="btn-secondary" onclick="downloadMd()">Download .md</button>
-        <button class="btn-secondary" onclick="downloadJson()">Download full JSON</button>
+  <!-- Authenticated app: hidden until /auth/verify returns 200 -->
+  <div id="authenticated-app">
+    <!-- Logged-in banner -->
+    <div id="auth-banner" class="form-card">
+      <div class="logged-in-row">
+        <span class="logged-in-label">Logged in</span>
+        <button class="btn-logout" type="button" onclick="logout()">Logout</button>
       </div>
     </div>
 
-    <div class="blog-card" id="article-display"></div>
+    <!-- Topic section -->
+    <div id="topic-section" class="form-card">
+      <label for="topic">Topic</label>
+      <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
+      <button type="button" id="generateButton">Generate Blog Post</button>
+    </div>
 
-    <details id="sources-details">
-      <summary id="sources-summary">Sources</summary>
-      <div class="details-body"><ul class="source-list" id="sources-list"></ul></div>
+    <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;">API health: checking…</div>
+    <div id="status"></div>
+    <div id="error-box"></div>
+
+    <details style="margin-bottom:0.8rem;">
+      <summary>Debug</summary>
+      <pre id="debugOutput" class="details-body" style="margin-top:0.4rem;"></pre>
     </details>
 
-    <details id="warnings-details" style="display:none">
-      <summary>Warnings</summary>
-      <div class="details-body" id="warnings-body"></div>
-    </details>
+    <div id="output">
+      <div class="form-card">
+        <div id="title-display" style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;"></div>
 
-    <details>
-      <summary>Provider Events</summary>
-      <div class="details-body" id="events-body"></div>
-    </details>
+        <div class="meta-row">
+          <div class="meta-item">
+            <div class="meta-label">Slug</div>
+            <div class="meta-value" id="slug-display"></div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Meta Description</div>
+            <div class="meta-value" id="meta-display"></div>
+          </div>
+        </div>
 
-    <details>
-      <summary>Raw JSON</summary>
-      <div class="details-body" id="raw-json"></div>
-    </details>
+        <div class="meta-item" style="margin-bottom:1rem;">
+          <div class="meta-label">SEO Keywords</div>
+          <div class="keywords" id="keywords-display"></div>
+        </div>
+
+        <div class="stats-row" id="stats-row"></div>
+
+        <div class="action-row">
+          <button class="btn-secondary" type="button" onclick="copyMarkdown()">Copy article markdown</button>
+          <button class="btn-secondary" type="button" onclick="downloadMd()">Download .md</button>
+          <button class="btn-secondary" type="button" onclick="downloadJson()">Download full JSON</button>
+        </div>
+      </div>
+
+      <div class="blog-card" id="article-display"></div>
+
+      <details id="sources-details">
+        <summary id="sources-summary">Sources</summary>
+        <div class="details-body"><ul class="source-list" id="sources-list"></ul></div>
+      </details>
+
+      <details id="warnings-details" style="display:none">
+        <summary>Warnings</summary>
+        <div class="details-body" id="warnings-body"></div>
+      </details>
+
+      <details>
+        <summary>Provider Events</summary>
+        <div class="details-body" id="events-body"></div>
+      </details>
+
+      <details>
+        <summary>Raw JSON</summary>
+        <div class="details-body" id="raw-json"></div>
+      </details>
+    </div>
   </div>
 </div>
 
 <script>
   const SECRET_KEY = 'blogagent_worker_secret';
-  // SECRET_SAVED_KEY kept only for migration cleanup — never used as a login gate
-  const SECRET_SAVED_KEY = 'blogagent_secret_saved';
+  const LEGACY_SECRET_SAVED_KEY = 'blogagent_secret_saved';
 
   let _lastResponse = null;
   let _lastTopic = "";
-  // Set to true by checkAuthStatus() when backend requires no secret
-  let _noSecretRequired = false;
+  let _authenticated = false;
+  let _workerSecretRequired = true;
 
-  function init() {
+  async function init() {
     document.getElementById('generateButton').addEventListener('click', generate);
-    const secret = (localStorage.getItem(SECRET_KEY) || '').trim();
-    if (secret) {
-      showReady();
-      setStatus('Ready');
-    } else {
-      showLogin();
-    }
-    checkHealth();
-    checkAuthStatus();
+    // Clear any stale legacy localStorage entries from earlier versions.
+    try {
+      localStorage.removeItem(SECRET_KEY);
+      localStorage.removeItem(LEGACY_SECRET_SAVED_KEY);
+    } catch (_) {}
+    await bootstrapAuth();
   }
 
-  function showLogin() {
-    document.getElementById('login-section').style.display = '';
-    document.getElementById('secret-banner').style.display = 'none';
-    document.getElementById('topic-section').style.display = 'none';
-    clearOutput();
-  }
-
-  function showReady() {
-    document.getElementById('login-section').style.display = 'none';
-    document.getElementById('secret-banner').style.display = '';
-    document.getElementById('topic-section').style.display = '';
-  }
-
-  function saveSecret() {
-    const val = (document.getElementById('secret-input').value || '').trim();
-    if (!val) {
-      showError('Please enter a worker secret');
+  async function bootstrapAuth() {
+    setLoginStatus('Checking access...');
+    clearLoginError();
+    let statusResp;
+    try {
+      const r = await fetch('/auth-status');
+      statusResp = await r.json();
+    } catch (_) {
+      setLoginStatus('Could not reach server.');
+      showLockedScreen();
       return;
     }
-    localStorage.setItem(SECRET_KEY, val);
-    localStorage.removeItem(SECRET_SAVED_KEY);
-    document.getElementById('secret-input').value = '';
-    showReady();
-    setStatus('Ready');
+    _workerSecretRequired = !!(statusResp && statusResp.worker_secret_required);
+
+    if (!_workerSecretRequired) {
+      // Local/dev mode — no secret needed.
+      _authenticated = true;
+      showAuthenticatedApp();
+      checkHealth();
+      setStatus('Ready');
+      return;
+    }
+
+    const stored = sessionStorage.getItem(SECRET_KEY);
+    if (!stored) {
+      showLockedScreen();
+      setLoginStatus('Login required');
+      return;
+    }
+
+    // Always verify a stored secret on load; never trust storage alone.
+    const ok = await verifySecret(stored);
+    if (ok) {
+      _authenticated = true;
+      showAuthenticatedApp();
+      checkHealth();
+      setStatus('Logged in');
+    } else {
+      sessionStorage.removeItem(SECRET_KEY);
+      showLockedScreen();
+      setLoginStatus('Login required');
+    }
   }
 
-  function clearSecret() {
-    localStorage.removeItem(SECRET_KEY);
-    localStorage.removeItem(SECRET_SAVED_KEY);
-    document.getElementById('secret-input').value = '';
-    showLogin();
-    document.getElementById('status').textContent = '';
-  }
-
-  async function checkAuthStatus() {
-    const el = document.getElementById('auth-status');
+  async function verifySecret(secret) {
     try {
-      const resp = await fetch('/auth-status');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      _noSecretRequired = !data.worker_secret_required;
-      if (el) {
-        el.textContent = data.worker_secret_required
-          ? 'Worker secret required'
-          : 'No worker secret configured';
-        el.style.color = data.worker_secret_required ? '#854d0e' : '#166534';
+      const resp = await fetch('/auth/verify', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({worker_secret: secret})
+      });
+      return resp.status === 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function showLockedScreen() {
+    _authenticated = false;
+    document.getElementById('login-section').style.display = '';
+    document.getElementById('authenticated-app').style.display = 'none';
+  }
+
+  function showAuthenticatedApp() {
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('authenticated-app').style.display = '';
+    clearLoginError();
+  }
+
+  async function login() {
+    clearLoginError();
+    const input = document.getElementById('secret-input');
+    const val = (input.value || '').trim();
+    if (!val) {
+      setLoginError('Enter your worker secret.');
+      setLoginStatus('Login required');
+      return;
+    }
+    const btn = document.getElementById('loginButton');
+    btn.disabled = true;
+    setLoginStatus('Verifying...');
+    try {
+      const resp = await fetch('/auth/verify', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({worker_secret: val})
+      });
+      if (resp.status === 200) {
+        sessionStorage.setItem(SECRET_KEY, val);
+        _authenticated = true;
+        input.value = '';
+        showAuthenticatedApp();
+        checkHealth();
+        setStatus('Logged in');
+        setLoginStatus('');
+      } else if (resp.status === 401) {
+        setLoginError('Invalid or missing worker secret.');
+        setLoginStatus('Login failed');
+      } else {
+        setLoginError('Login failed: ' + resp.status);
+        setLoginStatus('Login failed');
       }
-      if (_noSecretRequired) {
-        showReady();
-        setStatus('Ready');
-      }
+    } catch (err) {
+      setLoginError('Network error: ' + err.message);
+      setLoginStatus('Login failed');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem(SECRET_KEY);
+    // Also clear any old localStorage keys from previous versions.
+    try {
+      localStorage.removeItem(SECRET_KEY);
+      localStorage.removeItem(LEGACY_SECRET_SAVED_KEY);
     } catch (_) {}
+    _authenticated = false;
+    _lastResponse = null;
+    _lastTopic = "";
+    document.getElementById('secret-input').value = '';
+    const topicEl = document.getElementById('topic');
+    if (topicEl) topicEl.value = '';
+    setStatus('');
+    clearOutput();
+    document.getElementById('debugOutput').textContent = '';
+    showLockedScreen();
+    setLoginStatus('Login required');
   }
 
   async function checkHealth() {
@@ -577,14 +678,13 @@ def _build_app_html() -> str:
   }
 
   async function generate() {
-    const secret = (localStorage.getItem(SECRET_KEY) || '').trim();
-    const topic = document.getElementById('topic').value.trim();
-
-    if (!_noSecretRequired && !secret) {
-      showError('Please enter and save your worker secret first');
-      showLogin();
+    if (_workerSecretRequired && !_authenticated) {
+      showLockedScreen();
+      setLoginStatus('Login required');
       return;
     }
+    const secret = sessionStorage.getItem(SECRET_KEY) || '';
+    const topic = document.getElementById('topic').value.trim();
     if (!topic) { showError('Please enter a topic'); return; }
 
     clearOutput();
@@ -595,6 +695,7 @@ def _build_app_html() -> str:
       url: '/run',
       status: null,
       error: null,
+      auth_verified: _authenticated,
       secret_sent: secret.length > 0
     };
 
@@ -616,10 +717,11 @@ def _build_app_html() -> str:
       if (resp.status === 401) {
         debugInfo.error = 'Invalid or missing worker secret';
         setDebug(debugInfo);
-        showError('Invalid or missing worker secret');
-        localStorage.removeItem(SECRET_KEY);
-        localStorage.removeItem(SECRET_SAVED_KEY);
-        showLogin();
+        sessionStorage.removeItem(SECRET_KEY);
+        _authenticated = false;
+        showLockedScreen();
+        setLoginError('Session expired or invalid worker secret. Log in again.');
+        setLoginStatus('Login required');
         return;
       }
       if (!resp.ok) {
@@ -650,8 +752,23 @@ def _build_app_html() -> str:
       'url: ' + info.url,
       'status: ' + (info.status !== null ? info.status : 'n/a'),
       'error: ' + (info.error || 'none'),
-      'secret_sent: ' + info.secret_sent
+      'auth_verified: ' + (info.auth_verified === true),
+      'secret_sent: ' + (info.secret_sent === true)
     ].join('\\n');
+  }
+
+  function setLoginStatus(msg) {
+    const el = document.getElementById('login-status');
+    if (el) el.textContent = msg || '';
+  }
+
+  function setLoginError(msg) {
+    const el = document.getElementById('login-error');
+    if (el) el.textContent = msg || '';
+  }
+
+  function clearLoginError() {
+    setLoginError('');
   }
 
   function renderOutput(d) {
