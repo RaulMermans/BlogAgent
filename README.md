@@ -410,6 +410,17 @@ Provider events and raw JSON are collapsed in `<details>` sections and do not do
 
 ## Troubleshooting
 
+### If the UI shows "Secret saved locally" but requests return 401
+
+1. Click **Logout / Clear Secret** to wipe the stored value from localStorage.
+2. Re-enter your worker secret and click **Save Secret**.
+3. Expand the **Debug** section and confirm `secret_sent: true` appears after the next generate attempt.
+4. If `secret_sent: false`, the browser has no saved secret value — repeat steps 1–2.
+
+This can happen when the browser's site data was partially cleared (removing `blogagent_worker_secret` while leaving an old `blogagent_secret_saved` flag), or when an older version of the UI saved an empty secret. The fix is always the same: log out and re-enter the secret.
+
+---
+
 ### If clicking Generate does nothing
 
 1. Open Vercel logs (or browser DevTools → Network tab) and check for a `POST /run` request.

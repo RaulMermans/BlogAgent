@@ -587,3 +587,92 @@ def test_ui_html_has_api_health_element():
 def test_generate_button_has_type_button():
     response = client.get("/")
     assert 'type="button"' in response.text
+
+
+# ---------------------------------------------------------------------------
+# GET /auth-status
+# ---------------------------------------------------------------------------
+
+
+def test_auth_status_returns_false_when_env_unset(monkeypatch):
+    monkeypatch.delenv("BLOGAGENT_WORKER_SECRET", raising=False)
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+    assert response.json()["worker_secret_required"] is False
+
+
+def test_auth_status_returns_true_when_secret_set(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+    assert response.json()["worker_secret_required"] is True
+
+
+def test_auth_status_does_not_reveal_secret(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/auth-status")
+    assert "supersecret" not in response.text
+
+
+def test_auth_status_remains_public_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.get("/auth-status")
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — localStorage single-source-of-truth fix
+# ---------------------------------------------------------------------------
+
+
+def test_ui_html_init_reads_actual_secret_key():
+    """init() must gate on the real secret value, not just the saved flag."""
+    response = client.get("/")
+    html = response.text
+    assert 'localStorage.getItem(SECRET_KEY)' in html
+
+
+def test_ui_html_does_not_use_saved_flag_as_login_gate():
+    """getItem(SECRET_SAVED_KEY) must not appear — only removeItem is allowed."""
+    response = client.get("/")
+    assert 'getItem(SECRET_SAVED_KEY)' not in response.text
+
+
+def test_ui_html_blocks_generate_when_no_stored_secret():
+    response = client.get("/")
+    assert "Please enter and save your worker secret first" in response.text
+
+
+def test_ui_html_secret_sent_reflects_stored_value():
+    """debug output must show secret_sent based on the stored secret, not a hard-coded bool."""
+    response = client.get("/")
+    assert "secret_sent: secret.length > 0" in response.text
+
+
+def test_ui_html_removes_secret_key_on_logout():
+    response = client.get("/")
+    assert "removeItem(SECRET_KEY)" in response.text
+
+
+def test_ui_html_removes_saved_flag_on_logout():
+    """clearSecret() must also purge the old blogagent_secret_saved flag."""
+    response = client.get("/")
+    assert "removeItem(SECRET_SAVED_KEY)" in response.text
+
+
+def test_ui_html_401_clears_secret_key():
+    """401 handler must clear blogagent_worker_secret from localStorage."""
+    response = client.get("/")
+    html = response.text
+    # Both removeItem(SECRET_KEY) and removeItem(SECRET_SAVED_KEY) must appear
+    assert html.count("removeItem(SECRET_KEY)") >= 2
+
+
+def test_ui_html_save_secret_rejects_empty_input():
+    response = client.get("/")
+    assert "Please enter a worker secret" in response.text
+
+
+def test_ui_html_has_auth_status_element():
+    response = client.get("/")
+    assert 'id="auth-status"' in response.text
