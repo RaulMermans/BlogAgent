@@ -704,3 +704,11 @@ def test_ui_html_has_api_health_element():
 def test_generate_button_has_type_button():
     response = client.get("/")
     assert 'type="button"' in response.text
+
+
+# Note: tests for the old localStorage-based login flow that arrived via
+# the merge from main have been removed. They asserted on UI strings and
+# storage keys that no longer exist after the switch to the sessionStorage
+# private-access-screen design. The replacement coverage lives in the
+# "UI HTML — sessionStorage private-access-screen behaviour", "GET
+# /auth-status", and "POST /auth/verify" sections above.

@@ -411,6 +411,17 @@ Provider events and raw JSON are collapsed in `<details>` sections and do not do
 
 ## Troubleshooting
 
+### If the login screen will not unlock
+
+1. Click **Logout** to wipe any stale stored value from `sessionStorage`.
+2. Re-enter your worker secret and click **Login**.
+3. If you see **Invalid or missing worker secret**, the entered value does not match `BLOGAGENT_WORKER_SECRET` on the deployment — double-check both sides.
+4. Expand the **Debug** section (after logging in) and confirm `auth_verified: true` and `secret_sent: true` appear on the next generate attempt.
+
+`sessionStorage` is cleared automatically when the tab closes; older versions of the UI used `localStorage`, and any leftover keys from those versions are wiped on logout.
+
+---
+
 ### If clicking Generate does nothing
 
 1. Open Vercel logs (or browser DevTools → Network tab) and check for a `POST /run` request.
