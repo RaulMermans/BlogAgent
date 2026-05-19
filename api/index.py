@@ -105,6 +105,7 @@ def info() -> dict[str, Any]:
         "description": "Source-grounded editorial agent API",
         "endpoints": {
             "health": "GET /health",
+            "auth_status": "GET /auth-status",
             "app": "GET / or GET /app",
             "info": "GET /info",
             "run_post": "POST /run",
@@ -116,6 +117,16 @@ def info() -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "BlogAgent", "mode": "mock-safe"}
+
+
+@app.get("/auth-status")
+def auth_status() -> dict[str, bool]:
+    """Public endpoint: indicates whether a worker secret is required.
+
+    Never reveals the secret itself.
+    """
+    required = os.environ.get("BLOGAGENT_WORKER_SECRET", "").strip()
+    return {"worker_secret_required": bool(required)}
 
 
 @app.get("/run")
@@ -408,7 +419,8 @@ def _build_app_html() -> str:
     <button type="button" id="generateButton">Generate Blog Post</button>
   </div>
 
-  <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;">API health: checking…</div>
+  <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.3rem;">API health: checking…</div>
+  <div id="auth-status" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;"></div>
   <div id="status"></div>
   <div id="error-box"></div>
 
@@ -472,20 +484,25 @@ def _build_app_html() -> str:
 
 <script>
   const SECRET_KEY = 'blogagent_worker_secret';
+  // SECRET_SAVED_KEY kept only for migration cleanup — never used as a login gate
   const SECRET_SAVED_KEY = 'blogagent_secret_saved';
 
   let _lastResponse = null;
   let _lastTopic = "";
+  // Set to true by checkAuthStatus() when backend requires no secret
+  let _noSecretRequired = false;
 
   function init() {
     document.getElementById('generateButton').addEventListener('click', generate);
-    if (localStorage.getItem(SECRET_SAVED_KEY) === 'true') {
+    const secret = (localStorage.getItem(SECRET_KEY) || '').trim();
+    if (secret) {
       showReady();
       setStatus('Ready');
     } else {
       showLogin();
     }
     checkHealth();
+    checkAuthStatus();
   }
 
   function showLogin() {
@@ -502,9 +519,14 @@ def _build_app_html() -> str:
   }
 
   function saveSecret() {
-    const val = document.getElementById('secret-input').value;
+    const val = (document.getElementById('secret-input').value || '').trim();
+    if (!val) {
+      showError('Please enter a worker secret');
+      return;
+    }
     localStorage.setItem(SECRET_KEY, val);
-    localStorage.setItem(SECRET_SAVED_KEY, 'true');
+    localStorage.removeItem(SECRET_SAVED_KEY);
+    document.getElementById('secret-input').value = '';
     showReady();
     setStatus('Ready');
   }
@@ -514,6 +536,27 @@ def _build_app_html() -> str:
     localStorage.removeItem(SECRET_SAVED_KEY);
     document.getElementById('secret-input').value = '';
     showLogin();
+    document.getElementById('status').textContent = '';
+  }
+
+  async function checkAuthStatus() {
+    const el = document.getElementById('auth-status');
+    try {
+      const resp = await fetch('/auth-status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      _noSecretRequired = !data.worker_secret_required;
+      if (el) {
+        el.textContent = data.worker_secret_required
+          ? 'Worker secret required'
+          : 'No worker secret configured';
+        el.style.color = data.worker_secret_required ? '#854d0e' : '#166534';
+      }
+      if (_noSecretRequired) {
+        showReady();
+        setStatus('Ready');
+      }
+    } catch (_) {}
   }
 
   async function checkHealth() {
@@ -534,8 +577,14 @@ def _build_app_html() -> str:
   }
 
   async function generate() {
-    const secret = localStorage.getItem(SECRET_KEY) || '';
+    const secret = (localStorage.getItem(SECRET_KEY) || '').trim();
     const topic = document.getElementById('topic').value.trim();
+
+    if (!_noSecretRequired && !secret) {
+      showError('Please enter and save your worker secret first');
+      showLogin();
+      return;
+    }
     if (!topic) { showError('Please enter a topic'); return; }
 
     clearOutput();
@@ -568,7 +617,9 @@ def _build_app_html() -> str:
         debugInfo.error = 'Invalid or missing worker secret';
         setDebug(debugInfo);
         showError('Invalid or missing worker secret');
-        clearSecret();
+        localStorage.removeItem(SECRET_KEY);
+        localStorage.removeItem(SECRET_SAVED_KEY);
+        showLogin();
         return;
       }
       if (!resp.ok) {
