@@ -391,9 +391,9 @@ def test_ui_html_uses_sessionstorage_key_for_secret():
     )
 
 
-def test_ui_html_shows_login_section_initially():
+def test_ui_html_shows_access_screen_initially():
     response = client.get("/")
-    assert "login-section" in response.text
+    assert "access-screen" in response.text
 
 
 def test_ui_html_has_authenticated_app_container():
@@ -412,21 +412,22 @@ def test_ui_html_calls_auth_verify_endpoint():
 
 
 def test_ui_html_topic_textarea_hidden_until_authenticated():
-    """The topic textarea must live inside the authenticated-app container,
-    not at the page root, so it is hidden until auth verifies."""
     text = client.get("/").text
-    # Authenticated container appears before the topic textarea in the DOM.
     auth_idx = text.find('id="authenticated-app"')
     topic_idx = text.find('id="topic"')
     assert auth_idx != -1 and topic_idx != -1
     assert auth_idx < topic_idx
-    # Authenticated container starts hidden via inline CSS rule.
-    assert "#authenticated-app { display: none; }" in text
+    assert 'id="authenticated-app" style="display:none"' in text
 
 
 def test_ui_html_has_private_access_copy():
     response = client.get("/")
     assert "Private demo access" in response.text
+
+
+def test_ui_html_has_auth_state_element():
+    response = client.get("/")
+    assert 'id="auth-state"' in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -706,9 +707,106 @@ def test_generate_button_has_type_button():
     assert 'type="button"' in response.text
 
 
-# Note: tests for the old localStorage-based login flow that arrived via
-# the merge from main have been removed. They asserted on UI strings and
-# storage keys that no longer exist after the switch to the sessionStorage
-# private-access-screen design. The replacement coverage lives in the
-# "UI HTML — sessionStorage private-access-screen behaviour", "GET
-# /auth-status", and "POST /auth/verify" sections above.
+# ---------------------------------------------------------------------------
+# UI state — access-screen / authenticated-app structure
+# ---------------------------------------------------------------------------
+
+
+def test_html_contains_access_screen_id():
+    response = client.get("/")
+    assert 'id="access-screen"' in response.text
+
+
+def test_html_contains_authenticated_app_id():
+    response = client.get("/")
+    assert 'id="authenticated-app"' in response.text
+
+
+def test_authenticated_app_starts_hidden():
+    response = client.get("/")
+    assert 'id="authenticated-app" style="display:none"' in response.text
+
+
+def test_html_contains_show_access_screen():
+    response = client.get("/")
+    assert "showAccessScreen" in response.text
+
+
+def test_html_contains_show_authenticated_app():
+    response = client.get("/")
+    assert "showAuthenticatedApp" in response.text
+
+
+def test_show_authenticated_app_sets_display_block():
+    response = client.get("/")
+    assert "getElementById('authenticated-app').style.display = 'block'" in response.text
+
+
+def test_show_authenticated_app_hides_access_screen():
+    response = client.get("/")
+    assert "getElementById('access-screen').style.display = 'none'" in response.text
+
+
+def test_show_access_screen_hides_authenticated_app():
+    response = client.get("/")
+    assert "getElementById('authenticated-app').style.display = 'none'" in response.text
+
+
+def test_successful_auth_path_calls_show_authenticated_app():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function login()")
+    assert idx != -1
+    login_body = html[idx: idx + 800]
+    assert "resp.ok" in login_body
+    assert "showAuthenticatedApp" in login_body
+
+
+def test_failed_auth_path_calls_show_access_screen():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function login()")
+    assert idx != -1
+    login_body = html[idx: idx + 800]
+    assert "showAccessScreen" in login_body
+
+
+def test_topic_textarea_inside_authenticated_app():
+    response = client.get("/")
+    html = response.text
+    idx_app = html.find('id="authenticated-app"')
+    idx_topic = html.find('id="topic"')
+    assert idx_app != -1
+    assert idx_topic != -1
+    assert idx_topic > idx_app
+
+
+def test_generate_button_inside_authenticated_app():
+    response = client.get("/")
+    html = response.text
+    idx_app = html.find('id="authenticated-app"')
+    idx_btn = html.find('id="generateButton"')
+    assert idx_app != -1
+    assert idx_btn != -1
+    assert idx_btn > idx_app
+
+
+def test_auth_verify_accepts_secret_via_header(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post(
+        "/auth/verify",
+        json={},
+        headers={"X-BlogAgent-Secret": "supersecret"},
+    )
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /run still requires X-BlogAgent-Secret when configured
+# ---------------------------------------------------------------------------
+
+
+def test_run_requires_secret_header_when_configured(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
+    response = client.post("/run", json={"topic": "Solar energy"})
+    assert response.status_code == 401

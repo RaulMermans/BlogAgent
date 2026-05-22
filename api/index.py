@@ -144,11 +144,17 @@ def auth_status() -> dict[str, bool]:
 
 
 @app.post("/auth/verify")
-def auth_verify(body: AuthVerifyRequest) -> dict[str, bool]:
+def auth_verify(request: Request, body: AuthVerifyRequest) -> dict[str, bool]:
+    """Validate the worker secret. Returns 200 if valid, 401 if not.
+
+    Accepts the secret via JSON body or X-BlogAgent-Secret header.
+    """
     required = _worker_secret_required()
     if not required:
         return {"ok": True, "worker_secret_required": False}
-    if not _secrets_match(body.worker_secret or "", required):
+    header_secret = request.headers.get("X-BlogAgent-Secret", "")
+    provided = header_secret or body.worker_secret or ""
+    if not _secrets_match(provided, required):
         raise HTTPException(status_code=401, detail="Invalid or missing worker secret")
     return {"ok": True, "worker_secret_required": True}
 
@@ -421,36 +427,37 @@ def _build_app_html() -> str:
   <h1>BlogAgent</h1>
   <p class="subtitle">Source-grounded blog post generator</p>
 
-  <!-- Private access screen: the ONLY thing visible until auth is verified -->
-  <div id="login-section" class="form-card">
+  <!-- access-screen: visible by default; hidden after successful auth -->
+  <div id="access-screen" class="form-card">
     <label for="secret-input">Worker Secret</label>
-    <input type="password" id="secret-input" placeholder="Enter worker secret" autocomplete="current-password" />
-    <p class="hint">Private demo access. This is a lightweight gate, not production auth.</p>
-    <button type="button" id="loginButton" onclick="login()">Login</button>
-    <div id="login-status" style="margin-top:0.8rem;font-size:0.9rem;color:#555;min-height:1.2em;">Checking access...</div>
-    <div id="login-error" style="margin-top:0.5rem;font-size:0.9rem;color:#b91c1c;min-height:1.2em;"></div>
+    <input type="password" id="secret-input" placeholder="Enter worker secret (or leave blank if not configured)" autocomplete="current-password" />
+    <p class="hint">Private demo access. This is a lightweight gate, not production auth. The secret is stored in sessionStorage for this browser session only.</p>
+    <button type="button" onclick="login()">Login</button>
+    <p id="access-message" style="font-size:0.9rem;color:#b91c1c;margin-top:0.5rem;min-height:1.2em;"></p>
   </div>
 
-  <!-- Authenticated app: hidden until /auth/verify returns 200 -->
-  <div id="authenticated-app">
-    <!-- Logged-in banner -->
-    <div id="auth-banner" class="form-card">
+  <!-- authenticated-app: hidden by default; revealed after successful auth -->
+  <div id="authenticated-app" style="display:none">
+    <p id="auth-state" style="font-size:0.85rem;color:#166534;font-weight:600;margin-bottom:0.5rem;">Logged in</p>
+
+    <div class="form-card" style="margin-bottom:1rem;">
       <div class="logged-in-row">
         <span class="logged-in-label">Logged in</span>
-        <button class="btn-logout" type="button" onclick="logout()">Logout</button>
+        <button class="btn-logout" type="button" onclick="logout()">Logout / Clear Secret</button>
       </div>
     </div>
 
-    <!-- Topic section -->
-    <div id="topic-section" class="form-card">
+    <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;">API health: checking…</div>
+
+    <div class="form-card">
       <label for="topic">Topic</label>
       <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
       <button type="button" id="generateButton">Generate Blog Post</button>
     </div>
 
-    <div id="api-health" style="font-size:0.82rem;color:#888;margin-bottom:0.5rem;">API health: checking…</div>
     <div id="status"></div>
     <div id="error-box"></div>
+
 
     <details style="margin-bottom:0.8rem;">
       <summary>Debug</summary>
@@ -513,151 +520,85 @@ def _build_app_html() -> str:
 
 <script>
   const SECRET_KEY = 'blogagent_worker_secret';
-  const LEGACY_SECRET_SAVED_KEY = 'blogagent_secret_saved';
-
+  let auth_verified = false;
   let _lastResponse = null;
   let _lastTopic = "";
-  let _authenticated = false;
-  let _workerSecretRequired = true;
+
+  function showAccessScreen(message) {
+    document.getElementById('access-screen').style.display = 'block';
+    document.getElementById('authenticated-app').style.display = 'none';
+    auth_verified = false;
+    document.getElementById('access-message').textContent = message !== undefined ? message : '';
+    clearOutput();
+  }
+
+  function showAuthenticatedApp(message) {
+    document.getElementById('access-screen').style.display = 'none';
+    document.getElementById('authenticated-app').style.display = 'block';
+    auth_verified = true;
+    document.getElementById('auth-state').textContent = message || 'Logged in';
+  }
 
   async function init() {
     document.getElementById('generateButton').addEventListener('click', generate);
+    checkHealth();
     // Clear any stale legacy localStorage entries from earlier versions.
     try {
       localStorage.removeItem(SECRET_KEY);
-      localStorage.removeItem(LEGACY_SECRET_SAVED_KEY);
+      localStorage.removeItem('blogagent_secret_saved');
     } catch (_) {}
-    await bootstrapAuth();
-  }
-
-  async function bootstrapAuth() {
-    setLoginStatus('Checking access...');
-    clearLoginError();
-    let statusResp;
     try {
-      const r = await fetch('/auth-status');
-      statusResp = await r.json();
-    } catch (_) {
-      setLoginStatus('Could not reach server.');
-      showLockedScreen();
-      return;
-    }
-    _workerSecretRequired = !!(statusResp && statusResp.worker_secret_required);
+      const resp = await fetch('/auth-status');
+      const data = await resp.json();
+      if (!data.worker_secret_required) {
+        showAuthenticatedApp('No worker secret configured');
+        return;
+      }
+      const stored = sessionStorage.getItem(SECRET_KEY);
+      if (!stored) {
+        showAccessScreen('Login required');
+        return;
+      }
 
-    if (!_workerSecretRequired) {
-      // Local/dev mode — no secret needed.
-      _authenticated = true;
-      showAuthenticatedApp();
-      checkHealth();
-      setStatus('Ready');
-      return;
-    }
-
-    const stored = sessionStorage.getItem(SECRET_KEY);
-    if (!stored) {
-      showLockedScreen();
-      setLoginStatus('Login required');
-      return;
-    }
-
-    // Always verify a stored secret on load; never trust storage alone.
-    const ok = await verifySecret(stored);
-    if (ok) {
-      _authenticated = true;
-      showAuthenticatedApp();
-      checkHealth();
-      setStatus('Logged in');
-    } else {
-      sessionStorage.removeItem(SECRET_KEY);
-      showLockedScreen();
-      setLoginStatus('Login required');
-    }
-  }
-
-  async function verifySecret(secret) {
-    try {
-      const resp = await fetch('/auth/verify', {
+      const verifyResp = await fetch('/auth/verify', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({worker_secret: secret})
+        body: JSON.stringify({worker_secret: stored})
       });
-      return resp.status === 200;
+      if (verifyResp.ok) {
+        showAuthenticatedApp('Logged in');
+      } else {
+        sessionStorage.removeItem(SECRET_KEY);
+        showAccessScreen('Login required');
+      }
     } catch (_) {
-      return false;
+      showAccessScreen('Login required');
     }
-  }
-
-  function showLockedScreen() {
-    _authenticated = false;
-    document.getElementById('login-section').style.display = '';
-    document.getElementById('authenticated-app').style.display = 'none';
-  }
-
-  function showAuthenticatedApp() {
-    document.getElementById('login-section').style.display = 'none';
-    document.getElementById('authenticated-app').style.display = '';
-    clearLoginError();
   }
 
   async function login() {
-    clearLoginError();
-    const input = document.getElementById('secret-input');
-    const val = (input.value || '').trim();
-    if (!val) {
-      setLoginError('Enter your worker secret.');
-      setLoginStatus('Login required');
-      return;
-    }
-    const btn = document.getElementById('loginButton');
-    btn.disabled = true;
-    setLoginStatus('Verifying...');
+    const val = document.getElementById('secret-input').value;
     try {
       const resp = await fetch('/auth/verify', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({worker_secret: val})
       });
-      if (resp.status === 200) {
+      if (resp.ok) {
         sessionStorage.setItem(SECRET_KEY, val);
-        _authenticated = true;
-        input.value = '';
-        showAuthenticatedApp();
-        checkHealth();
-        setStatus('Logged in');
-        setLoginStatus('');
-      } else if (resp.status === 401) {
-        setLoginError('Invalid or missing worker secret.');
-        setLoginStatus('Login failed');
+        showAuthenticatedApp('Logged in');
       } else {
-        setLoginError('Login failed: ' + resp.status);
-        setLoginStatus('Login failed');
+        showAccessScreen('Invalid or missing worker secret');
       }
-    } catch (err) {
-      setLoginError('Network error: ' + err.message);
-      setLoginStatus('Login failed');
-    } finally {
-      btn.disabled = false;
+    } catch (_) {
+      showAccessScreen('Login required');
     }
   }
 
   function logout() {
     sessionStorage.removeItem(SECRET_KEY);
-    // Also clear any old localStorage keys from previous versions.
-    try {
-      localStorage.removeItem(SECRET_KEY);
-      localStorage.removeItem(LEGACY_SECRET_SAVED_KEY);
-    } catch (_) {}
-    _authenticated = false;
-    _lastResponse = null;
-    _lastTopic = "";
     document.getElementById('secret-input').value = '';
-    const topicEl = document.getElementById('topic');
-    if (topicEl) topicEl.value = '';
-    setStatus('');
-    clearOutput();
-    document.getElementById('debugOutput').textContent = '';
-    showLockedScreen();
-    setLoginStatus('Login required');
+    showAccessScreen('');
   }
 
   async function checkHealth() {
@@ -678,11 +619,6 @@ def _build_app_html() -> str:
   }
 
   async function generate() {
-    if (_workerSecretRequired && !_authenticated) {
-      showLockedScreen();
-      setLoginStatus('Login required');
-      return;
-    }
     const secret = sessionStorage.getItem(SECRET_KEY) || '';
     const topic = document.getElementById('topic').value.trim();
     if (!topic) { showError('Please enter a topic'); return; }
@@ -695,7 +631,7 @@ def _build_app_html() -> str:
       url: '/run',
       status: null,
       error: null,
-      auth_verified: _authenticated,
+      auth_verified: auth_verified,
       secret_sent: secret.length > 0
     };
 
@@ -717,11 +653,9 @@ def _build_app_html() -> str:
       if (resp.status === 401) {
         debugInfo.error = 'Invalid or missing worker secret';
         setDebug(debugInfo);
+        showError('Invalid or missing worker secret');
         sessionStorage.removeItem(SECRET_KEY);
-        _authenticated = false;
-        showLockedScreen();
-        setLoginError('Session expired or invalid worker secret. Log in again.');
-        setLoginStatus('Login required');
+        showAccessScreen('Session expired. Please login again.');
         return;
       }
       if (!resp.ok) {
@@ -757,20 +691,6 @@ def _build_app_html() -> str:
     ].join('\\n');
   }
 
-  function setLoginStatus(msg) {
-    const el = document.getElementById('login-status');
-    if (el) el.textContent = msg || '';
-  }
-
-  function setLoginError(msg) {
-    const el = document.getElementById('login-error');
-    if (el) el.textContent = msg || '';
-  }
-
-  function clearLoginError() {
-    setLoginError('');
-  }
-
   function renderOutput(d) {
     if (d.blocked) {
       showError('Request blocked: ' + (d.block_reason || 'publishing requests are not allowed.'));
@@ -790,7 +710,6 @@ def _build_app_html() -> str:
       kwDiv.appendChild(span);
     });
 
-    // Stats
     const statsRow = document.getElementById('stats-row');
     statsRow.innerHTML = '';
     addStat(statsRow, d.source_count + ' source' + (d.source_count !== 1 ? 's' : ''), 'ok');
@@ -801,23 +720,18 @@ def _build_app_html() -> str:
     addStat(statsRow, d.revision_count + ' revision' + (d.revision_count !== 1 ? 's' : ''), 'ok');
     addStat(statsRow, d.execution_mode || 'mock', 'ok');
 
-    // Article
     document.getElementById('article-display').textContent = d.article_markdown || '';
 
-    // Warnings
     if (d.warnings && d.warnings.length) {
       document.getElementById('warnings-details').style.display = '';
       document.getElementById('warnings-body').textContent = d.warnings.join('\\n');
     }
 
-    // Provider events
     document.getElementById('events-body').textContent =
       (d.provider_events || []).join('\\n') || '(none)';
 
-    // Raw JSON
     document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
 
-    // Sources — from source_count (we don't have the list in the compact response)
     const srcSummary = document.getElementById('sources-summary');
     srcSummary.textContent = 'Sources (' + (d.source_count || 0) + ')';
     const srcList = document.getElementById('sources-list');
