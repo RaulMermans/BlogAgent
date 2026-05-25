@@ -341,7 +341,7 @@ def _build_app_html() -> str:
       margin-bottom: 1rem;
     }
 
-    #output { display: none; }
+    #output-section { display: none; }
     #authenticated-app { display: none; }
 
     .meta-row { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
@@ -464,7 +464,8 @@ def _build_app_html() -> str:
       <pre id="debugOutput" class="details-body" style="margin-top:0.4rem;"></pre>
     </details>
 
-    <div id="output">
+    <section id="output-section" style="display:none;">
+      <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:1rem;">Generated Blog Post</h2>
       <div class="form-card">
         <div id="title-display" style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;"></div>
 
@@ -512,9 +513,9 @@ def _build_app_html() -> str:
 
       <details>
         <summary>Raw JSON</summary>
-        <div class="details-body" id="raw-json"></div>
+        <pre class="details-body" id="raw-json"></pre>
       </details>
-    </div>
+    </section>
   </div>
 </div>
 
@@ -669,8 +670,16 @@ def _build_app_html() -> str:
       _lastResponse = data;
       _lastTopic = topic;
       setDebug(debugInfo);
-      renderOutput(data);
-      setStatus('Success');
+      try {
+        renderOutput(data);
+        setStatus('Success');
+      } catch (renderErr) {
+        showError('Render error: ' + renderErr.message);
+        try {
+          document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
+          document.getElementById('output-section').style.display = 'block';
+        } catch (_) {}
+      }
     } catch (err) {
       debugInfo.error = err.message;
       setDebug(debugInfo);
@@ -691,19 +700,35 @@ def _build_app_html() -> str:
     ].join('\\n');
   }
 
-  function renderOutput(d) {
-    if (d.blocked) {
-      showError('Request blocked: ' + (d.block_reason || 'publishing requests are not allowed.'));
+  function renderOutput(data) {
+    const title = data.title || 'Untitled Blog Post';
+    const slug = data.slug || '';
+    const metaDescription = data.meta_description || data.metaDescription || '';
+    const seoKeywords = data.seo_keywords || data.seoKeywords || [];
+    const articleMarkdown =
+      data.article_markdown ||
+      data.articleMarkdown ||
+      data.markdown ||
+      data.article ||
+      data.content ||
+      '';
+    const sourceCount = data.source_count || data.sourceCount || 0;
+    const claimStatusCounts = data.claim_status_counts || data.claimStatusCounts || {};
+    const providerEvents = data.provider_events || data.providerEvents || [];
+    const executionMode = data.execution_mode || data.executionMode || '';
+
+    if (data.blocked) {
+      showError('Request blocked: ' + (data.block_reason || 'publishing requests are not allowed.'));
       return;
     }
 
-    document.getElementById('title-display').textContent = d.title || '(no title)';
-    document.getElementById('slug-display').textContent = d.slug || '';
-    document.getElementById('meta-display').textContent = d.meta_description || '';
+    document.getElementById('title-display').textContent = title;
+    document.getElementById('slug-display').textContent = slug;
+    document.getElementById('meta-display').textContent = metaDescription;
 
     const kwDiv = document.getElementById('keywords-display');
     kwDiv.innerHTML = '';
-    (d.seo_keywords || []).forEach(kw => {
+    seoKeywords.forEach(kw => {
       const span = document.createElement('span');
       span.className = 'keyword-tag';
       span.textContent = kw;
@@ -712,32 +737,31 @@ def _build_app_html() -> str:
 
     const statsRow = document.getElementById('stats-row');
     statsRow.innerHTML = '';
-    addStat(statsRow, d.source_count + ' source' + (d.source_count !== 1 ? 's' : ''), 'ok');
-    const counts = d.claim_status_counts || {};
-    addStat(statsRow, (counts.supported || 0) + ' supported', 'ok');
-    if (counts.partially_supported) addStat(statsRow, counts.partially_supported + ' partial', 'warn');
-    if (counts.unsupported) addStat(statsRow, counts.unsupported + ' unsupported', 'danger');
-    addStat(statsRow, d.revision_count + ' revision' + (d.revision_count !== 1 ? 's' : ''), 'ok');
-    addStat(statsRow, d.execution_mode || 'mock', 'ok');
+    addStat(statsRow, sourceCount + ' source' + (sourceCount !== 1 ? 's' : ''), 'ok');
+    addStat(statsRow, (claimStatusCounts.supported || 0) + ' supported', 'ok');
+    if (claimStatusCounts.partially_supported) addStat(statsRow, claimStatusCounts.partially_supported + ' partial', 'warn');
+    if (claimStatusCounts.unsupported) addStat(statsRow, claimStatusCounts.unsupported + ' unsupported', 'danger');
+    addStat(statsRow, (data.revision_count || 0) + ' revision' + ((data.revision_count || 0) !== 1 ? 's' : ''), 'ok');
+    addStat(statsRow, executionMode || 'mock', 'ok');
 
-    document.getElementById('article-display').textContent = d.article_markdown || '';
+    document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
 
-    if (d.warnings && d.warnings.length) {
+    if (data.warnings && data.warnings.length) {
       document.getElementById('warnings-details').style.display = '';
-      document.getElementById('warnings-body').textContent = d.warnings.join('\\n');
+      document.getElementById('warnings-body').textContent = data.warnings.join('\\n');
     }
 
-    document.getElementById('events-body').textContent =
-      (d.provider_events || []).join('\\n') || '(none)';
+    document.getElementById('events-body').textContent = providerEvents.join('\\n') || '(none)';
 
-    document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
+    document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
 
     const srcSummary = document.getElementById('sources-summary');
-    srcSummary.textContent = 'Sources (' + (d.source_count || 0) + ')';
+    srcSummary.textContent = 'Sources (' + sourceCount + ')';
     const srcList = document.getElementById('sources-list');
     srcList.innerHTML = '<li style="color:#888;font-style:italic">Source URLs are not included in the compact API response. Use the CLI with --json for full source details.</li>';
 
-    document.getElementById('output').style.display = '';
+    document.getElementById('output-section').style.display = 'block';
+    document.getElementById('output-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function addStat(parent, text, type) {
@@ -788,7 +812,7 @@ def _build_app_html() -> str:
   function clearOutput() {
     document.getElementById('error-box').style.display = 'none';
     document.getElementById('error-box').textContent = '';
-    document.getElementById('output').style.display = 'none';
+    document.getElementById('output-section').style.display = 'none';
     document.getElementById('warnings-details').style.display = 'none';
   }
 

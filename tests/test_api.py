@@ -810,3 +810,280 @@ def test_run_requires_secret_header_when_configured(monkeypatch):
     monkeypatch.setenv("BLOGAGENT_WORKER_SECRET", "supersecret")
     response = client.post("/run", json={"topic": "Solar energy"})
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Vercel dependency — google-genai
+# ---------------------------------------------------------------------------
+
+
+def test_requirements_vercel_contains_google_genai():
+    req = (_ROOT / "requirements-vercel.txt").read_text()
+    assert "google-genai" in req
+
+
+def test_requirements_vercel_google_genai_has_version():
+    req = (_ROOT / "requirements-vercel.txt").read_text()
+    assert "google-genai>=1.0" in req
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — output-section element
+# ---------------------------------------------------------------------------
+
+
+def test_html_contains_output_section_id():
+    response = client.get("/")
+    assert 'id="output-section"' in response.text
+
+
+def test_html_output_section_has_generated_blog_post_heading():
+    response = client.get("/")
+    assert "Generated Blog Post" in response.text
+
+
+def test_html_contains_raw_json_pre():
+    response = client.get("/")
+    assert 'id="raw-json"' in response.text
+
+
+def test_html_contains_render_output_function():
+    response = client.get("/")
+    assert "renderOutput" in response.text
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — generate() calls renderOutput
+# ---------------------------------------------------------------------------
+
+
+def test_generate_function_calls_render_output():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("async function generate()")
+    assert idx != -1, "generate() function not found in HTML"
+    gen_body = html[idx: idx + 3000]
+    assert "renderOutput(data)" in gen_body
+
+
+def test_generate_wraps_render_output_in_try_catch():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("async function generate()")
+    assert idx != -1
+    gen_body = html[idx: idx + 3000]
+    assert "renderErr" in gen_body or "Render error" in gen_body
+
+
+def test_generate_shows_render_error_message():
+    response = client.get("/")
+    assert "Render error" in response.text
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — renderOutput behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_render_output_sets_output_section_display_block():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1, "renderOutput() function not found in HTML"
+    render_body = html[idx: idx + 4000]
+    assert "output-section" in render_body
+    assert "display = 'block'" in render_body or 'display = "block"' in render_body
+
+
+def test_render_output_renders_article_markdown_field():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1
+    render_body = html[idx: idx + 4000]
+    assert "article_markdown" in render_body
+
+
+def test_render_output_has_camel_case_article_markdown_fallback():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1
+    render_body = html[idx: idx + 4000]
+    assert "articleMarkdown" in render_body
+
+
+def test_render_output_has_content_fallback():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1
+    render_body = html[idx: idx + 4000]
+    assert "data.content" in render_body or "|| ''" in render_body
+
+
+def test_render_output_has_no_article_markdown_message():
+    response = client.get("/")
+    assert "No article markdown returned by API." in response.text
+
+
+def test_render_output_calls_scroll_into_view():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1
+    render_body = html[idx: idx + 4000]
+    assert "scrollIntoView" in render_body
+
+
+def test_render_output_scroll_uses_smooth_behavior():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function renderOutput(")
+    assert idx != -1
+    render_body = html[idx: idx + 4000]
+    assert "smooth" in render_body
+
+
+def test_raw_json_uses_json_stringify_with_indent():
+    response = client.get("/")
+    html = response.text
+    assert "JSON.stringify(data, null, 2)" in html or "JSON.stringify(d, null, 2)" in html
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — copy / download buttons
+# ---------------------------------------------------------------------------
+
+
+def test_html_has_copy_markdown_button():
+    response = client.get("/")
+    assert "Copy article markdown" in response.text
+
+
+def test_html_has_download_md_button():
+    response = client.get("/")
+    assert "Download .md" in response.text
+
+
+def test_html_has_download_json_button():
+    response = client.get("/")
+    assert "Download full JSON" in response.text
+
+
+# ---------------------------------------------------------------------------
+# POST /run — each required response field (explicit)
+# ---------------------------------------------------------------------------
+
+
+def test_run_returns_title_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "title" in body
+    assert isinstance(body["title"], str)
+
+
+def test_run_returns_meta_description_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "meta_description" in body
+    assert isinstance(body["meta_description"], str)
+
+
+def test_run_returns_article_markdown_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "article_markdown" in body
+    assert isinstance(body["article_markdown"], str)
+
+
+def test_run_returns_seo_keywords_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "seo_keywords" in body
+    assert isinstance(body["seo_keywords"], list)
+
+
+def test_run_returns_source_count_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "source_count" in body
+    assert isinstance(body["source_count"], int)
+
+
+def test_run_returns_claim_status_counts_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "claim_status_counts" in body
+    counts = body["claim_status_counts"]
+    assert "supported" in counts
+    assert "partially_supported" in counts
+    assert "unsupported" in counts
+
+
+def test_run_returns_revision_count_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "revision_count" in body
+    assert isinstance(body["revision_count"], int)
+
+
+def test_run_returns_warnings_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "warnings" in body
+    assert isinstance(body["warnings"], list)
+
+
+def test_run_returns_provider_events_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "provider_events" in body
+    assert isinstance(body["provider_events"], list)
+
+
+def test_run_returns_execution_mode_field(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "execution_mode" in body
+    assert isinstance(body["execution_mode"], str)
