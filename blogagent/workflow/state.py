@@ -130,6 +130,9 @@ class BlogRunState(BaseModel):
     blocked: bool = False
     block_reason: str = ""
     requires_approval: bool = False
+    # Recommendation / financial intent flags (set deterministically by guardrail)
+    is_recommendation: bool = False
+    is_financial: bool = False
     # Run trace fields
     warnings: list[str] = Field(default_factory=list)
     provider_events: list[str] = Field(default_factory=list)

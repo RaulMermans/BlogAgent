@@ -11,6 +11,13 @@ from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
+from blogagent.workflow.recommendation import (
+    FINANCIAL_DISCLAIMER_WARNING,
+    MOCK_RECOMMENDATION_WARNING,
+    is_financial_topic,
+    is_real_search_active,
+    is_recommendation_topic,
+)
 from blogagent.workflow.state import (
     ArticlePackage,
     BlogRunState,
@@ -101,7 +108,7 @@ def _slugify(text: str) -> str:
 
 
 def check_external_effects(state: BlogRunState) -> BlogRunState:
-    """Block topics that request external side effects (publishing, posting, etc.)."""
+    """Block topics that request external side effects; detect recommendation/financial intent."""
     t = state.topic.lower()
     for phrase in _BLOCKED_PHRASES:
         if phrase in t:
@@ -113,6 +120,21 @@ def check_external_effects(state: BlogRunState) -> BlogRunState:
             )
             state.requires_approval = True
             return state
+
+    # Detect recommendation and financial intent (deterministic, no LLM).
+    state.is_recommendation = is_recommendation_topic(state.topic)
+    state.is_financial = is_financial_topic(state.topic)
+
+    # Mock-search guardrail: recommendation topics need real sources to produce
+    # named-product lists.  We produce a limited response (not a full block) so
+    # schema validation still passes, but we surface a clear warning.
+    if state.is_recommendation and not is_real_search_active():
+        _warn(state, MOCK_RECOMMENDATION_WARNING)
+
+    # Financial disclaimer: always add for investment/trading topics.
+    if state.is_financial:
+        _warn(state, FINANCIAL_DISCLAIMER_WARNING)
+
     return state
 
 
@@ -133,7 +155,10 @@ def intake_topic(state: BlogRunState) -> BlogRunState:
 
 def generate_research_questions(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce research questions."""
-    result = editor_agent.generate_research_plan(topic=state.topic)
+    result = editor_agent.generate_research_plan(
+        topic=state.topic,
+        is_recommendation=state.is_recommendation,
+    )
     state.research_questions = result.data.research_questions
     _event(state, _llm_event("editor.research_plan", result))
     _propagate_llm_warnings(state, "editor.research_plan", result)
@@ -170,17 +195,36 @@ def score_sources(state: BlogRunState) -> BlogRunState:
 
 
 def build_evidence_table(state: BlogRunState) -> BlogRunState:
-    state.evidence_table = [
-        EvidenceItem(
-            fact=f"Information about {state.topic} from {s.title}",
-            source_url=s.url,
-            source_title=s.title,
-            publisher_domain=s.domain,
-            confidence=s.overall_score,
-            used_for="background",
+    """Build the evidence table, using real extracted text or snippets when available."""
+    # Build lookup maps so we can attach real content to each scored source.
+    packet_map = {p.url: p for p in state.selected_sources}
+    search_map = {r.url: r for r in state.search_results}
+
+    evidence_items: list[EvidenceItem] = []
+    for s in state.source_scores:
+        packet = packet_map.get(s.url)
+        result = search_map.get(s.url)
+
+        # Prefer real extracted text, then search snippet, then generic fallback.
+        if packet and not packet.is_mock and packet.extracted_text.strip():
+            fact = packet.extracted_text[:400].strip()
+        elif result and not result.is_mock and result.snippet.strip():
+            fact = result.snippet.strip()
+        else:
+            fact = f"Information about {state.topic} from {s.title}"
+
+        evidence_items.append(
+            EvidenceItem(
+                fact=fact,
+                source_url=s.url,
+                source_title=s.title,
+                publisher_domain=s.domain,
+                confidence=s.overall_score,
+                used_for="background",
+            )
         )
-        for s in state.source_scores
-    ]
+
+    state.evidence_table = evidence_items
     return state
 
 
@@ -195,6 +239,7 @@ def generate_outline(state: BlogRunState) -> BlogRunState:
         topic=state.topic,
         evidence_table=state.evidence_table,
         source_scores=state.source_scores,
+        is_recommendation=state.is_recommendation,
     )
     from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
 
@@ -225,6 +270,8 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         outline=outline_out,
         evidence_table=state.evidence_table,
         source_scores=state.source_scores,
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
     )
     state.draft = result.data.article_markdown
     state.draft_meta_description = result.data.meta_description

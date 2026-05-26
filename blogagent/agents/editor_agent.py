@@ -75,22 +75,37 @@ def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
 # ---------------------------------------------------------------------------
 
 
-def generate_research_plan(topic: str) -> LLMResult:
+def generate_research_plan(topic: str, is_recommendation: bool = False) -> LLMResult:
     """Return 5 targeted research questions for the topic."""
     if not _use_llm():
-        return _mock_llm_result(_mock_research_plan(topic))
+        return _mock_llm_result(_mock_research_plan(topic, is_recommendation))
+
+    if is_recommendation:
+        system_prompt = prompts.RECOMMENDATION_RESEARCH_PLAN_PROMPT.format(topic=topic)
+    else:
+        system_prompt = prompts.RESEARCH_PLAN_PROMPT.format(topic=topic)
 
     result = llm_client.generate_structured(
-        system_prompt=prompts.RESEARCH_PLAN_PROMPT.format(topic=topic),
+        system_prompt=system_prompt,
         user_prompt="Generate the research plan as a JSON object.",
         output_model=ResearchPlanOutput,
     )
     if result.is_mock:
-        return _fallback_llm_result(_mock_research_plan(topic), result)
+        return _fallback_llm_result(_mock_research_plan(topic, is_recommendation), result)
     return result
 
 
-def _mock_research_plan(topic: str) -> ResearchPlanOutput:
+def _mock_research_plan(topic: str, is_recommendation: bool = False) -> ResearchPlanOutput:
+    if is_recommendation:
+        return ResearchPlanOutput(
+            research_questions=[
+                f"Which specific named products or brands are most recommended for {topic}?",
+                f"What selection criteria do reviewers use to evaluate options for {topic}?",
+                f"Which named products appear repeatedly across credible sources for {topic}?",
+                f"What real user or expert experiences exist with named options for {topic}?",
+                f"What caveats or distinctions exist between named options for {topic}?",
+            ]
+        )
     return ResearchPlanOutput(
         research_questions=[
             f"What is {topic} and why does it matter?",
@@ -111,30 +126,55 @@ def generate_outline(
     topic: str,
     evidence_table: list[EvidenceItem],
     source_scores: list[SourceScore],
+    is_recommendation: bool = False,
 ) -> LLMResult:
     """Return a structured blog outline grounded in the evidence table."""
     if not _use_llm():
-        return _mock_llm_result(_mock_outline(topic, evidence_table))
+        return _mock_llm_result(_mock_outline(topic, evidence_table, is_recommendation))
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
-    result = llm_client.generate_structured(
-        system_prompt=prompts.OUTLINE_PROMPT.format(
+    if is_recommendation:
+        system_prompt = prompts.RECOMMENDATION_OUTLINE_PROMPT.format(
             topic=topic, evidence_table=evidence_summary
-        ),
+        )
+    else:
+        system_prompt = prompts.OUTLINE_PROMPT.format(
+            topic=topic, evidence_table=evidence_summary
+        )
+    result = llm_client.generate_structured(
+        system_prompt=system_prompt,
         user_prompt="Generate the blog outline as a JSON object.",
         output_model=OutlineOutput,
     )
     if result.is_mock:
-        return _fallback_llm_result(_mock_outline(topic, evidence_table), result)
+        return _fallback_llm_result(
+            _mock_outline(topic, evidence_table, is_recommendation), result
+        )
     return result
 
 
-def _mock_outline(topic: str, evidence_table: list[EvidenceItem]) -> OutlineOutput:
+def _mock_outline(
+    topic: str, evidence_table: list[EvidenceItem], is_recommendation: bool = False
+) -> OutlineOutput:
+    keywords = [w.lower() for w in topic.split()[:3] if len(w) > 3]
+    if is_recommendation:
+        sections = [
+            "Quick Picks",
+            "How We Chose",
+            f"Best Options for {topic}",
+            "Buying or Choosing Tips",
+            "Final Takeaway",
+        ]
+        return OutlineOutput(
+            title=f"Best {topic}: A Source-Grounded Guide",
+            sections=sections,
+            target_word_count=1200,
+            seo_keywords=keywords or [topic.lower()],
+        )
     sections = ["Introduction", "Key Facts", "Recent Developments", "Conclusion"]
     real_items = [e for e in evidence_table if e.confidence > 0.3]
     if real_items:
         sections = ["Introduction", "Background", "Key Facts", "Recent Developments", "Conclusion"]
-    keywords = [w.lower() for w in topic.split()[:3] if len(w) > 3]
     return OutlineOutput(
         title=f"Understanding {topic}",
         sections=sections,
@@ -153,6 +193,8 @@ def write_article_draft(
     outline: OutlineOutput,
     evidence_table: list[EvidenceItem],
     source_scores: list[SourceScore],
+    is_recommendation: bool = False,
+    is_financial: bool = False,
 ) -> LLMResult:
     """Write a full article draft grounded in the evidence table.
 
@@ -161,15 +203,30 @@ def write_article_draft(
     invent citations; it references only facts present in evidence_table.
     """
     if not _use_llm():
-        return _mock_llm_result(_mock_draft(topic, outline, evidence_table))
+        return _mock_llm_result(
+            _mock_draft(topic, outline, evidence_table, is_recommendation, is_financial)
+        )
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
-    result = llm_client.generate_structured(
-        system_prompt=prompts.DRAFT_PROMPT.format(
+    if is_recommendation:
+        system_prompt = prompts.RECOMMENDATION_DRAFT_PROMPT.format(
             topic=topic,
             outline=_format_outline(outline),
             evidence_table=evidence_summary,
-        ),
+        )
+        if is_financial:
+            system_prompt += prompts.FINANCIAL_DRAFT_ADDENDUM
+    else:
+        system_prompt = prompts.DRAFT_PROMPT.format(
+            topic=topic,
+            outline=_format_outline(outline),
+            evidence_table=evidence_summary,
+        )
+        if is_financial:
+            system_prompt += prompts.FINANCIAL_DRAFT_ADDENDUM
+
+    result = llm_client.generate_structured(
+        system_prompt=system_prompt,
         user_prompt=(
             "Write the full article as a JSON object with "
             "article_markdown, meta_description, and seo_keywords."
@@ -177,15 +234,33 @@ def write_article_draft(
         output_model=DraftOutput,
     )
     if result.is_mock:
-        return _fallback_llm_result(_mock_draft(topic, outline, evidence_table), result)
+        return _fallback_llm_result(
+            _mock_draft(topic, outline, evidence_table, is_recommendation, is_financial),
+            result,
+        )
     return result
 
 
 def _mock_draft(
-    topic: str, outline: OutlineOutput, evidence_table: list[EvidenceItem]
+    topic: str,
+    outline: OutlineOutput,
+    evidence_table: list[EvidenceItem],
+    is_recommendation: bool = False,
+    is_financial: bool = False,
 ) -> DraftOutput:
     """Generate substantive mock prose using the outline and evidence."""
+    if is_recommendation:
+        return _mock_recommendation_draft(topic, outline, evidence_table, is_financial)
+
     lines: list[str] = [f"# {outline.title}", ""]
+
+    if is_financial:
+        lines.append(
+            "> **Disclaimer**: This article is for educational purposes only and does not "
+            "constitute financial advice. Consult a qualified financial adviser before making "
+            "investment decisions."
+        )
+        lines.append("")
 
     mock_body: dict[str, str] = {
         "Introduction": (
@@ -223,9 +298,7 @@ def _mock_draft(
         if section in ("Key Facts", "Background"):
             for item in evidence_table[:2]:
                 if item.confidence > 0:
-                    lines.append(
-                        f"\nAccording to *{item.source_title}*: {item.fact}"
-                    )
+                    lines.append(f"\nAccording to *{item.source_title}*: {item.fact}")
         lines.append("")
 
     article_md = "\n".join(lines).strip()
@@ -233,6 +306,111 @@ def _mock_draft(
     meta = (
         f"An evidence-based overview of {topic}, covering key facts, "
         f"recent developments, and practical implications."
+    )
+    return DraftOutput(
+        article_markdown=article_md,
+        meta_description=meta,
+        seo_keywords=keywords,
+    )
+
+
+def _mock_recommendation_draft(
+    topic: str,
+    outline: OutlineOutput,
+    evidence_table: list[EvidenceItem],
+    is_financial: bool = False,
+) -> DraftOutput:
+    """Mock draft for recommendation-style topics.
+
+    Does NOT invent product names. If real source facts are available they are
+    referenced; otherwise the article states that real search is needed.
+    """
+    lines: list[str] = [f"# {outline.title}", ""]
+
+    if is_financial:
+        lines.append(
+            "> **Disclaimer**: This article is for educational purposes only and does not "
+            "constitute financial advice. Consult a qualified financial adviser before making "
+            "investment decisions."
+        )
+        lines.append("")
+
+    # Detect whether evidence contains real (non-template) facts
+    real_items = [
+        e for e in evidence_table if not e.fact.startswith("Information about")
+    ]
+    has_real_evidence = bool(real_items)
+
+    lines.append("## Quick Picks")
+    lines.append("")
+    if has_real_evidence:
+        lines.append("Based on available sources, the following were identified:")
+        for item in real_items[:5]:
+            lines.append(
+                f"- See [{item.source_title}]({item.source_url}) for specific recommendations"
+            )
+    else:
+        lines.append(
+            "The available sources did not provide enough specific named recommendations. "
+            "Enable real search (`BLOGAGENT_SEARCH_PROVIDER=tavily`) and a real LLM provider "
+            "to get source-grounded, named recommendations for this topic."
+        )
+    lines.append("")
+
+    lines.append("## How We Chose")
+    lines.append("")
+    if has_real_evidence:
+        lines.append(
+            f"The following selection criteria were applied when reviewing sources for {topic}: "
+            "relevance to the use case, credibility of the publishing source, recency of the "
+            "information, and breadth of coverage across independent reviewers."
+        )
+    else:
+        lines.append(
+            f"Selection criteria for {topic} would typically include expert consensus, "
+            "user experience data, and independent review coverage. "
+            "Real source data is needed to apply these criteria to specific options."
+        )
+    lines.append("")
+
+    # Include remaining outline sections with substantive but non-inventive content
+    handled = {"Quick Picks", "How We Chose"}
+    for section in outline.sections:
+        if section in handled:
+            continue
+        lines.append(f"## {section}")
+        lines.append("")
+        if section == "Final Takeaway":
+            lines.append(
+                f"For a complete, source-grounded list of specific recommendations on {topic}, "
+                "connect a real search provider and a real LLM provider. "
+                "Mock mode produces structural output only — no named products are invented."
+            )
+        elif section == "Buying or Choosing Tips":
+            lines.append(
+                f"When evaluating options for {topic}, consider your specific use case, "
+                "budget, and the credibility of the sources behind any recommendation. "
+                "Cross-reference multiple independent reviews before deciding."
+            )
+        else:
+            if has_real_evidence:
+                for item in real_items[:2]:
+                    excerpt = item.fact[:200]
+                    lines.append(
+                        f"According to [{item.source_title}]({item.source_url}): {excerpt}"
+                    )
+            else:
+                lines.append(
+                    f"{section} covers an important dimension of {topic}. "
+                    "Specific details require real source evidence."
+                )
+        lines.append("")
+
+    article_md = "\n".join(lines).strip()
+    keywords = list(outline.seo_keywords) or [topic.lower()]
+    meta = (
+        f"A source-grounded guide to the best options for {topic}. "
+        "Specific recommendations require real search data."
     )
     return DraftOutput(
         article_markdown=article_md,
