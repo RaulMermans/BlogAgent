@@ -2,6 +2,8 @@
 
 Public interface:
     generate_structured(system_prompt, user_prompt, output_model, temperature) -> LLMResult
+    parse_json_object(text) -> dict
+    detect_repeated_excerpts(text, threshold) -> list[str]
 
 Provider is selected via BLOGAGENT_LLM_PROVIDER (default: "mock").
 If provider is configured but the API key is missing or the package is
@@ -13,6 +15,7 @@ Every returned LLMResult includes:
     provider            — what actually produced the output
     is_mock             — True when output came from mock data registry
     warning             — set when a configured live provider fell back to mock
+                          or "structured_output_repaired=true" after a repair
 """
 
 from __future__ import annotations
@@ -46,6 +49,91 @@ from blogagent.llm.schemas import (
 _DEFAULT_TIMEOUT = 60
 _MOCK_MODEL = "mock-1.0"
 _MOCK_PROVIDER = "mock"
+
+# ---------------------------------------------------------------------------
+# JSON parsing utilities
+# ---------------------------------------------------------------------------
+
+
+def parse_json_object(text: str) -> dict:
+    """Parse a JSON object from text using multiple fallback strategies.
+
+    Strategies (in order):
+    1. Strict json.loads on the raw text.
+    2. Strip markdown code fences (```json ... ```) then json.loads.
+    3. Extract the substring between the first ``{`` and last ``}`` and json.loads.
+
+    Raises json.JSONDecodeError if all strategies fail.
+    """
+    stripped = text.strip()
+
+    # Strategy 1: direct parse
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: strip markdown code fences
+    cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", stripped)
+    cleaned = re.sub(r"\n?```$", "", cleaned.strip()).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: extract between first { and last }
+    first = stripped.find("{")
+    last = stripped.rfind("}")
+    if first >= 0 and last > first:
+        try:
+            return json.loads(stripped[first : last + 1])
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON object found in text", stripped, 0)
+
+
+# ---------------------------------------------------------------------------
+# Repeated-text guardrail
+# ---------------------------------------------------------------------------
+
+
+def detect_repeated_excerpts(
+    article_markdown: str,
+    min_phrase_length: int = 60,
+    threshold: int = 3,
+) -> list[str]:
+    """Return warning strings for any phrase repeated in threshold or more sections.
+
+    Splits the article at ## headings and looks for sentences of at least
+    min_phrase_length characters that appear in threshold or more sections.
+    """
+    sections = re.split(r"\n(?=##\s)", article_markdown)
+    if len(sections) < threshold:
+        return []
+
+    phrase_section_count: dict[str, int] = {}
+    for section_text in sections:
+        # Extract sentences (split on sentence-ending punctuation)
+        sentences = re.split(r"(?<=[.!?])\s+", section_text)
+        seen_in_section: set[str] = set()
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < min_phrase_length:
+                continue
+            normalized = re.sub(r"\s+", " ", sentence.lower())
+            if normalized not in seen_in_section:
+                seen_in_section.add(normalized)
+                phrase_section_count[normalized] = phrase_section_count.get(normalized, 0) + 1
+
+    warnings: list[str] = []
+    for phrase, count in phrase_section_count.items():
+        if count >= threshold:
+            preview = phrase[:80] + ("..." if len(phrase) > 80 else "")
+            warnings.append(
+                f"Repeated excerpt detected in {count} sections: \"{preview}\""
+            )
+    return warnings
 
 # ---------------------------------------------------------------------------
 # Mock data registry — topic-agnostic stand-ins used by the mock provider
@@ -167,17 +255,9 @@ def generate_structured(
         f"Return only the JSON object. No markdown code fences, no explanation."
     )
 
+    # --- Provider call ---
     try:
         response: ProviderResponse = provider.generate(augmented_system, user_prompt, temperature)
-        parsed = _parse_json_response(response.text, output_model)
-        return LLMResult(
-            data=parsed,
-            provider=provider_name,
-            model=response.model,
-            is_mock=False,
-            configured_provider=provider_name,
-            raw_text=response.text,
-        )
     except ImportError as exc:
         return _mock_fallback(
             output_model,
@@ -189,6 +269,39 @@ def generate_structured(
             output_model,
             configured_provider=provider_name,
             error=f"LLM call failed ({type(exc).__name__}: {exc}); using mock fallback.",
+        )
+
+    # --- JSON parse ---
+    try:
+        parsed = _parse_json_response(response.text, output_model)
+        return LLMResult(
+            data=parsed,
+            provider=provider_name,
+            model=response.model,
+            is_mock=False,
+            configured_provider=provider_name,
+            raw_text=response.text,
+        )
+    except Exception as parse_exc:  # noqa: BLE001
+        # One repair retry before falling back to mock.
+        repaired, ok = _try_repair(provider, response.text, output_model, temperature)
+        if ok:
+            return LLMResult(
+                data=repaired,
+                provider=provider_name,
+                model=response.model,
+                is_mock=False,
+                configured_provider=provider_name,
+                raw_text=response.text,
+                warning="structured_output_repaired=true",
+            )
+        return _mock_fallback(
+            output_model,
+            configured_provider=provider_name,
+            error=(
+                f"JSON parse failed ({type(parse_exc).__name__}: {parse_exc}); "
+                "repair also failed; using mock fallback."
+            ),
         )
 
 
@@ -241,13 +354,37 @@ def _build_provider(
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> Any:
-    """Strip optional markdown fences and parse JSON into output_model."""
-    cleaned = text.strip()
-    # Strip ```json ... ``` or ``` ... ``` blocks
-    cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
-    cleaned = re.sub(r"\n?```$", "", cleaned.strip())
-    data = json.loads(cleaned)
+    """Parse JSON from provider text into output_model via parse_json_object."""
+    data = parse_json_object(text)
     return output_model.model_validate(data)
+
+
+def _try_repair(
+    provider: AnthropicProvider | OpenAIProvider | GoogleProvider,
+    text: str,
+    output_model: type[BaseModel],
+    temperature: float,
+) -> tuple[Any, bool]:
+    """Attempt one repair call to fix malformed JSON output.
+
+    Sends the raw bad text back to the same provider with a strict repair
+    instruction.  Returns (parsed_data, True) on success or (None, False).
+    """
+    repair_system = (
+        "You are a JSON repair assistant. "
+        "Return only valid JSON with no commentary or explanation."
+    )
+    repair_user = (
+        "Convert the following malformed model output into valid JSON only. "
+        "Preserve all fields and content. Do not add commentary.\n\n"
+        + text
+    )
+    try:
+        response = provider.generate(repair_system, repair_user, temperature=0.0)
+        data = parse_json_object(response.text)
+        return output_model.model_validate(data), True
+    except Exception:  # noqa: BLE001
+        return None, False
 
 
 def _mock_result(output_model: type[BaseModel], *, configured_provider: str = "mock") -> LLMResult:

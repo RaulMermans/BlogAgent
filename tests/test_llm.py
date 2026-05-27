@@ -5,6 +5,8 @@ All tests run in mock mode and do not require any API key.
 
 from __future__ import annotations
 
+import pytest
+
 from blogagent.llm.client import generate_structured
 from blogagent.llm.schemas import (
     ClaimExtractionOutput,
@@ -793,3 +795,262 @@ def test_pipeline_completes_without_api_keys(monkeypatch):
     assert state.final_article_package is not None
     errors = validate_final_state(state)
     assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# parse_json_object — fences, surrounding text, strict
+# ---------------------------------------------------------------------------
+
+
+def test_parse_json_object_strict():
+    from blogagent.llm.client import parse_json_object
+
+    data = parse_json_object('{"key": "value"}')
+    assert data == {"key": "value"}
+
+
+def test_parse_json_object_strips_json_fence():
+    from blogagent.llm.client import parse_json_object
+
+    fenced = '```json\n{"research_questions": ["q1", "q2"]}\n```'
+    data = parse_json_object(fenced)
+    assert data == {"research_questions": ["q1", "q2"]}
+
+
+def test_parse_json_object_strips_plain_fence():
+    from blogagent.llm.client import parse_json_object
+
+    fenced = '```\n{"key": 1}\n```'
+    data = parse_json_object(fenced)
+    assert data == {"key": 1}
+
+
+def test_parse_json_object_extracts_from_surrounding_text():
+    from blogagent.llm.client import parse_json_object
+
+    surrounded = 'Here is the result:\n{"answer": 42}\nHope that helps!'
+    data = parse_json_object(surrounded)
+    assert data == {"answer": 42}
+
+
+def test_parse_json_object_raises_on_invalid():
+    import json
+
+    from blogagent.llm.client import parse_json_object
+
+    with pytest.raises(json.JSONDecodeError):
+        parse_json_object("not json at all")
+
+
+# ---------------------------------------------------------------------------
+# JSON repair retry — malformed → repair → success keeps is_mock=False
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_json_triggers_repair_before_mock_fallback(monkeypatch):
+    """First call returns malformed JSON; second (repair) call returns valid JSON.
+    Result must be is_mock=False with structured_output_repaired=true warning."""
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    call_count = [0]
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # Missing comma → JSONDecodeError
+            return ProviderResponse(
+                text='{"research_questions": ["q1" "q2"]}',
+                model="gemini-2.5-flash",
+                provider="google",
+            )
+        # Repair call returns valid JSON
+        return ProviderResponse(
+            text='{"research_questions": ["q1", "q2"]}',
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert call_count[0] == 2, "Repair call was not attempted"
+    assert result.is_mock is False
+    assert result.warning == "structured_output_repaired=true"
+
+
+def test_repair_success_preserves_live_provider_data(monkeypatch):
+    """After a successful repair, the returned data is from the live provider (not mock)."""
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        if temperature == 0.0:
+            # repair call
+            return ProviderResponse(
+                text='{"research_questions": ["repaired q1", "repaired q2"]}',
+                model="gemini-2.5-flash",
+                provider="google",
+            )
+        # first call — malformed
+        return ProviderResponse(
+            text='INVALID {research_questions: [broken',
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.is_mock is False
+    assert result.provider == "google"
+    assert result.data.research_questions == ["repaired q1", "repaired q2"]
+
+
+def test_failed_repair_falls_back_to_mock(monkeypatch):
+    """Both parse and repair fail → is_mock=True with error set."""
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def always_bad(self, system_prompt, user_prompt, temperature=0.2):
+        return ProviderResponse(
+            text="not json at all",
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", always_bad)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=ResearchPlanOutput,
+    )
+    assert result.is_mock is True
+    assert result.error is not None
+    assert "repair" in result.error.lower() or "failed" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# Recommendation prompt — exact count rule
+# ---------------------------------------------------------------------------
+
+
+def test_recommendation_draft_prompt_includes_exact_count_rule():
+    """Draft prompt must instruct the model to obey the exact requested count."""
+    from blogagent.agents import prompts
+
+    p = prompts.RECOMMENDATION_DRAFT_PROMPT.lower()
+    assert "exactly" in p or "exact" in p, (
+        "RECOMMENDATION_DRAFT_PROMPT is missing an exact-count rule"
+    )
+
+
+def test_recommendation_draft_prompt_forbids_one_more():
+    """Prompt must explicitly say 'not one more'."""
+    from blogagent.agents import prompts
+
+    p = prompts.RECOMMENDATION_DRAFT_PROMPT.lower()
+    assert "not one more" in p or "not more" in p or "not 1 more" in p or "not exceed" in p or (
+        "exactly" in p and "more" in p
+    ), "Prompt must guard against producing one extra item"
+
+
+def test_mock_recommendation_quick_picks_does_not_exceed_requested_count():
+    """Mock draft for 'Top 10' topic must not produce more than 10 Quick Picks bullets."""
+    import re
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("Top 10 running shoes for beginners")
+    assert state.final_article_package is not None
+    article = state.final_article_package.article_markdown
+
+    match = re.search(r"## Quick Picks\n(.*?)(?=\n##|\Z)", article, re.DOTALL)
+    if match:
+        bullets = re.findall(r"^[-*]", match.group(1), re.MULTILINE)
+        assert len(bullets) <= 10, (
+            f"Quick Picks has {len(bullets)} bullets for a 'Top 10' topic — must be ≤10"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Repeated-text guardrail
+# ---------------------------------------------------------------------------
+
+
+def test_detect_repeated_excerpts_catches_repeated_sentences():
+    """detect_repeated_excerpts flags a sentence that appears in 3+ sections."""
+    from blogagent.llm.client import detect_repeated_excerpts
+
+    repeated = "This is a very long sentence that appears in multiple sections of the article text."
+    article = "\n".join([
+        "## Section One",
+        f"Some intro. {repeated}",
+        "",
+        "## Section Two",
+        f"More content. {repeated}",
+        "",
+        "## Section Three",
+        f"Even more. {repeated}",
+    ])
+    warnings = detect_repeated_excerpts(article, min_phrase_length=30, threshold=3)
+    assert len(warnings) >= 1
+    assert any("repeated" in w.lower() for w in warnings)
+
+
+def test_detect_repeated_excerpts_no_false_positive():
+    """detect_repeated_excerpts should not flag short or non-repeated text."""
+    from blogagent.llm.client import detect_repeated_excerpts
+
+    article = "\n".join([
+        "## Introduction",
+        "Solar energy is a renewable resource that powers homes and businesses worldwide.",
+        "",
+        "## Key Facts",
+        "Photovoltaic cells convert sunlight into electricity using semiconductor materials.",
+        "",
+        "## Conclusion",
+        "Continued investment in solar infrastructure is essential for a sustainable future.",
+    ])
+    warnings = detect_repeated_excerpts(article, threshold=3)
+    assert warnings == []
+
+
+def test_detect_repeated_excerpts_threshold_two():
+    """A phrase in exactly 2 sections is not flagged with threshold=3."""
+    from blogagent.llm.client import detect_repeated_excerpts
+
+    repeated = "This is a very specific sentence that appears more than once in the document here."
+    article = "\n".join([
+        "## Section One",
+        repeated,
+        "",
+        "## Section Two",
+        repeated,
+        "",
+        "## Section Three",
+        "Something completely different and unrelated to the earlier content.",
+    ])
+    warnings = detect_repeated_excerpts(article, min_phrase_length=30, threshold=3)
+    assert warnings == []
+
+
+def test_pipeline_repeated_text_guardrail_does_not_break_pipeline():
+    """Pipeline must complete normally even when the repeated-text guardrail fires."""
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("The water cycle")
+    assert state.final_article_package is not None
+    assert state.blocked is False

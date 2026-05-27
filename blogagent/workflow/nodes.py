@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 
 from blogagent.agents import editor_agent, fact_check_evaluator
+from blogagent.llm.client import detect_repeated_excerpts
 from blogagent.llm.schemas import LLMResult
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
@@ -278,6 +279,11 @@ def write_draft(state: BlogRunState) -> BlogRunState:
     state.draft_seo_keywords = result.data.seo_keywords
     _event(state, _llm_event("editor.draft", result))
     _propagate_llm_warnings(state, "editor.draft", result)
+
+    # Repeated-text guardrail — warn if the same excerpt appears in 3+ sections.
+    for w in detect_repeated_excerpts(state.draft):
+        _warn(state, f"repeated-text: {w}")
+
     return state
 
 

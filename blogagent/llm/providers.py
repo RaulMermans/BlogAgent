@@ -17,6 +17,7 @@ to mock with a warning.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -100,6 +101,28 @@ class GoogleProvider:
         self._model = model
         self.timeout = timeout
 
+    @staticmethod
+    def _extract_text(response: Any) -> str:
+        """Safely concatenate text from all candidates and parts in a Gemini response.
+
+        Falls back to response.text if the candidate structure is unavailable.
+        """
+        try:
+            parts: list[str] = []
+            for candidate in response.candidates or []:
+                content = getattr(candidate, "content", None)
+                if content is None:
+                    continue
+                for part in getattr(content, "parts", []) or []:
+                    t = getattr(part, "text", None)
+                    if t:
+                        parts.append(t)
+            if parts:
+                return "".join(parts)
+        except Exception:  # noqa: BLE001
+            pass
+        return response.text or ""
+
     def generate(
         self, system_prompt: str, user_prompt: str, temperature: float = 0.2
     ) -> ProviderResponse:
@@ -124,7 +147,7 @@ class GoogleProvider:
                     response_mime_type="application/json",
                 ),
             )
-            text = response.text or ""
+            text = self._extract_text(response)
         except Exception:  # noqa: BLE001
             # Some older model versions don't support response_mime_type; retry without it.
             response = client.models.generate_content(
@@ -132,6 +155,6 @@ class GoogleProvider:
                 contents=f"{system_prompt}\n\n{user_prompt}",
                 config=types.GenerateContentConfig(temperature=temperature),
             )
-            text = response.text or ""
+            text = self._extract_text(response)
 
         return ProviderResponse(text=text, model=self._model, provider=self.name)

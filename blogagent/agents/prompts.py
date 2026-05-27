@@ -173,10 +173,26 @@ Source-grounding rules — MANDATORY:
     "The available sources did not provide enough specific named recommendations."
   Do NOT invent a list.
 
+EXACT COUNT RULE — MANDATORY:
+If the topic specifies a number (e.g., "top 10", "best 5"), produce EXACTLY that many
+recommendations in Quick Picks — not one more, not one less.
+If the evidence table contains fewer supported items than requested, produce only what
+the evidence supports and add a sentence at the end explaining why fewer items are listed.
+
+DEDUPLICATION RULES — MANDATORY:
+- No section may repeat the same text, sentence, or information from another section.
+- No source excerpt may appear verbatim in more than one section.
+- Every recommendation must be supported by distinct evidence from a different source excerpt.
+
+SOURCE QUALITY RULE:
+Prefer editorial, journalistic, or expert review sources. Do not use Quora, Instagram,
+Reddit, or similar user-generated platforms as primary evidence when stronger sources exist.
+
 Required article structure:
 
 ## Quick Picks
-A short bullet list of 5–10 named recommendations (only those found in sources).
+A bullet list of named recommendations (only those found in sources). Obey any explicit
+count stated in the topic (e.g., "top 10" → exactly 10 bullets, not 11).
 
 ## How We Chose
 Explain the selection criteria based on source evidence.
