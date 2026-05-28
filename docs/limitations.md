@@ -74,14 +74,17 @@ Caveats:
 
 ---
 
-## Revision Loop
+## Revision Loops
 
-The revision loop runs at most once (`_MAX_REVISIONS = 1`).
+**Quality revision:** The quality evaluator checks for HIGH-severity defects (top-N count mismatch, missing Quick Picks, missing financial disclaimer, generic output, etc.) and triggers the Revision Agent if any are found. This quality revision runs **at most once** per pipeline run.
 
-In mock mode, `revise_article` returns the draft unchanged with an explanatory summary —
-the revision loop therefore does not improve draft quality without a real LLM. This is
-expected: the loop exists to demonstrate the control flow and can be observed by inspecting
-`state.revision_summary` and `state.revision_count`.
+**Fact-check revision:** After the fact-check, if blocking issues are found and `revision_count < 1`, the fact-check revision runs. Because quality revision already consumed the revision budget, fact-check revision is skipped if quality revision ran.
+
+Total revision budget: **1 revision pass** across both quality and fact-check loops.
+
+In mock mode, both revision agents return the draft mostly unchanged with an explanatory summary. The loops exist to demonstrate control flow — improving draft quality requires a real LLM provider.
+
+Inspect `state.revision_summary` and `state.revision_count` to determine which loop ran.
 
 ---
 
@@ -104,6 +107,29 @@ In LLM mode, the evaluator uses an LLM to supplement deterministic blocking issu
 additional judgment, but is still bounded by the provided citations and sources.
 
 ---
+
+## Runtime Skills
+
+Editorial skills are **prompt-injected text**, not autonomous agents or tool-executing processes. They:
+- Do not make function calls
+- Have no persistent memory
+- Cannot access the web or external APIs
+- Do not change pipeline structure or step order
+
+Skills only affect the content of the system prompt sent to the LLM. Their benefit is entirely dependent on the LLM following the injected brief. In mock mode, skills are selected but have no visible effect (mock output is deterministic regardless of prompt content).
+
+## Source Quality Scoring
+
+Source quality classification is a **domain heuristic**, not a live quality assessment:
+- Unknown domains that are not in the explicit lists are classified as `medium` regardless of their actual editorial quality.
+- The classifier does not evaluate content — a high-domain source can still have a low-quality article for a given topic.
+- Domain lists are static and may become outdated as new authoritative sources emerge.
+
+The classifier is intentionally simple. It provides a usable editorial signal without LLM calls.
+
+## Staged Loader UI
+
+The loading animation in the browser UI is **client-side only** — it does not reflect actual pipeline stage progress. The API is a single synchronous blocking request. The stage labels cycle every 2 seconds as a UX aid, not as real-time status. There is no streaming or server-sent events in the MVP.
 
 ## Not Implemented
 

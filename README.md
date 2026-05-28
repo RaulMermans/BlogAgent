@@ -22,6 +22,12 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | LLM client layer (mock default; Anthropic/OpenAI/Google optional) | **Done** |
 | Editor Agent (research plan, outline, draft, revision) | **Done** — mock by default; LLM-gated via env |
 | Fact-Check Evaluator (claim extraction + judgment) | **Done** — mock by default; LLM-gated via env |
+| Runtime skill registry (6 skills, prompt injection) | **Done** |
+| Deterministic skill selection | **Done** |
+| Quality Evaluator (deterministic, 10 checks) | **Done** |
+| Quality-driven Revision Agent | **Done** — mock by default; LLM-gated via env |
+| Final quality validator (post-revision, warns not blocks) | **Done** |
+| Source quality scoring (domain heuristic, high/medium/low) | **Done** |
 | Heuristic claim extraction | **Done** |
 | Revision loop (max 1) | **Done** |
 | Heuristic citation matching (deterministic) | **Done** |
@@ -29,6 +35,9 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Mock/live output comparison CLI | **Done** |
 | GitHub Actions CI | **Done** — mock mode, no API keys required |
 | Vercel API scaffold | **Done** — mock-safe by default |
+| Agent Run Trace UI panel | **Done** |
+| Source quality badges in UI | **Done** |
+| Staged loader animation in UI | **Done** |
 | Persistence / database | Not yet |
 
 ---
@@ -60,14 +69,20 @@ The pipeline uses a **hybrid deterministic workflow** with two model roles:
 ```text
 User Topic
 → Intake Parser
-→ check_external_effects  (guardrail — blocks publishing requests)
-→ Editor Agent research plan
+→ check_external_effects   (guardrail — blocks publishing requests; extracts requested_count)
+→ select_skills            (deterministic: recommendation / financial / factual)
+→ Editor Agent research plan  (skill briefs injected)
 → web_search
 → webpage_extract
 → source_score
+→ score_source_quality     (high/medium/low per domain)
 → Evidence Table Builder
-→ Editor Agent outline
-→ Editor Agent draft
+→ Editor Agent outline     (skill briefs injected)
+→ Editor Agent draft       (skill briefs injected)
+→ Quality Evaluator        (10 deterministic checks; scores 0–100)
+→ [if HIGH-severity defect and revision_count < 1]
+    → Revision Agent       (quality-driven; mock or LLM)
+→ final_validate_quality   (post-revision gate — warns, never hard-blocks)
 → claim_extractor
 → citation_matcher
 → Fact-Check Evaluator

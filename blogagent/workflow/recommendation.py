@@ -76,3 +76,42 @@ def is_real_search_active() -> bool:
     """Return True if a real (non-mock) search provider is configured via env var."""
     provider = os.getenv("BLOGAGENT_SEARCH_PROVIDER", "mock").strip().lower()
     return provider != "mock"
+
+
+def extract_requested_count(topic: str) -> "int | None":
+    """Extract an explicit item count from the topic string.
+
+    Recognises patterns like 'top 10', 'best 5', 'top five', 'best ten'.
+    Returns None if no explicit count is stated.
+    """
+    import re  # noqa: PLC0415
+
+    lower = topic.lower()
+
+    # Numeric: "top 10", "best 5"
+    m = re.search(r"\b(?:top|best)\s+(\d+)\b", lower)
+    if m:
+        return int(m.group(1))
+
+    # Word numbers: "top five", "best ten"
+    _WORD_NUMBERS = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "fifteen": 15,
+        "twenty": 20,
+    }
+    for word, val in _WORD_NUMBERS.items():
+        if re.search(rf"\b(?:top|best)\s+{word}\b", lower):
+            return val
+
+    return None

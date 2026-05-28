@@ -75,7 +75,9 @@ def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
 # ---------------------------------------------------------------------------
 
 
-def generate_research_plan(topic: str, is_recommendation: bool = False) -> LLMResult:
+def generate_research_plan(
+    topic: str, is_recommendation: bool = False, skill_briefs: str = ""
+) -> LLMResult:
     """Return 5 targeted research questions for the topic."""
     if not _use_llm():
         return _mock_llm_result(_mock_research_plan(topic, is_recommendation))
@@ -84,6 +86,9 @@ def generate_research_plan(topic: str, is_recommendation: bool = False) -> LLMRe
         system_prompt = prompts.RECOMMENDATION_RESEARCH_PLAN_PROMPT.format(topic=topic)
     else:
         system_prompt = prompts.RESEARCH_PLAN_PROMPT.format(topic=topic)
+
+    if skill_briefs:
+        system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
@@ -127,6 +132,7 @@ def generate_outline(
     evidence_table: list[EvidenceItem],
     source_scores: list[SourceScore],
     is_recommendation: bool = False,
+    skill_briefs: str = "",
 ) -> LLMResult:
     """Return a structured blog outline grounded in the evidence table."""
     if not _use_llm():
@@ -141,6 +147,9 @@ def generate_outline(
         system_prompt = prompts.OUTLINE_PROMPT.format(
             topic=topic, evidence_table=evidence_summary
         )
+    if skill_briefs:
+        system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
+
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
         user_prompt="Generate the blog outline as a JSON object.",
@@ -195,6 +204,7 @@ def write_article_draft(
     source_scores: list[SourceScore],
     is_recommendation: bool = False,
     is_financial: bool = False,
+    skill_briefs: str = "",
 ) -> LLMResult:
     """Write a full article draft grounded in the evidence table.
 
@@ -224,6 +234,9 @@ def write_article_draft(
         )
         if is_financial:
             system_prompt += prompts.FINANCIAL_DRAFT_ADDENDUM
+
+    if skill_briefs:
+        system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,

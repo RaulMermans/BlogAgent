@@ -133,6 +133,18 @@ class BlogRunState(BaseModel):
     # Recommendation / financial intent flags (set deterministically by guardrail)
     is_recommendation: bool = False
     is_financial: bool = False
+    # Skill selection (deterministic, set after intent detection)
+    selected_skills: list[str] = Field(default_factory=list)
+    # Requested item count extracted from topic (e.g. "top 10" → 10)
+    requested_count: Optional[int] = None
+    # Source quality classification (high/medium/low per source)
+    source_quality_scores: list[dict] = Field(default_factory=list)
+    # Quality evaluation result (dict-serialized QualityEvaluationOutput)
+    quality_evaluation: Optional[dict] = None
+    # Final validation warnings (appended after post-revision quality check)
+    final_validation_warnings: list[str] = Field(default_factory=list)
+    # Human-readable agent run trace (built at end of pipeline)
+    run_trace: list[str] = Field(default_factory=list)
     # Run trace fields
     warnings: list[str] = Field(default_factory=list)
     provider_events: list[str] = Field(default_factory=list)

@@ -246,3 +246,30 @@ Original draft:
 Fact-check blocking issues:
 {issues}
 """
+
+QUALITY_REVISION_PROMPT = """\
+You are a senior editor revising a blog post based on a quality evaluation report.
+
+Quality defects to fix:
+{defects}
+
+Active editorial skills:
+{skill_briefs}
+
+Source quality context:
+{source_quality_summary}
+
+Revision constraints (MANDATORY):
+- Fix each identified defect directly and completely.
+- If is_recommendation={is_recommendation} and requested_count={requested_count}:
+  ensure Quick Picks has EXACTLY {requested_count} named items — not more, not fewer.
+- Remove any text that repeats across sections verbatim.
+- Do not invent recommendations, products, or facts not supported by the evidence.
+- For financial topics: preserve the "not financial advice" disclaimer at the top.
+- Prefer fewer strong, evidence-backed picks over more weak ones.
+- Improve readability: make headings specific, intro engaging, takeaway useful.
+- Do not preserve bad structure — rewrite sections that are generic or placeholder-like.
+
+Original draft (may be truncated to 4000 chars):
+{draft}
+"""

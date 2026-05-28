@@ -14,16 +14,21 @@ from blogagent.workflow.nodes import (
     _propagate_llm_warnings,
     build_evidence_table,
     check_external_effects,
+    evaluate_quality,
     extract_claims,
     extract_webpages,
+    final_validate_quality,
     generate_outline,
     generate_research_questions,
     intake_topic,
     match_citations,
     package_article,
+    revise_if_needed,
     run_fact_check,
     run_web_search,
+    score_source_quality,
     score_sources,
+    select_skills,
     write_draft,
 )
 from blogagent.workflow.state import BlogRunState
@@ -71,14 +76,19 @@ def _compute_execution_mode(state: BlogRunState) -> str:
 # that tests can monkeypatch blogagent.workflow.graph.run_fact_check cleanly.
 _PRE_FACTCHECK = [
     intake_topic,
-    check_external_effects,  # guardrail — sets state.blocked; pipeline short-circuits if True
+    check_external_effects,    # guardrail — sets state.blocked; short-circuits if True
+    select_skills,             # deterministic skill selection based on intent
     generate_research_questions,
     run_web_search,
     extract_webpages,
     score_sources,
+    score_source_quality,      # classify sources as high/medium/low
     build_evidence_table,
     generate_outline,
     write_draft,
+    evaluate_quality,          # deterministic quality checks on draft
+    revise_if_needed,          # quality-driven revision (at most once)
+    final_validate_quality,    # post-revision quality gate (packages with warnings)
     extract_claims,
     match_citations,
 ]
@@ -94,6 +104,7 @@ def run_pipeline(topic: str) -> BlogRunState:
         state.stage_timings[step.__name__] = round(time.monotonic() - t0, 3)
         if state.blocked:
             state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
+            state.run_trace = [f"✗ Blocked: {state.block_reason[:120]}"]
             return state
 
     # Initial fact-check.
@@ -134,7 +145,89 @@ def run_pipeline(topic: str) -> BlogRunState:
 
     # Compute execution_mode from what actually ran.
     state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
+
+    # Build agent run trace for UI display.
+    state.run_trace = _build_run_trace(state)
+
     return state
+
+
+def _build_run_trace(state: BlogRunState) -> list[str]:
+    """Build a human-readable agent run trace from pipeline state."""
+    trace: list[str] = []
+
+    # Intent
+    if state.is_recommendation:
+        intent = "recommendation"
+    elif state.is_financial:
+        intent = "financial"
+    else:
+        intent = "factual"
+    trace.append(f"✓ Intent: {intent}")
+
+    # Skills
+    if state.selected_skills:
+        trace.append(f"✓ Skills: {', '.join(state.selected_skills)}")
+
+    # Search
+    search_event = next(
+        (e for e in state.provider_events if e.startswith("search:")), None
+    )
+    if search_event:
+        trace.append(f"✓ {search_event}")
+
+    # Source quality
+    if state.source_quality_scores:
+        high = sum(1 for s in state.source_quality_scores if s.get("quality") == "high")
+        medium = sum(
+            1 for s in state.source_quality_scores if s.get("quality") == "medium"
+        )
+        low = sum(1 for s in state.source_quality_scores if s.get("quality") == "low")
+        trace.append(f"✓ Source quality: {high} high, {medium} medium, {low} low")
+
+    # Draft provider
+    draft_event = next(
+        (e for e in state.provider_events if "editor.draft" in e), None
+    )
+    if draft_event:
+        # Extract just the actual_provider part for readability.
+        import re as _re  # noqa: PLC0415
+
+        m = _re.search(r"actual_provider=(\S+)", draft_event)
+        provider_name = m.group(1) if m else "unknown"
+        trace.append(f"✓ Draft: {provider_name}")
+
+    # Quality evaluation
+    if state.quality_evaluation:
+        ev = state.quality_evaluation
+        symbol = "✓" if ev.get("passes") else "⚠"
+        defect_count = len(ev.get("defects", []))
+        trace.append(
+            f"{symbol} Quality evaluator: score={ev.get('score', 0)}/100 "
+            f"{'passed' if ev.get('passes') else 'failed'}"
+            f"{f', {defect_count} defect(s)' if defect_count else ''}"
+        )
+
+    # Revision
+    revision_event = next(
+        (e for e in state.provider_events if "revision" in e), None
+    )
+    if revision_event:
+        m2 = _re.search(r"actual_provider=(\S+)", revision_event)
+        rev_provider = m2.group(1) if m2 else "unknown"
+        trace.append(f"✓ Revision: {rev_provider}")
+    elif state.revision_count == 0:
+        trace.append("✓ Revision: not required")
+
+    # Final validation
+    if state.final_validation_warnings:
+        for w in state.final_validation_warnings:
+            trace.append(f"⚠ {w}")
+        trace.append("⚠ Final validation: passed with warnings")
+    else:
+        trace.append("✓ Final validation: passed")
+
+    return trace
 
 
 def validate_final_state(state: BlogRunState) -> list[str]:

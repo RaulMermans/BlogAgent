@@ -65,6 +65,14 @@ class RunResponse(BaseModel):
     revision_count: int
     warnings: list[str]
     provider_events: list[str]
+    # Extended fields (optional for backward compatibility)
+    selected_skills: list[str] = []
+    quality_evaluation: dict[str, Any] = {}
+    revision_summary: str = ""
+    source_quality_scores: list[dict[str, Any]] = []
+    requested_count: int | None = None
+    final_validation_warnings: list[str] = []
+    run_trace: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +223,7 @@ def _run_topic(topic: str) -> RunResponse:
             revision_count=0,
             warnings=list(state.warnings),
             provider_events=list(state.provider_events),
+            run_trace=list(state.run_trace),
         )
 
     pkg = state.final_article_package
@@ -240,6 +249,13 @@ def _run_topic(topic: str) -> RunResponse:
         revision_count=state.revision_count,
         warnings=list(state.warnings),
         provider_events=list(state.provider_events),
+        selected_skills=list(state.selected_skills),
+        quality_evaluation=dict(state.quality_evaluation) if state.quality_evaluation else {},
+        revision_summary=state.revision_summary or "",
+        source_quality_scores=list(state.source_quality_scores),
+        requested_count=state.requested_count,
+        final_validation_warnings=list(state.final_validation_warnings),
+        run_trace=list(state.run_trace),
     )
 
 
@@ -420,6 +436,51 @@ def _build_app_html() -> str:
     .source-list { list-style: none; padding: 0; }
     .source-list li { padding: 0.3rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; }
     .source-list li:last-child { border-bottom: none; }
+
+    .quality-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+    .quality-badge.high { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    .quality-badge.medium { background: #fef9c3; color: #713f12; border: 1px solid #fde047; }
+    .quality-badge.low { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+    .trace-list { list-style: none; padding: 0; }
+    .trace-list li { padding: 0.25rem 0; font-size: 0.85rem; font-family: monospace; border-bottom: 1px solid #eee; }
+    .trace-list li:last-child { border-bottom: none; }
+    .trace-list li.ok { color: #166534; }
+    .trace-list li.warn { color: #854d0e; }
+    .trace-list li.blocked { color: #b91c1c; }
+
+    .skill-tag {
+      display: inline-block;
+      background: #f0f9ff;
+      color: #0369a1;
+      border: 1px solid #bae6fd;
+      border-radius: 4px;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.78rem;
+      margin: 0.15rem 0.2rem 0.15rem 0;
+    }
+
+    #loader-status {
+      display: none;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+      color: #2563eb;
+      font-weight: 500;
+    }
+    .loader-dot { display: inline-block; animation: blink 1.2s infinite; }
+    .loader-dot:nth-child(2) { animation-delay: 0.2s; }
+    .loader-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -456,8 +517,8 @@ def _build_app_html() -> str:
     </div>
 
     <div id="status"></div>
+    <div id="loader-status"><span id="loader-stage">Planning article</span><span class="loader-dot">.</span><span class="loader-dot">.</span><span class="loader-dot">.</span></div>
     <div id="error-box"></div>
-
 
     <details style="margin-bottom:0.8rem;">
       <summary>Debug</summary>
@@ -499,6 +560,11 @@ def _build_app_html() -> str:
       <details id="sources-details">
         <summary id="sources-summary">Sources</summary>
         <div class="details-body"><ul class="source-list" id="sources-list"></ul></div>
+      </details>
+
+      <details id="trace-details" style="display:none">
+        <summary>Agent Run Trace</summary>
+        <div class="details-body"><ul class="trace-list" id="trace-list"></ul></div>
       </details>
 
       <details id="warnings-details" style="display:none">
@@ -619,13 +685,45 @@ def _build_app_html() -> str:
     }
   }
 
+  const LOADER_STAGES = [
+    'Planning article',
+    'Selecting editorial skills',
+    'Searching sources',
+    'Scoring source quality',
+    'Building evidence table',
+    'Drafting article',
+    'Evaluating quality',
+    'Revising weak sections',
+    'Packaging final post',
+  ];
+  let _loaderTimer = null;
+  let _loaderIdx = 0;
+
+  function startLoader() {
+    _loaderIdx = 0;
+    const stageEl = document.getElementById('loader-stage');
+    const loaderEl = document.getElementById('loader-status');
+    loaderEl.style.display = 'block';
+    stageEl.textContent = LOADER_STAGES[0];
+    _loaderTimer = setInterval(() => {
+      _loaderIdx = (_loaderIdx + 1) % LOADER_STAGES.length;
+      stageEl.textContent = LOADER_STAGES[_loaderIdx];
+    }, 2000);
+  }
+
+  function stopLoader() {
+    if (_loaderTimer) { clearInterval(_loaderTimer); _loaderTimer = null; }
+    document.getElementById('loader-status').style.display = 'none';
+  }
+
   async function generate() {
     const secret = sessionStorage.getItem(SECRET_KEY) || '';
     const topic = document.getElementById('topic').value.trim();
     if (!topic) { showError('Please enter a topic'); return; }
 
     clearOutput();
-    setStatus('Generating...');
+    setStatus('');
+    startLoader();
     document.getElementById('generateButton').disabled = true;
 
     const debugInfo = {
@@ -685,6 +783,7 @@ def _build_app_html() -> str:
       setDebug(debugInfo);
       showError('Network error: ' + err.message);
     } finally {
+      stopLoader();
       document.getElementById('generateButton').disabled = false;
     }
   }
@@ -716,6 +815,10 @@ def _build_app_html() -> str:
     const claimStatusCounts = data.claim_status_counts || data.claimStatusCounts || {};
     const providerEvents = data.provider_events || data.providerEvents || [];
     const executionMode = data.execution_mode || data.executionMode || '';
+    const selectedSkills = data.selected_skills || [];
+    const sourceQualityScores = data.source_quality_scores || [];
+    const runTrace = data.run_trace || [];
+    const qualityEval = data.quality_evaluation || {};
 
     if (data.blocked) {
       showError('Request blocked: ' + (data.block_reason || 'publishing requests are not allowed.'));
@@ -743,6 +846,27 @@ def _build_app_html() -> str:
     if (claimStatusCounts.unsupported) addStat(statsRow, claimStatusCounts.unsupported + ' unsupported', 'danger');
     addStat(statsRow, (data.revision_count || 0) + ' revision' + ((data.revision_count || 0) !== 1 ? 's' : ''), 'ok');
     addStat(statsRow, executionMode || 'mock', 'ok');
+    if (qualityEval && qualityEval.score !== undefined) {
+      const qType = qualityEval.passes ? 'ok' : 'warn';
+      addStat(statsRow, 'quality ' + qualityEval.score + '/100', qType);
+    }
+
+    // Skills row
+    if (selectedSkills.length) {
+      const skillsDiv = document.createElement('div');
+      skillsDiv.style.marginBottom = '0.8rem';
+      const skillsLabel = document.createElement('div');
+      skillsLabel.className = 'meta-label';
+      skillsLabel.textContent = 'Editorial Skills';
+      skillsDiv.appendChild(skillsLabel);
+      selectedSkills.forEach(sk => {
+        const span = document.createElement('span');
+        span.className = 'skill-tag';
+        span.textContent = sk;
+        skillsDiv.appendChild(span);
+      });
+      document.getElementById('title-display').closest('.form-card').appendChild(skillsDiv);
+    }
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
 
@@ -755,13 +879,50 @@ def _build_app_html() -> str:
 
     document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
 
+    // Sources with quality badges
     const srcSummary = document.getElementById('sources-summary');
     srcSummary.textContent = 'Sources (' + sourceCount + ')';
     const srcList = document.getElementById('sources-list');
-    srcList.innerHTML = '<li style="color:#888;font-style:italic">Source URLs are not included in the compact API response. Use the CLI with --json for full source details.</li>';
+    if (sourceQualityScores.length) {
+      srcList.innerHTML = '';
+      sourceQualityScores.forEach(sq => {
+        const li = document.createElement('li');
+        const badge = '<span class="quality-badge ' + (sq.quality || 'medium') + '">' + (sq.quality || '?') + '</span>';
+        const titleText = sq.title ? sq.title : (sq.url || '');
+        li.innerHTML = badge + ' ' + escapeHtml(titleText);
+        if (sq.reason) {
+          const small = document.createElement('span');
+          small.style.cssText = 'color:#888;margin-left:0.5rem;font-size:0.78rem;';
+          small.textContent = '— ' + sq.reason;
+          li.appendChild(small);
+        }
+        srcList.appendChild(li);
+      });
+    } else {
+      srcList.innerHTML = '<li style="color:#888;font-style:italic">Source URLs are not included in the compact API response. Use the CLI with --json for full source details.</li>';
+    }
+
+    // Agent Run Trace
+    if (runTrace.length) {
+      document.getElementById('trace-details').style.display = '';
+      const traceList = document.getElementById('trace-list');
+      traceList.innerHTML = '';
+      runTrace.forEach(line => {
+        const li = document.createElement('li');
+        li.textContent = line;
+        if (line.startsWith('✓')) li.className = 'ok';
+        else if (line.startsWith('⚠')) li.className = 'warn';
+        else if (line.startsWith('✗')) li.className = 'blocked';
+        traceList.appendChild(li);
+      });
+    }
 
     document.getElementById('output-section').style.display = 'block';
     document.getElementById('output-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   function addStat(parent, text, type) {
@@ -814,6 +975,12 @@ def _build_app_html() -> str:
     document.getElementById('error-box').textContent = '';
     document.getElementById('output-section').style.display = 'none';
     document.getElementById('warnings-details').style.display = 'none';
+    document.getElementById('trace-details').style.display = 'none';
+    document.getElementById('trace-list').innerHTML = '';
+    document.getElementById('sources-list').innerHTML = '';
+    // Remove any dynamically injected skills rows from prior runs
+    const skillDivs = document.querySelectorAll('.form-card .meta-label');
+    skillDivs.forEach(el => { if (el.textContent === 'Editorial Skills') el.closest('div').remove(); });
   }
 
   document.addEventListener('DOMContentLoaded', init);

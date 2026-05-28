@@ -15,6 +15,7 @@ from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
 from blogagent.workflow.recommendation import (
     FINANCIAL_DISCLAIMER_WARNING,
     MOCK_RECOMMENDATION_WARNING,
+    extract_requested_count,
     is_financial_topic,
     is_real_search_active,
     is_recommendation_topic,
@@ -126,6 +127,9 @@ def check_external_effects(state: BlogRunState) -> BlogRunState:
     state.is_recommendation = is_recommendation_topic(state.topic)
     state.is_financial = is_financial_topic(state.topic)
 
+    # Extract explicit item count from topic (e.g. "top 10" → 10).
+    state.requested_count = extract_requested_count(state.topic)
+
     # Mock-search guardrail: recommendation topics need real sources to produce
     # named-product lists.  We produce a limited response (not a full block) so
     # schema validation still passes, but we surface a clear warning.
@@ -156,9 +160,12 @@ def intake_topic(state: BlogRunState) -> BlogRunState:
 
 def generate_research_questions(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce research questions."""
+    from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
+
     result = editor_agent.generate_research_plan(
         topic=state.topic,
         is_recommendation=state.is_recommendation,
+        skill_briefs=get_skill_briefs(state.selected_skills),
     )
     state.research_questions = result.data.research_questions
     _event(state, _llm_event("editor.research_plan", result))
@@ -236,11 +243,14 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
 
 def generate_outline(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce an evidence-grounded outline."""
+    from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
+
     result = editor_agent.generate_outline(
         topic=state.topic,
         evidence_table=state.evidence_table,
         source_scores=state.source_scores,
         is_recommendation=state.is_recommendation,
+        skill_briefs=get_skill_briefs(state.selected_skills),
     )
     from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
 
@@ -266,6 +276,8 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         target_word_count=state.outline.target_word_count,
         seo_keywords=state.outline.seo_keywords,
     )
+    from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
+
     result = editor_agent.write_article_draft(
         topic=state.topic,
         outline=outline_out,
@@ -273,6 +285,7 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         source_scores=state.source_scores,
         is_recommendation=state.is_recommendation,
         is_financial=state.is_financial,
+        skill_briefs=get_skill_briefs(state.selected_skills),
     )
     state.draft = result.data.article_markdown
     state.draft_meta_description = result.data.meta_description
@@ -366,6 +379,169 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         passed=passed,
         blocking_issues=all_blocking,
     )
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Skill selection
+# ---------------------------------------------------------------------------
+
+
+def select_skills(state: BlogRunState) -> BlogRunState:
+    """Deterministically select editorial skills based on topic intent."""
+    from blogagent.skills.loader import select_skills as _select_skills  # noqa: PLC0415
+
+    state.selected_skills = _select_skills(
+        topic=state.topic,
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+    )
+    _event(state, f"skills: selected={','.join(state.selected_skills)}")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Source quality classification
+# ---------------------------------------------------------------------------
+
+
+def score_source_quality(state: BlogRunState) -> BlogRunState:
+    """Classify each scored source as high / medium / low quality."""
+    from blogagent.tools.source_quality import classify_source_quality  # noqa: PLC0415
+
+    state.source_quality_scores = [
+        classify_source_quality(s).model_dump() for s in state.source_scores
+    ]
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Quality evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_quality(state: BlogRunState) -> BlogRunState:
+    """Run deterministic quality checks on the draft."""
+    from blogagent.agents.quality_evaluator import (  # noqa: PLC0415
+        evaluate_quality as _evaluate,
+    )
+
+    result = _evaluate(
+        topic=state.topic,
+        draft=state.draft,
+        evidence_table=state.evidence_table,
+        source_scores=state.source_scores,
+        source_quality_scores=state.source_quality_scores,
+        warnings=list(state.warnings),
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+        requested_count=state.requested_count,
+        selected_skills=state.selected_skills,
+    )
+    state.quality_evaluation = result.model_dump()
+    _event(
+        state,
+        f"quality_eval: score={result.score} passes={result.passes} "
+        f"revision_required={result.revision_required} defects={len(result.defects)}",
+    )
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Quality-driven revision (runs at most once per pipeline)
+# ---------------------------------------------------------------------------
+
+_QUALITY_MAX_REVISIONS = 1  # matches _MAX_REVISIONS in graph.py
+
+
+def revise_if_needed(state: BlogRunState) -> BlogRunState:
+    """Call the Revision Agent when the quality evaluator requires it."""
+    if state.quality_evaluation is None:
+        return state
+    if not state.quality_evaluation.get("revision_required", False):
+        return state
+    if state.revision_count >= _QUALITY_MAX_REVISIONS:
+        _warn(state, "Quality revision skipped: revision limit reached.")
+        return state
+
+    from blogagent.agents.revision_agent import (  # noqa: PLC0415
+        revise_with_quality_context,
+    )
+
+    llm_result = revise_with_quality_context(
+        topic=state.topic,
+        draft=state.draft,
+        quality_evaluation=state.quality_evaluation,
+        warnings=list(state.warnings),
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+        requested_count=state.requested_count,
+        selected_skills=state.selected_skills,
+        source_quality_scores=state.source_quality_scores,
+    )
+
+    state.draft = llm_result.data.revised_markdown
+    state.revision_summary = llm_result.data.revision_summary
+    state.revision_count += 1
+    _event(state, _llm_event("editor.quality_revision", llm_result))
+    _propagate_llm_warnings(state, "editor.quality_revision", llm_result)
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Final validation (post-revision quality gate — packages with warnings)
+# ---------------------------------------------------------------------------
+
+
+def final_validate_quality(state: BlogRunState) -> BlogRunState:
+    """Deterministic final validation after revision.
+
+    Does NOT block factual, low-risk topics unless the article is empty or unsafe.
+    Appends warnings for imperfect articles but always allows packaging.
+    """
+    import re as _re  # noqa: PLC0415
+
+    fin_warns: list[str] = []
+
+    # Empty article is always a hard warning.
+    if not state.draft.strip():
+        fin_warns.append("Final validation: article_markdown is empty after revision.")
+
+    # Financial disclaimer must survive revision.
+    if state.is_financial:
+        lower = state.draft.lower()
+        has_disclaimer = (
+            "not financial advice" in lower
+            or "educational purposes only" in lower
+            or "consult a qualified financial" in lower
+        )
+        if not has_disclaimer:
+            fin_warns.append(
+                "Final validation: financial disclaimer missing after revision."
+            )
+
+    # Top-N count re-check post-revision.
+    if state.is_recommendation and state.requested_count is not None:
+        m = _re.search(
+            r"##\s*Quick Picks\s*\n(.*?)(?=\n##|\Z)", state.draft, _re.DOTALL
+        )
+        actual = len(_re.findall(r"^\s*[-*]\s+.+", m.group(1), _re.MULTILINE)) if m else 0
+        if actual != state.requested_count:
+            fin_warns.append(
+                f"Final validation: top-N count still mismatched "
+                f"({actual} vs {state.requested_count} requested)."
+            )
+
+    # Repeated-text re-check.
+    from blogagent.llm.client import detect_repeated_excerpts  # noqa: PLC0415
+
+    for w in detect_repeated_excerpts(state.draft):
+        fin_warns.append(f"Final validation: {w}")
+
+    state.final_validation_warnings = fin_warns
+    for w in fin_warns:
+        _warn(state, w)
+
     return state
 
 

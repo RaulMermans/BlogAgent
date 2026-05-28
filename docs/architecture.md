@@ -71,25 +71,51 @@ The mock provider has registered responses for every output schema. All tests ru
 ## Deterministic Pipeline Steps
 
 ```text
-intake_topic             → normalize and validate topic string
-check_external_effects   → guardrail: block publishing/posting requests immediately
-generate_research_qs     → Editor Agent: research planning (mock or LLM)
+intake_topic             → normalize and validate topic string; detect recommendation/financial intent
+check_external_effects   → guardrail: block publishing/posting requests; extract requested_count
+select_skills            → deterministic skill selection based on intent (recommendation/financial/factual)
+generate_research_qs     → Editor Agent: research planning (mock or LLM); skill briefs injected
 run_web_search           → call web_search tool (mock default; Tavily optional via env)
 extract_webpages         → call webpage_extract tool (httpx + BS4; mock for mock URLs)
 score_sources            → call source_score tool (deterministic; no LLM)
+score_source_quality     → classify each source as high/medium/low quality (domain heuristic)
 build_evidence_table     → assemble EvidenceItem list from scored sources
-generate_outline         → Editor Agent: outline (mock or LLM)
-write_draft              → Editor Agent: draft (mock or LLM)
+generate_outline         → Editor Agent: outline (mock or LLM); skill briefs injected
+write_draft              → Editor Agent: draft (mock or LLM); skill briefs injected
+evaluate_quality         → deterministic quality checks on draft; produces QualityEvaluationOutput
+revise_if_needed         → Revision Agent called if any HIGH-severity defect (at most once)
+final_validate_quality   → post-revision gate: financial disclaimer, top-N, repeated text (never hard-blocks)
 extract_claims           → claim_extractor tool (heuristic or LLM)
 match_citations          → citation_matcher tool (deterministic heuristic)
 run_fact_check           → assemble FactCheckReport (+ optional LLM judgment)
-[revision loop]          → Editor Agent revision + re-run claims/citations/fact-check
+[fact-check revision]    → Editor Agent fact-check revision + re-run claims/citations/fact-check
 package_article          → assemble and validate ArticlePackage (with SEO fields)
 ```
 
 ---
 
-## Revision Loop
+## Quality Evaluator and Evaluator-Optimizer Loop
+
+After drafting, `evaluate_quality` runs deterministic checks:
+
+| Check | Severity | Condition |
+|---|---|---|
+| Top-N count mismatch | HIGH | Requested N in topic, Quick Picks has different count |
+| Quick Picks missing | HIGH | Recommendation article has no Quick Picks section |
+| Financial disclaimer missing | HIGH | Financial topic has no disclaimer |
+| Direct buy/sell language | HIGH | Draft contains "buy this stock", "invest in X now", etc. |
+| Weak source dominance | HIGH (rec) / MEDIUM | >60% of sources are low quality |
+| Repeated text | MEDIUM | Text blocks repeated across sections |
+| No H1 title | MEDIUM | Draft has no `# Heading` |
+| Fewer than 2 headings | LOW | Draft structure is weak |
+| Generic/placeholder output | HIGH | Draft is under 100 chars or contains [Placeholder] |
+| Missing Final Takeaway | LOW | Recommendation article missing closing section |
+
+If any HIGH-severity defect is present, `revision_required=True` and `revise_if_needed` calls the **Revision Agent** (mock or LLM). This quality revision runs **at most once**.
+
+`final_validate_quality` then re-checks post-revision and appends warnings — it never hard-blocks. The warnings propagate to `final_validation_warnings` in state and are displayed in the UI.
+
+## Fact-Check Revision Loop
 
 After the initial fact-check, if `fact_check_report.passed = False` and `revision_count < 1`:
 
@@ -99,7 +125,7 @@ After the initial fact-check, if `fact_check_report.passed = False` and `revisio
 4. `state.revision_count` is incremented
 5. Claim extraction, citation matching, and fact-check re-run
 
-The loop runs **at most once** (`_MAX_REVISIONS = 1`). In mock mode, the revision returns the draft unchanged with an explanatory summary — no infinite loop is possible.
+The total revision budget across quality + fact-check revisions is **1**. In mock mode, the revision returns the draft unchanged with an explanatory summary — no infinite loop is possible.
 
 ---
 
@@ -194,6 +220,34 @@ This means `execution_mode=mock` when a configured live provider falls back due 
 
 ---
 
+## Runtime Skill Registry
+
+Six editorial skills are defined in `blogagent/skills/specs.py`. Each skill has a name and a compressed 1-3 line brief. Skills are selected deterministically based on topic intent and injected into agent prompts as plain text before LLM calls.
+
+| Skill | Selected when |
+|---|---|
+| `recommendation-writing` | Topic is recommendation-style |
+| `financial-safety` | Topic involves financial/investment content |
+| `source-quality-assessment` | Recommendation or financial topic |
+| `citation-grounding` | Always (factual, recommendation, financial) |
+| `seo-blog-writing` | Always |
+| `editorial-revision` | Recommendation or financial topic |
+
+Skills are **prompt-injected text**, not autonomous tools or agents. They do not make function calls, have no memory, and do not change pipeline structure. Skill selection is fully deterministic: no LLM involved.
+
+## Source Quality Scoring
+
+After `score_sources`, `score_source_quality` classifies each source as `high`, `medium`, or `low` quality using domain heuristics (`blogagent/tools/source_quality.py`):
+
+- **Low:** Quora, Reddit, Instagram, TikTok, Pinterest, Twitter/X, Facebook, Tumblr, Yelp, Yahoo Answers, Ask.com — or any mock placeholder source.
+- **High:** Wikipedia, Britannica, BBC, Reuters, AP, NYT, Guardian, WaPo, Wired, Nature, Science, NIH, CDC, WHO, Wirecutter, PCMag, TechRadar, Fragrantica, and other recognised editorial/expert publications; `.edu` and `.gov` TLDs.
+- **Medium:** all other domains.
+
+Source quality scores are stored in `state.source_quality_scores` and used by:
+- The quality evaluator (triggers `weak_source_dominance` defect if >60% low)
+- The Revision Agent prompt (provides source quality context)
+- The UI source panel (renders quality badges)
+
 ## State Object
 
 `BlogRunState` is a Pydantic model passed through every step. Each step receives the full state and returns the modified state. No global mutable state.
@@ -202,6 +256,12 @@ Key fields:
 - `blocked: bool` — set by `check_external_effects`
 - `block_reason: str` — human-readable explanation
 - `requires_approval: bool` — True when an external effect was requested
+- `selected_skills: list[str]` — editorial skills selected for this topic
+- `requested_count: int | None` — extracted from topic (e.g. "top 10" → 10)
+- `source_quality_scores: list[dict]` — per-source quality classification
+- `quality_evaluation: dict | None` — output of QualityEvaluationOutput
+- `final_validation_warnings: list[str]` — warnings from final_validate_quality
+- `run_trace: list[str]` — human-readable ✓/⚠/✗ agent run trace for the UI
 - `draft_meta_description: str` — SEO description from `DraftOutput`
 - `draft_seo_keywords: list[str]` — keywords from `DraftOutput`
 - `revision_summary: str` — what changed in revision
@@ -277,6 +337,13 @@ This is not production auth — there are no sessions, accounts, or rate limitin
 `GET /app` returns a single-page HTML interface. It calls `POST /run` with `fetch()`,
 renders the article in a blog card using `white-space: pre-wrap`, and provides buttons
 to copy the markdown, download `.md`, and download the full JSON response.
+
+The UI features:
+- **Staged loader**: 9 stage labels cycle every 2 seconds while the pipeline runs (Planning article → Selecting editorial skills → Searching sources → Scoring source quality → … → Packaging final post). This is a client-side animation — the API is a single synchronous request.
+- **Agent Run Trace panel**: collates all pipeline step outcomes as ✓/⚠/✗ lines (from `state.run_trace`), showing intent, skills, search provider, source quality, draft provider, quality score, revision outcome, and final validation.
+- **Source quality panel**: each source is shown with a `high`/`medium`/`low` badge and a one-line reason.
+- **Quality score stat pill**: displays the quality evaluator score and pass/fail.
+
 Provider events and raw JSON are accessible via `<details>` sections.
 
 ---
