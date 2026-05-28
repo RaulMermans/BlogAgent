@@ -825,6 +825,9 @@ def _build_app_html() -> str:
       return;
     }
 
+    document.getElementById('output-section').style.display = 'block';
+    document.getElementById('output-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
     document.getElementById('title-display').textContent = title;
     document.getElementById('slug-display').textContent = slug;
     document.getElementById('meta-display').textContent = metaDescription;
@@ -917,8 +920,6 @@ def _build_app_html() -> str:
       });
     }
 
-    document.getElementById('output-section').style.display = 'block';
-    document.getElementById('output-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function escapeHtml(str) {
