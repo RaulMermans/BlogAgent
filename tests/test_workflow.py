@@ -240,3 +240,110 @@ def test_pipeline_passes_without_api_keys(monkeypatch):
     assert state.final_article_package is not None
     errors = validate_final_state(state)
     assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# Final validation structured output
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_sets_final_validation_status():
+    state = run_pipeline("The water cycle")
+    assert state.final_validation_status in ("passed", "passed_with_warnings", "failed")
+
+
+def test_pipeline_final_validation_defects_is_list():
+    state = run_pipeline("The water cycle")
+    assert isinstance(state.final_validation_defects, list)
+
+
+def test_pipeline_evidence_limited_count_accepted_is_bool():
+    state = run_pipeline("The water cycle")
+    assert isinstance(state.evidence_limited_count_accepted, bool)
+
+
+# ---------------------------------------------------------------------------
+# Revision trace never "unknown"
+# ---------------------------------------------------------------------------
+
+
+def test_revision_trace_never_says_unknown():
+    """'Revision: unknown' must never appear in the run trace."""
+    state = run_pipeline("Best laptops for students")
+    for line in state.run_trace:
+        assert "Revision: unknown" not in line, (
+            f"'Revision: unknown' found in trace: {state.run_trace}"
+        )
+
+
+def test_revision_trace_never_says_unknown_factual_topic():
+    state = run_pipeline("The water cycle")
+    for line in state.run_trace:
+        assert "Revision: unknown" not in line, (
+            f"'Revision: unknown' found in trace: {state.run_trace}"
+        )
+
+
+def test_run_trace_is_non_empty():
+    state = run_pipeline("The water cycle")
+    assert len(state.run_trace) > 0
+
+
+def test_run_trace_contains_final_validation_line():
+    state = run_pipeline("The water cycle")
+    assert any("Final validation" in line for line in state.run_trace), (
+        f"No 'Final validation' line in trace: {state.run_trace}"
+    )
+
+
+def test_run_trace_contains_packaged_line():
+    state = run_pipeline("The water cycle")
+    assert any("Packaged" in line for line in state.run_trace), (
+        f"No 'Packaged' line in trace: {state.run_trace}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Max revision count remains 1
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_revision_count_never_exceeds_one_with_final_validation(monkeypatch):
+    """Even when both quality evaluator and final validator want revision, cap is 1."""
+    import blogagent.workflow.graph as _graph
+    from blogagent.workflow.state import FactCheckReport
+
+    call_count = [0]
+    original = _graph.run_fact_check
+
+    def patched(state):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            state.fact_check_report = FactCheckReport(
+                total_claims=1,
+                supported_count=0,
+                partially_supported_count=0,
+                unsupported_count=1,
+                passed=False,
+                blocking_issues=["Unsupported high-importance claim: 'X'"],
+            )
+            return state
+        return original(state)
+
+    monkeypatch.setattr(_graph, "run_fact_check", patched)
+    state = run_pipeline("Best perfumes for a date")
+    assert state.revision_count <= 1, f"Expected revision_count <= 1, got {state.revision_count}"
+
+
+# ---------------------------------------------------------------------------
+# No revision when evaluator and final validator both pass
+# ---------------------------------------------------------------------------
+
+
+def test_no_revision_for_clean_factual_topic():
+    state = run_pipeline("The water cycle")
+    assert state.revision_count == 0
+    revision_lines = [line for line in state.run_trace if "Revision" in line]
+    assert any("skipped" in line.lower() for line in revision_lines), (
+        f"Expected 'skipped' in revision trace; got: {revision_lines}"
+    )

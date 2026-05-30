@@ -78,9 +78,15 @@ Caveats:
 
 **Quality revision:** The quality evaluator checks for HIGH-severity defects (top-N count mismatch, missing Quick Picks, missing financial disclaimer, generic output, etc.) and triggers the Revision Agent if any are found. This quality revision runs **at most once** per pipeline run.
 
-**Fact-check revision:** After the fact-check, if blocking issues are found and `revision_count < 1`, the fact-check revision runs. Because quality revision already consumed the revision budget, fact-check revision is skipped if quality revision ran.
+**Top-N count detection:** `count_recommendations()` counts Quick Picks items supporting both `- bullet` and `1. numbered` list formats. If neither format is found in the Quick Picks section, it falls back to counting `## 1.` / `## 2.` style numbered headings in the article body.
 
-Total revision budget: **1 revision pass** across both quality and fact-check loops.
+**Evidence-limited recommendation count:** When a recommendation topic requests N items but fewer are available from evidence, the pipeline can accept the reduced count without triggering a defect — provided the article explicitly states the evidence limitation and the title does not falsely claim the full N. This is logged as `evidence_limited_count_accepted=True` in the response. If the article does not explain the reduction and the title falsely claims "Top 10", the top-N mismatch defect fires as HIGH-severity.
+
+**Final-validation safety-net revision:** After the quality-revision pass, `final_validate_quality` re-checks the draft. If a HIGH-severity fixable defect is still present (e.g., the revision did not restore the correct item count) and `revision_count < 1`, one additional Revision Agent call fires. This is the same revision budget slot — if the quality revision already ran, the final-validation revision is skipped.
+
+**Fact-check revision:** After the fact-check, if blocking issues are found and `revision_count < 1`, the fact-check revision runs. Because quality or final-validation revision may have already consumed the revision budget, fact-check revision is skipped in that case.
+
+Total revision budget: **1 revision pass** across quality, final-validation, and fact-check loops.
 
 In mock mode, both revision agents return the draft mostly unchanged with an explanatory summary. The loops exist to demonstrate control flow — improving draft quality requires a real LLM provider.
 
@@ -127,9 +133,11 @@ Source quality classification is a **domain heuristic**, not a live quality asse
 
 The classifier is intentionally simple. It provides a usable editorial signal without LLM calls.
 
-## Staged Loader UI
+## Staged Workflow Animation UI
 
-The loading animation in the browser UI is **client-side only** — it does not reflect actual pipeline stage progress. The API is a single synchronous blocking request. The stage labels cycle every 2 seconds as a UX aid, not as real-time status. There is no streaming or server-sent events in the MVP.
+The loading animation in the browser UI is **client-side simulation only** — it does not reflect actual pipeline stage progress. The API is a single synchronous blocking request; there is no streaming or server-sent events. The 12 step labels advance on a timer as a UX aid during the wait.
+
+After the response arrives, the panel self-annotates with real data from the response: step states (done/warn/failed), quality score, revision summary, final validation status, and evidence-limited indicator. This annotation is cosmetic post-hoc labeling, not live progress reporting.
 
 ## Not Implemented
 

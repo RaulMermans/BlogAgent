@@ -39,6 +39,7 @@ class QualityDefect(BaseModel):
     ]
     severity: Literal["low", "medium", "high"]
     message: str
+    fixable: bool = False
 
 
 class QualityEvaluationOutput(BaseModel):
@@ -72,22 +73,26 @@ def evaluate_quality(
 
     # --- 1. Top-N count mismatch (recommendation only) ---
     if is_recommendation and requested_count is not None:
-        actual_count = _count_quick_picks(draft)
-        if actual_count == 0:
-            # No Quick Picks bullets at all — treated as missing_structure below
-            pass
-        elif actual_count != requested_count:
-            defects.append(
-                QualityDefect(
-                    type="top_n_mismatch",
-                    severity="high",
-                    message=(
-                        f"Topic requests {requested_count} items but Quick Picks has "
-                        f"{actual_count} bullets. Fix to exactly {requested_count}."
-                    ),
+        actual_count = count_recommendations(draft)
+        quick_picks_in_draft = "Quick Picks" in draft
+        if actual_count != requested_count:
+            if actual_count == 0 and not quick_picks_in_draft:
+                # No Quick Picks at all — missing_structure handles this below
+                pass
+            else:
+                # Either Quick Picks exists with wrong count, or no bullets detected
+                defects.append(
+                    QualityDefect(
+                        type="top_n_mismatch",
+                        severity="high",
+                        message=(
+                            f"Topic requests {requested_count} items but article has "
+                            f"{actual_count}. Fix to exactly {requested_count}."
+                        ),
+                        fixable=True,
+                    )
                 )
-            )
-            score -= 20
+                score -= 20
 
     # --- 2. Quick Picks section missing (recommendation only) ---
     if is_recommendation and "Quick Picks" not in draft:
@@ -206,7 +211,12 @@ def evaluate_quality(
     high_defects = [d for d in defects if d.severity == "high"]
     revision_required = len(high_defects) > 0
 
-    passes = score >= 60 and not revision_required
+    # Cap score at 69 when high-severity defects exist — prevents a misleading
+    # "score=90 passes=True" outcome when the article has a fundamental flaw.
+    if high_defects:
+        score = min(score, 69)
+
+    passes = score >= 70 and not revision_required
 
     if not defects:
         summary = f"Score: {score}/100. No defects found."
@@ -228,15 +238,118 @@ def evaluate_quality(
 # Deterministic helpers
 # ---------------------------------------------------------------------------
 
+# Generic headings that are NOT individual recommendations
+_GENERIC_HEADINGS: frozenset[str] = frozenset({
+    "how we chose",
+    "how to choose",
+    "methodology",
+    "our methodology",
+    "final takeaway",
+    "takeaway",
+    "conclusion",
+    "introduction",
+    "overview",
+    "buying guide",
+    "faqs",
+    "frequently asked questions",
+    "further reading",
+    "sources",
+    "references",
+    "citations",
+})
+
+# Source/reference section headings — strip these before counting
+_SOURCE_SECTION_PATTERN = re.compile(
+    r"\n#{1,3}\s*(?:Sources?|References?|Citations?|Further Reading)\s*\n",
+    re.IGNORECASE,
+)
+
+
+def count_recommendations(markdown: str) -> int:
+    """Count distinct recommendations in a markdown article.
+
+    More robust than _count_quick_picks: handles bullet lists (- /*),
+    numbered lists (1. /1)), and ignores source citation sections.
+
+    Detection order:
+      1. Quick Picks section — bullets or numbered items
+      2. Numbered H2/H3 recommendation headings ("## 1. Best Perfume for…")
+    """
+    # Strip Sources / References section to avoid inflating count.
+    no_sources = _SOURCE_SECTION_PATTERN.split(markdown)[0]
+
+    # --- 1. Quick Picks section ---
+    m = re.search(
+        r"#{1,3}\s*Quick\s*Picks\s*\n(.*?)(?=\n#{1,3}|\Z)",
+        no_sources,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        section = m.group(1)
+        # Bullets: - item, * item
+        bullets = re.findall(r"^\s*[-*]\s+\S", section, re.MULTILINE)
+        # Numbered: 1. item, 1) item
+        numbered = re.findall(r"^\s*\d+[.)]\s+\S", section, re.MULTILINE)
+        count = len(bullets) + len(numbered)
+        if count > 0:
+            return count
+
+    # --- 2. Numbered H2/H3 recommendation headings ---
+    numbered_headings = re.findall(
+        r"^#{2,3}\s+\d+[.)]\s+\S", no_sources, re.MULTILINE
+    )
+    if numbered_headings:
+        return len(numbered_headings)
+
+    return 0
+
 
 def _count_quick_picks(draft: str) -> int:
-    """Count bullet items in the Quick Picks section."""
+    """Count bullet items in the Quick Picks section.
+
+    Legacy helper kept for backward compatibility with existing tests.
+    New code should call count_recommendations() instead.
+    """
     m = re.search(r"##\s*Quick Picks\s*\n(.*?)(?=\n##|\Z)", draft, re.DOTALL)
     if not m:
         return 0
     section = m.group(1)
     bullets = re.findall(r"^\s*[-*]\s+.+", section, re.MULTILINE)
     return len(bullets)
+
+
+def _is_evidence_limited_article(draft: str, actual_count: int, requested_count: int) -> bool:
+    """Return True if the article explicitly explains a reduced count due to evidence limits.
+
+    An evidence-limited reduction is acceptable when:
+    - The article body explains that evidence only supported fewer items.
+    - The title does not falsely claim the original requested_count.
+    - The Quick Picks count matches actual_count (not requested_count).
+    """
+    lower = draft.lower()
+    evidence_phrases = (
+        "available evidence",
+        "supported by evidence",
+        "available sources did not",
+        "evidence-backed",
+        "evidence supported only",
+        "only supported",
+        "insufficient evidence",
+        "evidence did not support",
+        "sources supported only",
+        "sources did not provide enough",
+    )
+    has_explanation = any(p in lower for p in evidence_phrases)
+
+    # Title must not claim the wrong count.
+    title_match = re.search(r"^#\s+(.+)", draft, re.MULTILINE)
+    title = title_match.group(1).lower() if title_match else ""
+    title_falsely_claims = (
+        f"top {requested_count}" in title
+        or f"best {requested_count}" in title
+    )
+
+    return has_explanation and not title_falsely_claims
 
 
 def _has_financial_disclaimer(draft: str) -> bool:

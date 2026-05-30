@@ -143,6 +143,12 @@ class BlogRunState(BaseModel):
     quality_evaluation: Optional[dict] = None
     # Final validation warnings (appended after post-revision quality check)
     final_validation_warnings: list[str] = Field(default_factory=list)
+    # Final validation structured defects (dicts with type/severity/message/fixable)
+    final_validation_defects: list[dict] = Field(default_factory=list)
+    # Final validation status: "passed" | "passed_with_warnings" | "failed"
+    final_validation_status: str = ""
+    # True when final validator accepted a reduced recommendation count due to evidence limits
+    evidence_limited_count_accepted: bool = False
     # Human-readable agent run trace (built at end of pipeline)
     run_trace: list[str] = Field(default_factory=list)
     # Run trace fields

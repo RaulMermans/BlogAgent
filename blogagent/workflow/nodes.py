@@ -496,18 +496,28 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
 def final_validate_quality(state: BlogRunState) -> BlogRunState:
     """Deterministic final validation after revision.
 
-    Does NOT block factual, low-risk topics unless the article is empty or unsafe.
-    Appends warnings for imperfect articles but always allows packaging.
+    Produces structured defects (with severity and fixable flags) in addition
+    to the legacy flat warnings list. Sets final_validation_status so the graph
+    can decide whether a revision pass is warranted.
     """
-    import re as _re  # noqa: PLC0415
+    from blogagent.agents.quality_evaluator import (  # noqa: PLC0415
+        _is_evidence_limited_article,
+        count_recommendations,
+    )
+    from blogagent.llm.client import detect_repeated_excerpts  # noqa: PLC0415
 
     fin_warns: list[str] = []
+    defects: list[dict] = []
 
-    # Empty article is always a hard warning.
+    # --- Empty article ---
     if not state.draft.strip():
-        fin_warns.append("Final validation: article_markdown is empty after revision.")
+        msg = "Final validation: article_markdown is empty after revision."
+        fin_warns.append(msg)
+        defects.append(
+            {"type": "empty_article", "severity": "high", "message": msg, "fixable": False}
+        )
 
-    # Financial disclaimer must survive revision.
+    # --- Financial disclaimer must survive revision ---
     if state.is_financial:
         lower = state.draft.lower()
         has_disclaimer = (
@@ -516,31 +526,122 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
             or "consult a qualified financial" in lower
         )
         if not has_disclaimer:
-            fin_warns.append(
-                "Final validation: financial disclaimer missing after revision."
+            msg = "Final validation: financial disclaimer missing after revision."
+            fin_warns.append(msg)
+            defects.append(
+                {"type": "missing_disclaimer", "severity": "high", "message": msg, "fixable": True}
             )
 
-    # Top-N count re-check post-revision.
+    # --- Top-N count re-check post-revision ---
+    evidence_limited = False
     if state.is_recommendation and state.requested_count is not None:
-        m = _re.search(
-            r"##\s*Quick Picks\s*\n(.*?)(?=\n##|\Z)", state.draft, _re.DOTALL
-        )
-        actual = len(_re.findall(r"^\s*[-*]\s+.+", m.group(1), _re.MULTILINE)) if m else 0
+        actual = count_recommendations(state.draft)
         if actual != state.requested_count:
-            fin_warns.append(
-                f"Final validation: top-N count still mismatched "
-                f"({actual} vs {state.requested_count} requested)."
+            evidence_limited = _is_evidence_limited_article(
+                state.draft, actual, state.requested_count
             )
+            if evidence_limited:
+                msg = (
+                    f"Final validation: evidence-limited count accepted "
+                    f"({actual} vs {state.requested_count} requested). "
+                    "Article explains the evidence limitation."
+                )
+                fin_warns.append(msg)
+                defects.append(
+                    {"type": "top_n_mismatch", "severity": "low", "message": msg, "fixable": False}
+                )
+            else:
+                msg = (
+                    f"Final validation: top-N count still mismatched "
+                    f"({actual} vs {state.requested_count} requested)."
+                )
+                fin_warns.append(msg)
+                defects.append(
+                    {"type": "top_n_mismatch", "severity": "high", "message": msg, "fixable": True}
+                )
 
-    # Repeated-text re-check.
-    from blogagent.llm.client import detect_repeated_excerpts  # noqa: PLC0415
-
+    # --- Repeated-text re-check ---
     for w in detect_repeated_excerpts(state.draft):
-        fin_warns.append(f"Final validation: {w}")
+        msg = f"Final validation: {w}"
+        fin_warns.append(msg)
+        defects.append(
+            {"type": "repeated_text", "severity": "medium", "message": msg, "fixable": False}
+        )
 
     state.final_validation_warnings = fin_warns
+    state.final_validation_defects = defects
+    state.evidence_limited_count_accepted = evidence_limited
+
+    high_defects = [d for d in defects if d["severity"] == "high"]
+    if high_defects:
+        state.final_validation_status = "failed"
+    elif fin_warns:
+        state.final_validation_status = "passed_with_warnings"
+    else:
+        state.final_validation_status = "passed"
+
     for w in fin_warns:
         _warn(state, w)
+
+    return state
+
+
+_FINAL_VALIDATION_MAX_REVISIONS = 1  # combined cap with _QUALITY_MAX_REVISIONS
+
+
+def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
+    """Trigger one revision when the final validator catches a high-severity fixable issue.
+
+    Only runs if:
+    - final_validation_status == "failed"
+    - There is at least one high-severity fixable defect
+    - revision_count == 0 (so the total revision cap of 1 is respected)
+    """
+    if state.revision_count >= _FINAL_VALIDATION_MAX_REVISIONS:
+        return state
+    if state.final_validation_status != "failed":
+        return state
+
+    high_fixable = [
+        d for d in state.final_validation_defects
+        if d.get("severity") == "high" and d.get("fixable", False)
+    ]
+    if not high_fixable:
+        return state
+
+    from blogagent.agents.revision_agent import revise_with_quality_context  # noqa: PLC0415
+
+    synthetic_eval = {
+        "passes": False,
+        "score": 50,
+        "revision_required": True,
+        "defects": high_fixable,
+        "summary": (
+            f"Final validation found {len(high_fixable)} high-severity fixable "
+            f"defect(s): {'; '.join(d['type'] for d in high_fixable)}"
+        ),
+    }
+
+    llm_result = revise_with_quality_context(
+        topic=state.topic,
+        draft=state.draft,
+        quality_evaluation=synthetic_eval,
+        warnings=list(state.warnings),
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+        requested_count=state.requested_count,
+        selected_skills=state.selected_skills,
+        source_quality_scores=state.source_quality_scores,
+    )
+
+    state.draft = llm_result.data.revised_markdown
+    state.revision_summary = llm_result.data.revision_summary
+    state.revision_count += 1
+    _event(state, _llm_event("editor.final_validation_revision", llm_result))
+    _propagate_llm_warnings(state, "editor.final_validation_revision", llm_result)
+
+    # Re-run final validation on the revised draft.
+    state = final_validate_quality(state)
 
     return state
 

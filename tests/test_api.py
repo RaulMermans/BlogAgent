@@ -1087,3 +1087,154 @@ def test_run_returns_execution_mode_field(monkeypatch):
     body = client.post("/run", json={"topic": "Solar energy"}).json()
     assert "execution_mode" in body
     assert isinstance(body["execution_mode"], str)
+
+
+# ---------------------------------------------------------------------------
+# RunResponse — new final-validation fields
+# ---------------------------------------------------------------------------
+
+
+def test_run_returns_final_validation_status(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "final_validation_status" in body
+    assert isinstance(body["final_validation_status"], str)
+
+
+def test_run_returns_final_validation_defects(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FATCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "final_validation_defects" in body
+    assert isinstance(body["final_validation_defects"], list)
+
+
+def test_run_returns_evidence_limited_count_accepted(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    body = client.post("/run", json={"topic": "Solar energy"}).json()
+    assert "evidence_limited_count_accepted" in body
+    assert isinstance(body["evidence_limited_count_accepted"], bool)
+
+
+# ---------------------------------------------------------------------------
+# UI HTML — staged workflow animation
+# ---------------------------------------------------------------------------
+
+
+def test_html_contains_workflow_panel_id():
+    response = client.get("/")
+    assert 'id="workflow-panel"' in response.text
+
+
+def test_html_contains_agent_workflow_running():
+    response = client.get("/")
+    assert "Agent workflow running" in response.text
+
+
+def test_html_contains_all_workflow_stage_labels():
+    response = client.get("/")
+    html = response.text
+    stages = [
+        "Checking access",
+        "Detecting intent",
+        "Selecting editorial skills",
+        "Planning research",
+        "Searching sources",
+        "Scoring source quality",
+        "Building evidence table",
+        "Drafting article",
+        "Evaluating quality",
+        "Revising if needed",
+        "Final validation",
+        "Packaging blog post",
+    ]
+    for stage in stages:
+        assert stage in html, f"Stage label missing from HTML: {stage!r}"
+
+
+def test_html_contains_start_workflow_animation():
+    response = client.get("/")
+    assert "startWorkflowAnimation" in response.text
+
+
+def test_html_contains_complete_workflow_animation():
+    response = client.get("/")
+    assert "completeWorkflowAnimation" in response.text
+
+
+def test_html_contains_fail_workflow_animation():
+    response = client.get("/")
+    assert "failWorkflowAnimation" in response.text
+
+
+def test_html_workflow_steps_css_classes():
+    response = client.get("/")
+    html = response.text
+    for cls in ("workflow-step", "step-icon", "step-pulse"):
+        assert cls in html, f"CSS class missing from HTML: {cls!r}"
+
+
+def test_html_generate_calls_start_workflow_animation():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("async function generate()")
+    assert idx != -1, "generate() not found"
+    gen_body = html[idx: idx + 2000]
+    assert "startWorkflowAnimation" in gen_body
+
+
+def test_html_generate_calls_complete_workflow_animation_on_success():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("async function generate()")
+    assert idx != -1
+    gen_body = html[idx: idx + 2000]
+    assert "completeWorkflowAnimation" in gen_body
+
+
+def test_html_generate_calls_fail_workflow_animation_on_error():
+    response = client.get("/")
+    html = response.text
+    idx = html.find("async function generate()")
+    assert idx != -1
+    gen_body = html[idx: idx + 2000]
+    assert "failWorkflowAnimation" in gen_body
+
+
+def test_html_response_data_updates_workflow_panel():
+    """completeWorkflowAnimation must accept data and annotate stages from it."""
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function completeWorkflowAnimation(")
+    assert idx != -1, "completeWorkflowAnimation not found"
+    fn_body = html[idx: idx + 3000]
+    assert "final_validation_status" in fn_body or "fvStatus" in fn_body
+
+
+def test_html_workflow_panel_hidden_initially():
+    """workflow-panel must start hidden and be revealed by startWorkflowAnimation."""
+    response = client.get("/")
+    html = response.text
+    assert "workflow-panel" in html
+    assert "display: none" in html or "display:none" in html
+
+
+def test_html_clear_output_hides_workflow_panel():
+    """clearOutput() must call _hideWorkflowPanel()."""
+    response = client.get("/")
+    html = response.text
+    idx = html.find("function clearOutput()")
+    assert idx != -1
+    clear_body = html[idx: idx + 800]
+    assert "_hideWorkflowPanel" in clear_body or "workflow-panel" in clear_body

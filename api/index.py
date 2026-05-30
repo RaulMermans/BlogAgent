@@ -72,6 +72,9 @@ class RunResponse(BaseModel):
     source_quality_scores: list[dict[str, Any]] = []
     requested_count: int | None = None
     final_validation_warnings: list[str] = []
+    final_validation_defects: list[dict[str, Any]] = []
+    final_validation_status: str = ""
+    evidence_limited_count_accepted: bool = False
     run_trace: list[str] = []
 
 
@@ -255,6 +258,9 @@ def _run_topic(topic: str) -> RunResponse:
         source_quality_scores=list(state.source_quality_scores),
         requested_count=state.requested_count,
         final_validation_warnings=list(state.final_validation_warnings),
+        final_validation_defects=list(state.final_validation_defects),
+        final_validation_status=state.final_validation_status or "",
+        evidence_limited_count_accepted=state.evidence_limited_count_accepted,
         run_trace=list(state.run_trace),
     )
 
@@ -470,17 +476,53 @@ def _build_app_html() -> str:
       margin: 0.15rem 0.2rem 0.15rem 0;
     }
 
-    #loader-status {
+    /* Staged workflow animation */
+    #workflow-panel {
       display: none;
-      margin: 1rem 0;
-      font-size: 0.95rem;
-      color: #2563eb;
-      font-weight: 500;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 1.2rem 1.5rem;
+      margin-bottom: 1rem;
     }
-    .loader-dot { display: inline-block; animation: blink 1.2s infinite; }
-    .loader-dot:nth-child(2) { animation-delay: 0.2s; }
-    .loader-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes blink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
+    .workflow-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #2563eb;
+      margin-bottom: 0.9rem;
+    }
+    .workflow-steps { list-style: none; padding: 0; margin: 0; }
+    .workflow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.7rem;
+      padding: 0.25rem 0;
+      font-size: 0.875rem;
+      color: #9ca3af;
+      transition: color 0.2s;
+    }
+    .workflow-step.active { color: #2563eb; font-weight: 600; }
+    .workflow-step.done { color: #166534; }
+    .workflow-step.warn { color: #854d0e; }
+    .workflow-step.failed { color: #b91c1c; }
+    .step-icon {
+      width: 1.1rem;
+      text-align: center;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+      font-size: 0.85rem;
+    }
+    .step-pulse {
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: #2563eb;
+      border-radius: 50%;
+      animation: pulse 1s infinite;
+      margin-top: 0.2rem;
+    }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(0.8)} }
   </style>
 </head>
 <body>
@@ -517,7 +559,13 @@ def _build_app_html() -> str:
     </div>
 
     <div id="status"></div>
-    <div id="loader-status"><span id="loader-stage">Planning article</span><span class="loader-dot">.</span><span class="loader-dot">.</span><span class="loader-dot">.</span></div>
+
+    <!-- Agent workflow animation panel -->
+    <div id="workflow-panel" data-testid="workflow-panel">
+      <div class="workflow-title">Agent workflow running</div>
+      <ol class="workflow-steps" id="workflow-steps"></ol>
+    </div>
+
     <div id="error-box"></div>
 
     <details style="margin-bottom:0.8rem;">
@@ -685,35 +733,182 @@ def _build_app_html() -> str:
     }
   }
 
-  const LOADER_STAGES = [
-    'Planning article',
+  // ---------------------------------------------------------------------------
+  // Staged workflow animation
+  // ---------------------------------------------------------------------------
+
+  const WORKFLOW_STAGES = [
+    'Checking access',
+    'Detecting intent',
     'Selecting editorial skills',
+    'Planning research',
     'Searching sources',
     'Scoring source quality',
     'Building evidence table',
     'Drafting article',
     'Evaluating quality',
-    'Revising weak sections',
-    'Packaging final post',
+    'Revising if needed',
+    'Final validation',
+    'Packaging blog post',
   ];
-  let _loaderTimer = null;
-  let _loaderIdx = 0;
 
-  function startLoader() {
-    _loaderIdx = 0;
-    const stageEl = document.getElementById('loader-stage');
-    const loaderEl = document.getElementById('loader-status');
-    loaderEl.style.display = 'block';
-    stageEl.textContent = LOADER_STAGES[0];
-    _loaderTimer = setInterval(() => {
-      _loaderIdx = (_loaderIdx + 1) % LOADER_STAGES.length;
-      stageEl.textContent = LOADER_STAGES[_loaderIdx];
-    }, 2000);
+  let _wfTimer = null;
+  let _wfIdx = 0;
+
+  function _renderWorkflowSteps() {
+    const ol = document.getElementById('workflow-steps');
+    ol.innerHTML = '';
+    WORKFLOW_STAGES.forEach((label, i) => {
+      const li = document.createElement('li');
+      li.className = 'workflow-step';
+      li.setAttribute('data-step', i);
+      const icon = document.createElement('span');
+      icon.className = 'step-icon';
+      icon.textContent = '○';
+      const text = document.createElement('span');
+      text.textContent = label;
+      li.appendChild(icon);
+      li.appendChild(text);
+      ol.appendChild(li);
+    });
   }
 
-  function stopLoader() {
-    if (_loaderTimer) { clearInterval(_loaderTimer); _loaderTimer = null; }
-    document.getElementById('loader-status').style.display = 'none';
+  function _setStepState(idx, state) {
+    const ol = document.getElementById('workflow-steps');
+    const steps = ol.querySelectorAll('.workflow-step');
+    if (idx < 0 || idx >= steps.length) return;
+    const li = steps[idx];
+    const icon = li.querySelector('.step-icon');
+    li.className = 'workflow-step ' + state;
+    if (state === 'active') {
+      icon.innerHTML = '<span class="step-pulse"></span>';
+    } else if (state === 'done') {
+      icon.textContent = '✓';
+    } else if (state === 'warn') {
+      icon.textContent = '⚠';
+    } else if (state === 'failed') {
+      icon.textContent = '✗';
+    } else {
+      icon.textContent = '○';
+    }
+  }
+
+  function startWorkflowAnimation() {
+    _wfIdx = 0;
+    _renderWorkflowSteps();
+    document.getElementById('workflow-panel').style.display = 'block';
+    _setStepState(0, 'active');
+    _wfTimer = setInterval(() => {
+      _setStepState(_wfIdx, 'done');
+      _wfIdx++;
+      if (_wfIdx < WORKFLOW_STAGES.length) {
+        _setStepState(_wfIdx, 'active');
+      } else {
+        clearInterval(_wfTimer);
+        _wfTimer = null;
+      }
+    }, 1800);
+  }
+
+  function completeWorkflowAnimation(data) {
+    if (_wfTimer) { clearInterval(_wfTimer); _wfTimer = null; }
+    // Fast-forward remaining pending steps to done
+    const ol = document.getElementById('workflow-steps');
+    const steps = ol.querySelectorAll('.workflow-step');
+    steps.forEach((li, i) => {
+      if (li.className.includes('active') || (!li.className.includes('done') && !li.className.includes('warn') && !li.className.includes('failed'))) {
+        _setStepState(i, 'done');
+      }
+    });
+    // Annotate steps based on actual response data
+    _annotateWorkflowFromResponse(data);
+    // Rename panel title to reflect completion
+    const title = document.querySelector('#workflow-panel .workflow-title');
+    if (title) {
+      const fvStatus = data && data.final_validation_status;
+      const hasHighDefects = data && (data.final_validation_defects || []).some(d => d.severity === 'high');
+      if (fvStatus === 'failed' || hasHighDefects) {
+        title.style.color = '#854d0e';
+        title.textContent = 'Agent workflow complete — quality issues remain';
+      } else {
+        title.style.color = '#166534';
+        title.textContent = 'Agent workflow complete';
+      }
+    }
+  }
+
+  function failWorkflowAnimation(errorMsg) {
+    if (_wfTimer) { clearInterval(_wfTimer); _wfTimer = null; }
+    const ol = document.getElementById('workflow-steps');
+    const steps = ol.querySelectorAll('.workflow-step');
+    let markedFailed = false;
+    steps.forEach((li, i) => {
+      if (!markedFailed && (li.className.includes('active') || (!li.className.includes('done') && !li.className.includes('warn')))) {
+        _setStepState(i, 'failed');
+        markedFailed = true;
+      }
+    });
+    const title = document.querySelector('#workflow-panel .workflow-title');
+    if (title) { title.style.color = '#b91c1c'; title.textContent = 'Agent workflow failed'; }
+  }
+
+  function _annotateWorkflowFromResponse(data) {
+    if (!data) return;
+    const ol = document.getElementById('workflow-steps');
+    const steps = ol.querySelectorAll('.workflow-step');
+
+    // Step 8 (index 8): quality evaluation
+    const qe = data.quality_evaluation || {};
+    if (qe.score !== undefined) {
+      const qStep = steps[8];
+      if (qStep) {
+        const icon = qStep.querySelector('.step-icon');
+        if (!qe.passes) {
+          qStep.className = 'workflow-step warn';
+          if (icon) icon.textContent = '⚠';
+        }
+        const txt = qStep.querySelector('span:last-child');
+        if (txt) txt.textContent = 'Evaluating quality — score ' + qe.score + '/100' + (qe.passes ? '' : ' (revision needed)');
+      }
+    }
+
+    // Step 9 (index 9): revision
+    const revCount = data.revision_count || 0;
+    const revStep = steps[9];
+    if (revStep) {
+      const txt = revStep.querySelector('span:last-child');
+      const icon = revStep.querySelector('.step-icon');
+      if (revCount > 0) {
+        if (txt) txt.textContent = 'Revising if needed — revised';
+        if (icon) icon.textContent = '✓';
+      } else {
+        if (txt) txt.textContent = 'Revising if needed — skipped';
+      }
+    }
+
+    // Step 10 (index 10): final validation
+    const fvStatus = data.final_validation_status || 'passed';
+    const fvStep = steps[10];
+    if (fvStep) {
+      const txt = fvStep.querySelector('span:last-child');
+      const icon = fvStep.querySelector('.step-icon');
+      if (fvStatus === 'failed') {
+        fvStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Final validation — issues remain';
+      } else if (fvStatus === 'passed_with_warnings') {
+        fvStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        const evLimited = data.evidence_limited_count_accepted;
+        if (txt) txt.textContent = 'Final validation — ' + (evLimited ? 'evidence-limited count accepted' : 'passed with warnings');
+      } else {
+        if (txt) txt.textContent = 'Final validation — passed';
+      }
+    }
+  }
+
+  function _hideWorkflowPanel() {
+    document.getElementById('workflow-panel').style.display = 'none';
   }
 
   async function generate() {
@@ -723,7 +918,7 @@ def _build_app_html() -> str:
 
     clearOutput();
     setStatus('');
-    startLoader();
+    startWorkflowAnimation();
     document.getElementById('generateButton').disabled = true;
 
     const debugInfo = {
@@ -769,9 +964,11 @@ def _build_app_html() -> str:
       _lastTopic = topic;
       setDebug(debugInfo);
       try {
+        completeWorkflowAnimation(data);
         renderOutput(data);
         setStatus('Success');
       } catch (renderErr) {
+        failWorkflowAnimation('Render error');
         showError('Render error: ' + renderErr.message);
         try {
           document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
@@ -781,9 +978,9 @@ def _build_app_html() -> str:
     } catch (err) {
       debugInfo.error = err.message;
       setDebug(debugInfo);
+      failWorkflowAnimation(err.message);
       showError('Network error: ' + err.message);
     } finally {
-      stopLoader();
       document.getElementById('generateButton').disabled = false;
     }
   }
@@ -872,6 +1069,25 @@ def _build_app_html() -> str:
     }
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
+
+    // Final validation status — show prominently if failed or evidence-limited
+    const fvStatus = data.final_validation_status || 'passed';
+    const fvDefects = data.final_validation_defects || [];
+    const highDefects = fvDefects.filter(d => d.severity === 'high');
+    if (fvStatus === 'failed' || highDefects.length > 0) {
+      const fvBanner = document.createElement('div');
+      fvBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;';
+      const msgs = highDefects.map(d => d.message).join(' | ') || 'High-severity quality issues remain.';
+      fvBanner.textContent = '⚠ Generated with unresolved quality issues: ' + msgs;
+      document.getElementById('output-section').insertBefore(fvBanner, document.getElementById('output-section').firstChild);
+    } else if (fvStatus === 'passed_with_warnings' && data.evidence_limited_count_accepted) {
+      addStat(statsRow, 'evidence-limited count', 'warn');
+    }
+
+    const revisionSummary = data.revision_summary || '';
+    if (revisionSummary && revisionSummary !== 'No revision performed.') {
+      addStat(statsRow, 'revised', 'ok');
+    }
 
     if (data.warnings && data.warnings.length) {
       document.getElementById('warnings-details').style.display = '';
@@ -979,6 +1195,7 @@ def _build_app_html() -> str:
     document.getElementById('trace-details').style.display = 'none';
     document.getElementById('trace-list').innerHTML = '';
     document.getElementById('sources-list').innerHTML = '';
+    _hideWorkflowPanel();
     // Remove any dynamically injected skills rows from prior runs
     const skillDivs = document.querySelectorAll('.form-card .meta-label');
     skillDivs.forEach(el => { if (el.textContent === 'Editorial Skills') el.closest('div').remove(); });

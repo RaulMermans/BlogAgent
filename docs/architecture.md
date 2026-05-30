@@ -82,9 +82,10 @@ score_source_quality     → classify each source as high/medium/low quality (do
 build_evidence_table     → assemble EvidenceItem list from scored sources
 generate_outline         → Editor Agent: outline (mock or LLM); skill briefs injected
 write_draft              → Editor Agent: draft (mock or LLM); skill briefs injected
-evaluate_quality         → deterministic quality checks on draft; produces QualityEvaluationOutput
+evaluate_quality         → deterministic quality checks on draft; score capped at 69 on HIGH defect
 revise_if_needed         → Revision Agent called if any HIGH-severity defect (at most once)
-final_validate_quality   → post-revision gate: financial disclaimer, top-N, repeated text (never hard-blocks)
+final_validate_quality   → sets final_validation_status / final_validation_defects; top-N uses count_recommendations()
+revise_if_final_validation_failed → safety-net: if final validation failed with fixable HIGH defect and revision_count < 1, calls Revision Agent and re-runs final_validate_quality
 extract_claims           → claim_extractor tool (heuristic or LLM)
 match_citations          → citation_matcher tool (deterministic heuristic)
 run_fact_check           → assemble FactCheckReport (+ optional LLM judgment)
@@ -100,7 +101,7 @@ After drafting, `evaluate_quality` runs deterministic checks:
 
 | Check | Severity | Condition |
 |---|---|---|
-| Top-N count mismatch | HIGH | Requested N in topic, Quick Picks has different count |
+| Top-N count mismatch | HIGH | Requested N in topic, Quick Picks has different count (counted via `count_recommendations()` which handles both `- bullet` and `1. numbered` list formats) |
 | Quick Picks missing | HIGH | Recommendation article has no Quick Picks section |
 | Financial disclaimer missing | HIGH | Financial topic has no disclaimer |
 | Direct buy/sell language | HIGH | Draft contains "buy this stock", "invest in X now", etc. |
@@ -111,9 +112,19 @@ After drafting, `evaluate_quality` runs deterministic checks:
 | Generic/placeholder output | HIGH | Draft is under 100 chars or contains [Placeholder] |
 | Missing Final Takeaway | LOW | Recommendation article missing closing section |
 
+**Score cap:** If any HIGH-severity defect is present, the quality score is capped at 69 regardless of other checks. `passes = score >= 70`. A draft with a HIGH defect always triggers `revision_required=True`.
+
+**Evidence-limited exception:** When checking top-N count, if the article explicitly explains that fewer recommendations are provided due to limited evidence (and the title does not falsely claim the full count), the mismatch defect is suppressed. This is recorded in `state.evidence_limited_count_accepted`.
+
 If any HIGH-severity defect is present, `revision_required=True` and `revise_if_needed` calls the **Revision Agent** (mock or LLM). This quality revision runs **at most once**.
 
-`final_validate_quality` then re-checks post-revision and appends warnings — it never hard-blocks. The warnings propagate to `final_validation_warnings` in state and are displayed in the UI.
+### Final Validation and Safety-Net Revision
+
+`final_validate_quality` re-checks post-revision and sets `state.final_validation_status` (`"passed"` / `"passed_with_warnings"` / `"failed"`) and `state.final_validation_defects` (structured list with `severity`, `message`, `fixable` fields). Unlike earlier design, it no longer only appends flat warning strings.
+
+`revise_if_final_validation_failed` then inspects the result: if `final_validation_status == "failed"` and there is at least one HIGH-severity `fixable` defect, and `revision_count < 1`, it triggers one additional Revision Agent call. After revision, `final_validate_quality` re-runs so the updated status is reflected in the output.
+
+The total revision budget across all paths is **1 revision pass**.
 
 ## Fact-Check Revision Loop
 
@@ -125,7 +136,7 @@ After the initial fact-check, if `fact_check_report.passed = False` and `revisio
 4. `state.revision_count` is incremented
 5. Claim extraction, citation matching, and fact-check re-run
 
-The total revision budget across quality + fact-check revisions is **1**. In mock mode, the revision returns the draft unchanged with an explanatory summary — no infinite loop is possible.
+The total revision budget across quality + final-validation + fact-check revisions is **1**. In mock mode, the revision returns the draft unchanged with an explanatory summary — no infinite loop is possible.
 
 ---
 
@@ -260,7 +271,10 @@ Key fields:
 - `requested_count: int | None` — extracted from topic (e.g. "top 10" → 10)
 - `source_quality_scores: list[dict]` — per-source quality classification
 - `quality_evaluation: dict | None` — output of QualityEvaluationOutput
-- `final_validation_warnings: list[str]` — warnings from final_validate_quality
+- `final_validation_warnings: list[str]` — legacy flat warning strings from final_validate_quality
+- `final_validation_defects: list[dict]` — structured defects with `severity`, `message`, `fixable` fields
+- `final_validation_status: str` — `"passed"` | `"passed_with_warnings"` | `"failed"`
+- `evidence_limited_count_accepted: bool` — True when fewer recommendations than requested were accepted due to evidence limits
 - `run_trace: list[str]` — human-readable ✓/⚠/✗ agent run trace for the UI
 - `draft_meta_description: str` — SEO description from `DraftOutput`
 - `draft_seo_keywords: list[str]` — keywords from `DraftOutput`
@@ -339,10 +353,11 @@ renders the article in a blog card using `white-space: pre-wrap`, and provides b
 to copy the markdown, download `.md`, and download the full JSON response.
 
 The UI features:
-- **Staged loader**: 9 stage labels cycle every 2 seconds while the pipeline runs (Planning article → Selecting editorial skills → Searching sources → Scoring source quality → … → Packaging final post). This is a client-side animation — the API is a single synchronous request.
-- **Agent Run Trace panel**: collates all pipeline step outcomes as ✓/⚠/✗ lines (from `state.run_trace`), showing intent, skills, search provider, source quality, draft provider, quality score, revision outcome, and final validation.
+- **Staged workflow animation**: 12 steps animate sequentially while the pipeline runs (Planning → Selecting skills → Researching → Searching sources → Extracting pages → Scoring sources → Building evidence table → Writing draft → Evaluating quality → Fact-checking → Packaging → Done). After the API response arrives, the panel self-annotates: it marks failed steps, shows high-severity defect banners, renders the evidence-limited pill if applicable, and displays the revision summary. This is a client-side simulation — the API is a single synchronous blocking request; no streaming or polling is implemented.
+- **Agent Run Trace panel**: collates all pipeline step outcomes as ✓/⚠/✗ lines (from `state.run_trace`), showing intent, skills, search provider, source quality, draft provider, quality score, revision outcome, final validation status, and evidence-limited indicator.
 - **Source quality panel**: each source is shown with a `high`/`medium`/`low` badge and a one-line reason.
 - **Quality score stat pill**: displays the quality evaluator score and pass/fail.
+- **Final validation defect banner**: if `final_validation_status == "failed"`, a high-severity warning banner appears above the article listing each fixable defect.
 
 Provider events and raw JSON are accessible via `<details>` sections.
 

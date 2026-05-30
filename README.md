@@ -37,7 +37,7 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Vercel API scaffold | **Done** — mock-safe by default |
 | Agent Run Trace UI panel | **Done** |
 | Source quality badges in UI | **Done** |
-| Staged loader animation in UI | **Done** |
+| Staged workflow animation (12 steps, self-annotating) | **Done** |
 | Persistence / database | Not yet |
 
 ---
@@ -79,10 +79,13 @@ User Topic
 → Evidence Table Builder
 → Editor Agent outline     (skill briefs injected)
 → Editor Agent draft       (skill briefs injected)
-→ Quality Evaluator        (10 deterministic checks; scores 0–100)
+→ Quality Evaluator        (10 deterministic checks; scores 0–100; score capped at 69 on HIGH defect)
 → [if HIGH-severity defect and revision_count < 1]
     → Revision Agent       (quality-driven; mock or LLM)
-→ final_validate_quality   (post-revision gate — warns, never hard-blocks)
+→ final_validate_quality   (post-revision check — sets final_validation_status and final_validation_defects)
+→ [if final_validation_status=failed and fixable HIGH defect and revision_count < 1]
+    → Revision Agent       (final-validation-triggered; at most one revision total)
+    → final_validate_quality re-runs
 → claim_extractor
 → citation_matcher
 → Fact-Check Evaluator
@@ -359,6 +362,10 @@ No LLM judge is used.
 | Not all sources are mock placeholders | +10 |
 | Revision summary is non-empty | +10 |
 | **Total** | **100** |
+
+**Score cap:** If any HIGH-severity defect is present (top-N count mismatch, missing Quick Picks, missing financial disclaimer, etc.), the score is capped at 69 regardless of other checks passing. A score ≥ 70 is required for `passes=True`.
+
+**Evidence-limited exception:** For recommendation articles, if the article explicitly explains that the requested count cannot be met due to limited evidence (and the title does not falsely claim the full count), the top-N count mismatch defect is suppressed. The run trace labels this as `evidence_limited_count_accepted=True`.
 
 The score is a heuristic indicator, not a substitute for editorial review.
 See [docs/eval_plan.md](docs/eval_plan.md) for caveats.
