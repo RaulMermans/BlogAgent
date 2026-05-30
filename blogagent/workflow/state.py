@@ -156,3 +156,17 @@ class BlogRunState(BaseModel):
     provider_events: list[str] = Field(default_factory=list)
     stage_timings: dict[str, float] = Field(default_factory=dict)
     execution_mode: ExecutionMode = "mock"
+    # Evidence sufficiency evaluation (dict-serialized EvidenceSufficiencyResult)
+    evidence_sufficiency: Optional[dict] = None
+    # Number of web search passes run (initial + enrichment)
+    search_pass_count: int = 1
+    # Queries used for enrichment search pass
+    enrichment_queries: list[str] = Field(default_factory=list)
+    # Publishability evaluation (dict-serialized PublishabilityEvaluation)
+    publishability_evaluation: Optional[dict] = None
+    # Summary of editorial polish changes (list of strings)
+    polish_summary: list[str] = Field(default_factory=list)
+    # Publishability score 0-100 (extracted from publishability_evaluation for convenience)
+    publishability_score: int = 0
+    # Final publish readiness: "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
+    publish_ready_status: str = ""

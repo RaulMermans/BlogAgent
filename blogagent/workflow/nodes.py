@@ -5,6 +5,19 @@ import re
 from datetime import datetime, timezone
 
 from blogagent.agents import editor_agent, fact_check_evaluator
+from blogagent.agents.editorial_polish_agent import (
+    EditorialPolishOutput,
+    polish_article,
+)
+from blogagent.agents.evidence_sufficiency import (
+    EvidenceSufficiencyResult,
+    evaluate_evidence_sufficiency,
+    generate_enrichment_queries,
+)
+from blogagent.agents.publishability_evaluator import (
+    PublishabilityEvaluation,
+    evaluate_publishability,
+)
 from blogagent.llm.client import detect_repeated_excerpts
 from blogagent.llm.schemas import LLMResult
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
@@ -675,4 +688,232 @@ def package_article(state: BlogRunState) -> BlogRunState:
         created_at=datetime.now(timezone.utc).isoformat(),
         topic=state.topic,
     )
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Evidence sufficiency evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_evidence_sufficiency_node(state: BlogRunState) -> BlogRunState:
+    """Evaluate whether retrieved evidence is sufficient before drafting."""
+    enrichment_ran = state.search_pass_count > 1
+    result = evaluate_evidence_sufficiency(
+        topic=state.topic,
+        requested_count=state.requested_count,
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+        source_quality_scores=state.source_quality_scores,
+        evidence_table=state.evidence_table,
+        enrichment_already_ran=enrichment_ran,
+    )
+    state.evidence_sufficiency = result.model_dump()
+    _event(
+        state,
+        f"evidence_sufficiency: sufficient={result.sufficient} score={result.score} "
+        f"supported={result.supported_count} requested={result.requested_count} "
+        f"action={result.recommended_action}",
+    )
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Enrichment search (optional second Tavily pass for recommendation topics)
+# ---------------------------------------------------------------------------
+
+_MAX_SEARCH_PASSES = 2
+_MAX_SOURCES_TOTAL = 10
+
+
+def run_enrichment_search(state: BlogRunState) -> BlogRunState:
+    """Run a targeted second search pass when evidence is insufficient.
+
+    Only triggers when:
+    - is_recommendation=True
+    - evidence_sufficiency.recommended_action == "search_more"
+    - search provider is tavily (real search active)
+    - search_pass_count < _MAX_SEARCH_PASSES
+    """
+    if not state.is_recommendation:
+        return state
+    if state.search_pass_count >= _MAX_SEARCH_PASSES:
+        _warn(state, "Enrichment search skipped: max search passes reached.")
+        return state
+    if state.evidence_sufficiency is None:
+        return state
+    if state.evidence_sufficiency.get("recommended_action") != "search_more":
+        return state
+    if not is_real_search_active():
+        _warn(state, "Enrichment search skipped: mock search provider active.")
+        return state
+
+    queries = generate_enrichment_queries(
+        topic=state.topic,
+        missing=state.evidence_sufficiency.get("missing", []),
+        requested_count=state.requested_count,
+    )
+    state.enrichment_queries = queries
+
+    new_results = []
+    existing_urls = {r.url for r in state.search_results}
+
+    for query in queries:
+        remaining_slots = _MAX_SOURCES_TOTAL - len(state.search_results) - len(new_results)
+        if remaining_slots <= 0:
+            break
+        max_results = min(3, remaining_slots)
+        output = web_search(SearchInput(query=query, max_results=max_results))
+        for r in output.results:
+            if r.url not in existing_urls:
+                new_results.append(r)
+                existing_urls.add(r.url)
+        if output.warning:
+            _warn(state, f"enrichment search fallback: {output.warning}")
+
+    if new_results:
+        state.search_results = state.search_results + new_results
+        state.search_pass_count += 1
+        _event(
+            state,
+            f"enrichment_search: queries={len(queries)} new_sources={len(new_results)} "
+            f"total_sources={len(state.search_results)}",
+        )
+
+        # Re-extract, re-score, rebuild evidence
+        state = _rebuild_sources_and_evidence(state, existing_result_urls=existing_urls)
+    else:
+        _event(state, "enrichment_search: no new sources found")
+
+    return state
+
+
+def _rebuild_sources_and_evidence(state: BlogRunState, existing_result_urls: set) -> BlogRunState:
+    """Re-run source extraction, scoring, and evidence table after enrichment search."""
+    # Only extract pages for newly added results (avoid re-extracting existing ones)
+    existing_packet_urls = {p.url for p in state.selected_sources}
+    new_results = [r for r in state.search_results if r.url not in existing_packet_urls]
+
+    new_packets = []
+    for result in new_results:
+        out = webpage_extract(
+            ExtractInput(url=result.url, title=result.title, domain=result.domain)
+        )
+        if out.packet is not None:
+            new_packets.append(out.packet)
+    state.selected_sources = state.selected_sources + new_packets
+
+    # Re-score all sources (including new ones)
+    state.source_scores = [
+        source_score(ScoreInput(packet=p, topic=state.topic)) for p in state.selected_sources
+    ]
+
+    # Re-classify source quality
+    from blogagent.tools.source_quality import classify_source_quality  # noqa: PLC0415
+    state.source_quality_scores = [
+        classify_source_quality(s).model_dump() for s in state.source_scores
+    ]
+
+    # Rebuild evidence table
+    state = build_evidence_table(state)
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Publishability evaluation
+# ---------------------------------------------------------------------------
+
+_POLISH_MAX_COUNT = 1
+
+
+def evaluate_publishability_node(state: BlogRunState) -> BlogRunState:
+    """Run publishability evaluation on the draft."""
+    result = evaluate_publishability(
+        article_markdown=state.draft,
+        topic=state.topic,
+        is_recommendation=state.is_recommendation,
+        selected_skills=state.selected_skills,
+        source_quality_scores=state.source_quality_scores,
+        evidence_sufficiency=state.evidence_sufficiency,
+    )
+    state.publishability_evaluation = result.model_dump()
+    state.publishability_score = result.score
+    _event(
+        state,
+        f"publishability: score={result.score} publish_ready={result.publish_ready} "
+        f"polish_required={result.polish_required} defects={len(result.defects)}",
+    )
+    return state
+
+
+def run_editorial_polish(state: BlogRunState) -> BlogRunState:
+    """Run editorial polish when publishability requires it.
+
+    Runs at most once. Triggers when publishability_evaluation.polish_required=True.
+    """
+    if state.publishability_evaluation is None:
+        return state
+    if not state.publishability_evaluation.get("polish_required", False):
+        return state
+
+    from blogagent.agents.editor_agent import _format_evidence  # noqa: PLC0415
+
+    evidence_summary = _format_evidence(state.evidence_table, state.source_scores)
+
+    llm_result = polish_article(
+        article_markdown=state.draft,
+        topic=state.topic,
+        publishability_evaluation=state.publishability_evaluation,
+        evidence_table_summary=evidence_summary,
+        selected_skills=state.selected_skills,
+        is_recommendation=state.is_recommendation,
+        requested_count=state.requested_count,
+        evidence_sufficiency=state.evidence_sufficiency,
+    )
+
+    polish_out: EditorialPolishOutput = llm_result.data
+    state.draft = polish_out.polished_markdown
+    state.polish_summary = list(polish_out.polish_summary)
+    _event(state, _llm_event("editor.polish", llm_result))
+    _propagate_llm_warnings(state, "editor.polish", llm_result)
+
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Publish ready status computation
+# ---------------------------------------------------------------------------
+
+
+def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
+    """Compute the final publish_ready_status after all evaluations."""
+    pub_eval = state.publishability_evaluation
+    fv_status = state.final_validation_status or "passed"
+
+    if pub_eval is None:
+        if fv_status == "failed":
+            state.publish_ready_status = "draft_only_not_publish_ready"
+        elif fv_status == "passed_with_warnings" or state.final_validation_warnings:
+            state.publish_ready_status = "publish_ready_with_warnings"
+        else:
+            state.publish_ready_status = "publish_ready"
+        return state
+
+    publish_ready = pub_eval.get("publish_ready", False)
+    score = pub_eval.get("score", 0)
+
+    if fv_status == "failed":
+        state.publish_ready_status = "draft_only_not_publish_ready"
+    elif not publish_ready or score < 60:
+        state.publish_ready_status = "draft_only_not_publish_ready"
+    elif (
+        fv_status == "passed_with_warnings"
+        or state.final_validation_warnings
+        or state.evidence_limited_count_accepted
+        or score < 80
+    ):
+        state.publish_ready_status = "publish_ready_with_warnings"
+    else:
+        state.publish_ready_status = "publish_ready"
+
     return state

@@ -240,6 +240,54 @@ Before treating a run as a "live benchmark":
 
 ---
 
+## Enrichment Search
+
+The optional second Tavily search pass is bounded by design:
+
+- **Max search passes: 2** (initial + one enrichment pass). No unbounded loops.
+- **Max sources total: 10.** Enrichment stops adding sources at this cap.
+- Enrichment only runs when `is_recommendation=True`, `search_provider=tavily`, and `evidence_sufficiency.recommended_action="search_more"`.
+- In mock mode, enrichment search is always skipped (mock sources cannot provide real named recommendations).
+- Enrichment queries are heuristic — 3 targeted queries derived from the topic. They are not LLM-generated to avoid a dependency on the LLM client before drafting.
+
+---
+
+## Publishability Scoring
+
+- The publishability score (0–100) is heuristic-based: it detects generic phrases, checks for sensory terms, and inspects structural patterns.
+- It is not a guarantee of editorial quality. It catches clear failures (content-mill intros, no sensory detail) but cannot judge taste, originality, or depth without LLM review.
+- A score of 80+ is a useful threshold but human review is still recommended before publication.
+- The publishability evaluator does not read competitor articles or know what constitutes a "good" fragrance review by industry standards — it applies fixed rules.
+
+---
+
+## Personal Blog Voice
+
+- The `personal-blog-voice` skill and editorial polish agent use prompt-driven instructions to improve tone.
+- They do not implement true author memory or style transfer. Voice is prompt-engineered, not learned.
+- The polish agent runs at most once. It cannot iterate if the result still feels flat.
+- In mock mode, editorial polish returns the article unchanged with a summary message.
+
+---
+
+## No CMS Publishing
+
+The pipeline does not and will not publish externally without explicit user confirmation. Topics containing publishing-intent keywords (e.g. "post to WordPress") are blocked at the guardrail. Adding a CMS publishing tool requires an approval gate before any external write.
+
+---
+
+## Human Review Still Recommended
+
+Even when `publish_ready_status = "publish_ready"`, the article has not been reviewed by a human editor. It may still contain:
+- Unsupported stylistic claims (phrasing that sounds authoritative but is hedged)
+- Outdated information (evidence has a cut-off by search depth)
+- Brand-specific inaccuracies that heuristics cannot detect
+- Regional or cultural context gaps
+
+Use the published article as a **strong draft**, not a final product.
+
+---
+
 ## Recommended Next Steps
 
 1. Set `BLOGAGENT_LLM_PROVIDER=google`, `BLOGAGENT_USE_LLM_EDITOR=true`, `GOOGLE_API_KEY=...` and run `--show-trace` to verify live execution.

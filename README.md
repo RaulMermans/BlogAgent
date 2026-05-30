@@ -22,8 +22,8 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | LLM client layer (mock default; Anthropic/OpenAI/Google optional) | **Done** |
 | Editor Agent (research plan, outline, draft, revision) | **Done** — mock by default; LLM-gated via env |
 | Fact-Check Evaluator (claim extraction + judgment) | **Done** — mock by default; LLM-gated via env |
-| Runtime skill registry (6 skills, prompt injection) | **Done** |
-| Deterministic skill selection | **Done** |
+| Runtime skill registry (11 skills, prompt injection) | **Done** |
+| Deterministic skill selection | **Done** — fragrance/lifestyle/recommendation/personal-blog-voice |
 | Quality Evaluator (deterministic, 10 checks) | **Done** |
 | Quality-driven Revision Agent | **Done** — mock by default; LLM-gated via env |
 | Final quality validator (post-revision, warns not blocks) | **Done** |
@@ -32,12 +32,17 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Revision loop (max 1) | **Done** |
 | Heuristic citation matching (deterministic) | **Done** |
 | Optional LLM semantic citation judge | **Done** — opt-in via `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` |
+| Evidence Sufficiency Evaluator (deterministic pre-draft gate) | **Done** |
+| Targeted Enrichment Search (optional 2nd Tavily pass) | **Done** — recommendation topics only; max 2 passes |
+| Publishability Evaluator (heuristic + optional LLM) | **Done** |
+| Editorial Polish Agent (LLM-gated) | **Done** — runs at most once |
+| Publish-ready status (`publish_ready` / `publish_ready_with_warnings` / `draft_only`) | **Done** |
 | Mock/live output comparison CLI | **Done** |
 | GitHub Actions CI | **Done** — mock mode, no API keys required |
 | Vercel API scaffold | **Done** — mock-safe by default |
-| Agent Run Trace UI panel | **Done** |
+| Agent Run Trace UI panel | **Done** — includes evidence sufficiency + publishability |
 | Source quality badges in UI | **Done** |
-| Staged workflow animation (12 steps, self-annotating) | **Done** |
+| Staged workflow animation (16 steps, self-annotating) | **Done** |
 | Persistence / database | Not yet |
 
 ---
@@ -64,35 +69,80 @@ The pipeline uses a **hybrid deterministic workflow** with two model roles:
 | `citation_matcher` | read_only | Match claims to evidence sources |
 | `validators` | read_only | Deterministic validation of the final package |
 
+### Publish-Ready Pipeline
+
+BlogAgent v2 adds a full publish-readiness layer on top of the existing research and drafting pipeline.
+
+#### Evidence Sufficiency Evaluation
+Before drafting, a deterministic evaluator checks whether the retrieved evidence is sufficient:
+- For recommendation topics: counts named-item-supporting sources vs requested count
+- If insufficient and Tavily is configured: triggers one targeted **enrichment search** pass
+- Output: `evidence_sufficiency` with `sufficient`, `score`, `supported_count`, `recommended_action`
+
+#### Enrichment Search
+When evidence is insufficient for a recommendation topic (and Tavily is active):
+- Generates 3 targeted queries from the topic (e.g. "best date night perfumes editor picks")
+- Runs a second Tavily pass; adds new non-duplicate sources (max 10 total)
+- Re-extracts, re-scores, and rebuilds the evidence table
+- Bounded to max 2 total search passes — no unbounded loops
+
+#### Publishability Evaluator
+After revision, a heuristic evaluator scores the article on publish standards (0–100):
+- Checks for generic intro phrases, content-mill filler, weak editorial POV
+- For fragrance/beauty topics: checks for sensory detail (notes, mood, occasion)
+- For recommendation topics: checks that picks have "best for" context and rationale
+- Checks source synthesis, conclusion quality, and title specificity
+- Output: `publishability_evaluation` with `publish_ready`, `score`, `polish_required`, `defects`
+
+#### Editorial Polish Agent
+When `polish_required=True`, an LLM-backed polish pass:
+- Strengthens intro with editorial specificity
+- Adds voice, opinion language, and sensory context where evidence supports it
+- Removes content-mill phrasing
+- Makes evidence-limited framing reader-friendly
+- Runs at most once; does not invent unsupported facts; preserves all citations
+
+#### Publish Ready Status
+The final `publish_ready_status` field indicates:
+- `publish_ready` — article meets editorial standards, ready to post
+- `publish_ready_with_warnings` — minor issues (evidence limits, low sources) but usable
+- `draft_only_not_publish_ready` — significant quality gap; human editing required
+
 ### Workflow
 
 ```text
 User Topic
 → Intake Parser
 → check_external_effects   (guardrail — blocks publishing requests; extracts requested_count)
-→ select_skills            (deterministic: recommendation / financial / factual)
+→ select_skills            (deterministic: fragrance/lifestyle/recommendation/financial/factual)
 → Editor Agent research plan  (skill briefs injected)
-→ web_search
+→ web_search (pass 1)
 → webpage_extract
 → source_score
 → score_source_quality     (high/medium/low per domain)
 → Evidence Table Builder
+→ Evidence Sufficiency Evaluator (deterministic pre-draft gate)
+→ [if insufficient + is_recommendation + tavily active + pass_count < 2]
+    → Enrichment Search    (3 targeted queries; max 10 sources total)
+    → re-extract + re-score + rebuild evidence
 → Editor Agent outline     (skill briefs injected)
 → Editor Agent draft       (skill briefs injected)
 → Quality Evaluator        (10 deterministic checks; scores 0–100; score capped at 69 on HIGH defect)
 → [if HIGH-severity defect and revision_count < 1]
-    → Revision Agent       (quality-driven; mock or LLM)
-→ final_validate_quality   (post-revision check — sets final_validation_status and final_validation_defects)
+    → Revision Agent       (quality-driven; mock or LLM; skill briefs injected)
+→ final_validate_quality   (post-revision check)
 → [if final_validation_status=failed and fixable HIGH defect and revision_count < 1]
     → Revision Agent       (final-validation-triggered; at most one revision total)
-    → final_validate_quality re-runs
 → claim_extractor
 → citation_matcher
 → Fact-Check Evaluator
 → [if not passed and revision_count < 1]
     → Editor Agent revision
-    → claim_extractor + citation_matcher + fact-check (re-run)
+→ Publishability Evaluator (heuristic + optional LLM; scores 0–100)
+→ [if polish_required=True]
+    → Editorial Polish Agent (LLM; runs at most once; skill briefs injected)
 → blog_package_validator
+→ compute_publish_ready_status
 → Final Article Package
 ```
 

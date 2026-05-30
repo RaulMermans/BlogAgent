@@ -15,6 +15,9 @@ from blogagent.workflow.nodes import (
     _propagate_llm_warnings,
     build_evidence_table,
     check_external_effects,
+    compute_publish_ready_status,
+    evaluate_evidence_sufficiency_node,
+    evaluate_publishability_node,
     evaluate_quality,
     extract_claims,
     extract_webpages,
@@ -26,6 +29,8 @@ from blogagent.workflow.nodes import (
     package_article,
     revise_if_final_validation_failed,
     revise_if_needed,
+    run_editorial_polish,
+    run_enrichment_search,
     run_fact_check,
     run_web_search,
     score_source_quality,
@@ -86,6 +91,8 @@ _PRE_FACTCHECK = [
     score_sources,
     score_source_quality,                # classify sources as high/medium/low
     build_evidence_table,
+    evaluate_evidence_sufficiency_node,  # pre-draft evidence gate
+    run_enrichment_search,               # optional second Tavily pass for recommendation topics
     generate_outline,
     write_draft,
     evaluate_quality,                    # deterministic quality checks on draft
@@ -142,9 +149,22 @@ def run_pipeline(topic: str) -> BlogRunState:
         state = match_citations(state)
         state = run_fact_check(state)
 
+    # Publishability evaluation — runs after fact-check cycle.
+    t0 = time.monotonic()
+    state = evaluate_publishability_node(state)
+    state.stage_timings["evaluate_publishability"] = round(time.monotonic() - t0, 3)
+
+    # Editorial polish — runs at most once, only when publishability requires it.
+    t0 = time.monotonic()
+    state = run_editorial_polish(state)
+    state.stage_timings["run_editorial_polish"] = round(time.monotonic() - t0, 3)
+
     t0 = time.monotonic()
     state = package_article(state)
     state.stage_timings["package_article"] = round(time.monotonic() - t0, 3)
+
+    # Compute publish readiness status.
+    state = compute_publish_ready_status(state)
 
     # Compute execution_mode from what actually ran.
     state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
@@ -276,6 +296,65 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             trace.append("⚠ Final validation: passed with warnings")
     else:
         trace.append("✓ Final validation: passed")
+
+    # Evidence sufficiency
+    if state.evidence_sufficiency:
+        es = state.evidence_sufficiency
+        action = es.get("recommended_action", "proceed")
+        supported = es.get("supported_count", 0)
+        requested = es.get("requested_count")
+        if action == "evidence_limited":
+            trace.append(
+                f"⚠ Evidence sufficiency: limited, {supported}"
+                + (f"/{requested}" if requested else "")
+                + " supported"
+            )
+        elif action == "search_more" or state.search_pass_count > 1:
+            trace.append(
+                f"✓ Evidence sufficiency: enriched — {supported}"
+                + (f"/{requested}" if requested else "")
+                + " supported"
+            )
+        else:
+            trace.append(f"✓ Evidence sufficiency: {es.get('score', 0)}/100")
+
+    # Enrichment search
+    if state.search_pass_count > 1:
+        enrichment_event = next(
+            (e for e in state.provider_events if e.startswith("enrichment_search:")), None
+        )
+        if enrichment_event:
+            import re as _re  # noqa: PLC0415
+            m = _re.search(r"new_sources=(\d+)", enrichment_event)
+            new_srcs = m.group(1) if m else "?"
+            trace.append(
+                f"✓ Enrichment search: {len(state.enrichment_queries)} queries, "
+                f"+{new_srcs} sources"
+            )
+
+    # Publishability evaluation
+    if state.publishability_evaluation:
+        pe = state.publishability_evaluation
+        score = pe.get("score", 0)
+        polish = pe.get("polish_required", False)
+        symbol = "✓" if pe.get("publish_ready") else "⚠"
+        trace.append(
+            f"{symbol} Publishability: {score}/100"
+            + (", polish needed" if polish else "")
+        )
+
+    # Editorial polish
+    if state.polish_summary:
+        trace.append(f"✓ Editorial polish: completed")
+
+    # Final publish status
+    pub_status = state.publish_ready_status
+    if pub_status == "publish_ready":
+        trace.append("✓ Final status: publish_ready")
+    elif pub_status == "publish_ready_with_warnings":
+        trace.append("⚠ Final status: publish_ready_with_warnings")
+    elif pub_status == "draft_only_not_publish_ready":
+        trace.append("⚠ Final status: draft_only_not_publish_ready")
 
     # Packaged
     trace.append("✓ Packaged article")

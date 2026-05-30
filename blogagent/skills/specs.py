@@ -60,4 +60,46 @@ SKILL_SPECS: dict[str, dict[str, str]] = {
             "avoid performance predictions; discuss evaluation criteria and risks only."
         ),
     },
+    "beauty-fragrance-writing": {
+        "name": "beauty-fragrance-writing",
+        "brief": (
+            "Fragrance articles: include scent family/notes only if evidence supports them; "
+            "explain mood, occasion, and who the scent suits; "
+            "include intensity/projection only if sourced; "
+            "avoid vague words like 'nice' or 'perfect' without a specific reason."
+        ),
+    },
+    "fashion-lifestyle-editorial": {
+        "name": "fashion-lifestyle-editorial",
+        "brief": (
+            "Beauty/lifestyle/fashion: write with taste and cultural context; "
+            "avoid generic SEO filler; make the piece feel curated and opinionated; "
+            "connect product choices to mood, styling, occasion, and identity."
+        ),
+    },
+    "product-recommendation-depth": {
+        "name": "product-recommendation-depth",
+        "brief": (
+            "Each pick needs a clear use case and 'best for' context; "
+            "include pros/caveats where evidence supports them; "
+            "prefer fewer strong recommendations over weak filler; "
+            "do not rely on low-quality sources for core picks."
+        ),
+    },
+    "personal-blog-voice": {
+        "name": "personal-blog-voice",
+        "brief": (
+            "Write with editorial confidence: stronger thesis, cleaner opening, "
+            "more specific language, less generic phrasing. "
+            "Concise, stylish, human tone — like a knowledgeable friend, not a content mill."
+        ),
+    },
+    "publishability-review": {
+        "name": "publishability-review",
+        "brief": (
+            "Before finalising: evaluate whether the post is good enough to publish. "
+            "Flag generic phrasing, thin advice, weak flow, weak source synthesis, "
+            "and lack of editorial POV."
+        ),
+    },
 }

@@ -273,3 +273,47 @@ Revision constraints (MANDATORY):
 Original draft (may be truncated to 4000 chars):
 {draft}
 """
+
+PUBLISHABILITY_EVALUATION_PROMPT = """\
+You are a senior personal-blog editor evaluating whether an article is ready to publish.
+
+Evaluate on these dimensions:
+1. Intro quality — specific opening or generic filler?
+2. Editorial POV — does the article have a clear opinion or thesis?
+3. Recommendation depth — are picks specific with use-case context?
+4. Sensory/contextual detail — does lifestyle/fragrance content include mood/occasion/notes?
+5. Source synthesis — are sources woven into prose or just listed?
+6. Conclusion quality — specific recommendation or generic wrap-up?
+7. Title quality — specific and editorial, or generic SEO filler?
+
+Topic: {topic}
+Is recommendation: {is_recommendation}
+
+Article (may be truncated):
+{article}
+
+Return a JSON object with:
+- publish_ready: bool
+- score: int (0-100)
+- polish_required: bool (true when score < 80 or medium/high defects exist)
+- defects: list of objects with type, severity, message
+- summary: string
+"""
+
+ENRICHMENT_SEARCH_PLAN_PROMPT = """\
+You are a research planner. Generate {count} targeted search queries to find more
+specific named recommendations for this topic.
+
+The initial search found only {supported_count} of the {requested_count} requested items.
+Generate queries that specifically target named products, reviews, and editorial picks.
+
+Topic: {topic}
+
+Requirements:
+- Each query should be distinct and targeted
+- Focus on finding named product recommendations from editorial sources
+- Include terms like "editor picks", "best", "reviews", "guide"
+- Avoid generic educational queries
+
+Return {count} search queries as a JSON list of strings.
+"""

@@ -1,0 +1,454 @@
+"""Publishability Evaluator — determines if an article is ready to publish.
+
+Permission class: read_only
+
+Evaluates whether the draft meets personal-blog publish standards using
+deterministic heuristics plus optional LLM judgment (when
+BLOGAGENT_USE_LLM_EDITOR=true).
+
+Output: PublishabilityEvaluation with a score, defect list, and polish flag.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from typing import Literal, Optional
+
+from pydantic import BaseModel
+
+
+PublishabilityDefectType = Literal[
+    "generic_voice",
+    "weak_pov",
+    "thin_recommendations",
+    "weak_sensory_detail",
+    "poor_source_synthesis",
+    "weak_intro",
+    "weak_conclusion",
+    "seo_issue",
+]
+
+DefectSeverity = Literal["low", "medium", "high"]
+
+
+class PublishabilityDefect(BaseModel):
+    type: PublishabilityDefectType
+    severity: DefectSeverity
+    message: str
+
+
+class PublishabilityEvaluation(BaseModel):
+    publish_ready: bool
+    score: int  # 0-100
+    polish_required: bool
+    defects: list[PublishabilityDefect]
+    summary: str
+
+
+# ---------------------------------------------------------------------------
+# Generic/content-mill phrases that signal low editorial quality
+# ---------------------------------------------------------------------------
+
+_GENERIC_INTRO_PHRASES = (
+    "in the world of",
+    "in today's world",
+    "in this article, we will",
+    "in this blog post, we will",
+    "are you looking for",
+    "look no further",
+    "welcome to",
+    "this article will cover",
+    "this guide will help you",
+    "whether you're a",
+    "have you ever wondered",
+    "it's no secret that",
+    "without further ado",
+    "when it comes to",
+    "in today's competitive",
+    "in recent years",
+    "in an ever-changing",
+)
+
+_CONTENT_MILL_PHRASES = (
+    "look no further",
+    "we've got you covered",
+    "comprehensive guide",
+    "complete guide",
+    "ultimate guide",
+    "everything you need to know",
+    "dive right in",
+    "let's dive in",
+    "let's get started",
+    "without further ado",
+    "stay tuned",
+    "keep reading to find out",
+    "at the end of the day",
+    "without a doubt",
+    "needless to say",
+)
+
+_FRAGRANCE_SENSORY_TERMS = (
+    "notes",
+    "base note",
+    "top note",
+    "heart note",
+    "sillage",
+    "longevity",
+    "projection",
+    "dry down",
+    "scent family",
+    "floral",
+    "woody",
+    "oriental",
+    "fresh",
+    "citrus",
+    "musk",
+    "amber",
+    "oud",
+    "spicy",
+    "sweet",
+    "powdery",
+    "aquatic",
+    "green",
+    "leather",
+    "sandalwood",
+    "vetiver",
+)
+
+_LIFESTYLE_CONTEXT_TERMS = (
+    "date night",
+    "occasion",
+    "mood",
+    "season",
+    "style",
+    "aesthetic",
+    "layering",
+    "occasion",
+    "wardrobe",
+    "identity",
+    "vibe",
+)
+
+_WEAK_CONCLUSION_PHRASES = (
+    "in conclusion",
+    "to summarize",
+    "to sum up",
+    "in summary",
+    "as you can see",
+    "hopefully this article",
+    "we hope this guide",
+    "now that you know",
+)
+
+
+def evaluate_publishability(
+    article_markdown: str,
+    topic: str,
+    is_recommendation: bool,
+    selected_skills: list[str],
+    source_quality_scores: list[dict],
+    evidence_sufficiency: Optional[dict] = None,
+) -> PublishabilityEvaluation:
+    """Run deterministic publishability checks on the article."""
+    defects: list[PublishabilityDefect] = []
+    score = 100
+    lower = article_markdown.lower()
+    topic_lower = topic.lower()
+
+    is_fragrance = any(
+        kw in topic_lower
+        for kw in ("perfume", "parfum", "fragrance", "cologne", "scent", "eau de")
+    )
+    is_lifestyle = any(
+        kw in topic_lower
+        for kw in ("beauty", "fashion", "lifestyle", "fragrance", "makeup", "skincare", "perfume")
+    )
+
+    # --- 1. Generic intro check ---
+    intro = _extract_intro(article_markdown)
+    intro_lower = intro.lower()
+    generic_intro_count = sum(1 for p in _GENERIC_INTRO_PHRASES if p in intro_lower)
+    if generic_intro_count >= 2:
+        defects.append(PublishabilityDefect(
+            type="generic_voice",
+            severity="high",
+            message=(
+                f"Intro uses {generic_intro_count} generic filler phrase(s). "
+                "Open with a specific observation, question, or editorial thesis instead."
+            ),
+        ))
+        score -= 20
+    elif generic_intro_count == 1:
+        defects.append(PublishabilityDefect(
+            type="weak_intro",
+            severity="medium",
+            message="Intro contains generic opening phrase. Strengthen with editorial specificity.",
+        ))
+        score -= 8
+
+    # --- 2. Content-mill phrasing ---
+    mill_count = sum(1 for p in _CONTENT_MILL_PHRASES if p in lower)
+    if mill_count >= 3:
+        defects.append(PublishabilityDefect(
+            type="generic_voice",
+            severity="medium",
+            message=(
+                f"Article contains {mill_count} content-mill phrases "
+                "(e.g. 'look no further', 'comprehensive guide'). "
+                "Replace with specific, editorial language."
+            ),
+        ))
+        score -= 10
+    elif mill_count >= 1:
+        defects.append(PublishabilityDefect(
+            type="generic_voice",
+            severity="low",
+            message=f"Article contains {mill_count} generic/filler phrase(s). Consider removing.",
+        ))
+        score -= 4
+
+    # --- 3. Editorial POV / thesis ---
+    has_pov = _has_editorial_pov(article_markdown)
+    if not has_pov:
+        defects.append(PublishabilityDefect(
+            type="weak_pov",
+            severity="medium",
+            message=(
+                "Article lacks a clear editorial thesis or opinion. "
+                "Add a specific point of view in the intro or throughout."
+            ),
+        ))
+        score -= 12
+
+    # --- 4. Recommendation depth (recommendation topics) ---
+    if is_recommendation:
+        thin_recs = _check_thin_recommendations(article_markdown)
+        if thin_recs:
+            defects.append(PublishabilityDefect(
+                type="thin_recommendations",
+                severity="high",
+                message=thin_recs,
+            ))
+            score -= 20
+
+    # --- 5. Fragrance sensory detail ---
+    if is_fragrance:
+        sensory_count = sum(1 for t in _FRAGRANCE_SENSORY_TERMS if t in lower)
+        lifestyle_count = sum(1 for t in _LIFESTYLE_CONTEXT_TERMS if t in lower)
+        if sensory_count < 3:
+            defects.append(PublishabilityDefect(
+                type="weak_sensory_detail",
+                severity="high",
+                message=(
+                    f"Fragrance article mentions only {sensory_count} sensory/note term(s). "
+                    "Include scent families, notes (top/heart/base), or mood descriptions "
+                    "where evidence supports them."
+                ),
+            ))
+            score -= 18
+        elif sensory_count < 6:
+            defects.append(PublishabilityDefect(
+                type="weak_sensory_detail",
+                severity="medium",
+                message=(
+                    f"Fragrance article mentions {sensory_count} sensory terms — "
+                    "could include more context (occasion, scent family, projection)."
+                ),
+            ))
+            score -= 8
+        if lifestyle_count < 2 and is_lifestyle:
+            defects.append(PublishabilityDefect(
+                type="weak_sensory_detail",
+                severity="low",
+                message=(
+                    "Lifestyle/beauty article could include more occasion or mood context "
+                    "(e.g. 'date night', 'season', 'vibe')."
+                ),
+            ))
+            score -= 5
+
+    # --- 6. Lifestyle/beauty editorial depth ---
+    elif is_lifestyle and is_recommendation:
+        lifestyle_count = sum(1 for t in _LIFESTYLE_CONTEXT_TERMS if t in lower)
+        if lifestyle_count < 2:
+            defects.append(PublishabilityDefect(
+                type="thin_recommendations",
+                severity="medium",
+                message=(
+                    "Lifestyle recommendation article lacks occasion/mood/context detail. "
+                    "Connect product choices to mood, styling, or identity."
+                ),
+            ))
+            score -= 10
+
+    # --- 7. Source synthesis (not just list) ---
+    if not _has_source_synthesis(article_markdown, source_quality_scores):
+        defects.append(PublishabilityDefect(
+            type="poor_source_synthesis",
+            severity="low",
+            message=(
+                "Sources appear listed rather than synthesised. "
+                "Weave source insights into prose for better editorial authority."
+            ),
+        ))
+        score -= 6
+
+    # --- 8. Weak conclusion ---
+    conclusion = _extract_conclusion(article_markdown)
+    if conclusion:
+        concl_lower = conclusion.lower()
+        weak_concl_count = sum(1 for p in _WEAK_CONCLUSION_PHRASES if p in concl_lower)
+        if weak_concl_count >= 1 or len(conclusion.strip()) < 80:
+            defects.append(PublishabilityDefect(
+                type="weak_conclusion",
+                severity="low",
+                message=(
+                    "Conclusion is generic or too short. "
+                    "End with an editorial recommendation or memorable insight."
+                ),
+            ))
+            score -= 5
+
+    # --- 9. Title quality ---
+    title_match = re.search(r"^#\s+(.+)", article_markdown, re.MULTILINE)
+    if title_match:
+        title_text = title_match.group(1).lower()
+        generic_title_words = {"guide", "everything", "ultimate", "complete", "comprehensive"}
+        if any(w in title_text for w in generic_title_words):
+            defects.append(PublishabilityDefect(
+                type="seo_issue",
+                severity="low",
+                message=(
+                    "Title uses generic SEO filler words (e.g. 'ultimate guide', 'everything'). "
+                    "Use a specific, editorial title instead."
+                ),
+            ))
+            score -= 4
+
+    score = max(0, min(100, score))
+
+    # Polish is needed when score < 80 or there are medium/high defects
+    high_or_medium = [d for d in defects if d.severity in ("high", "medium")]
+    polish_required = score < 80 or len(high_or_medium) >= 2
+
+    # Publish ready when score >= 72 and no high defects
+    high_defects = [d for d in defects if d.severity == "high"]
+    publish_ready = score >= 72 and len(high_defects) == 0
+
+    if not defects:
+        summary = f"Score: {score}/100. Article meets publish standards."
+    else:
+        msgs = "; ".join(d.message[:80] for d in defects[:3])
+        more = f" (+{len(defects) - 3} more)" if len(defects) > 3 else ""
+        summary = f"Score: {score}/100. {len(defects)} issue(s): {msgs}{more}"
+
+    return PublishabilityEvaluation(
+        publish_ready=publish_ready,
+        score=score,
+        polish_required=polish_required,
+        defects=defects,
+        summary=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_intro(markdown: str) -> str:
+    """Extract the first paragraph after the H1 title (up to ~300 chars)."""
+    lines = markdown.split("\n")
+    found_title = False
+    intro_lines: list[str] = []
+    for line in lines:
+        if line.startswith("# "):
+            found_title = True
+            continue
+        if found_title:
+            if line.startswith("##"):
+                break
+            if line.strip():
+                intro_lines.append(line)
+                if sum(len(l) for l in intro_lines) > 300:
+                    break
+    return " ".join(intro_lines)
+
+
+def _extract_conclusion(markdown: str) -> str:
+    """Extract the last section content."""
+    # Find Final Takeaway or Conclusion section
+    m = re.search(
+        r"#{1,3}\s*(?:Final Takeaway|Conclusion|Takeaway|Closing Thoughts)\s*\n(.*?)(?=\n#{1,3}|\Z)",
+        markdown,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    # Fall back to last 200 chars of the article
+    return markdown.strip()[-200:]
+
+
+def _has_editorial_pov(markdown: str) -> bool:
+    """Check for editorial opinion signals in the article."""
+    lower = markdown.lower()
+    pov_signals = (
+        # Opinion/judgment words
+        "the best",
+        "worth",
+        "avoid",
+        "prefer",
+        "recommend",
+        "stand out",
+        "winner",
+        "top pick",
+        "our pick",
+        "editor's pick",
+        "we love",
+        "we prefer",
+        "the winner",
+        "our favorite",
+        "surprisingly",
+        "underrated",
+        "overrated",
+        "don't",
+        "shouldn't",
+        "you should",
+        "the real",
+    )
+    return sum(1 for s in pov_signals if s in lower) >= 2
+
+
+def _check_thin_recommendations(markdown: str) -> str:
+    """Check if recommendation items have enough detail. Returns error message or ''."""
+    # Look for recommendation entries — each should have at least a "best for" or "why"
+    rec_sections = re.findall(
+        r"(?:\*\*Best for\*\*|\*\*Why|Best for:|Why it works:|Caveat:)",
+        markdown,
+        re.IGNORECASE,
+    )
+    # Count Quick Picks items
+    qp_match = re.search(
+        r"#{1,3}\s*Quick\s*Picks\s*\n(.*?)(?=\n#{1,3}|\Z)",
+        markdown,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if qp_match:
+        bullets = re.findall(r"^\s*[-*]\s+\S", qp_match.group(1), re.MULTILINE)
+        numbered = re.findall(r"^\s*\d+[.)]\s+\S", qp_match.group(1), re.MULTILINE)
+        picks_count = len(bullets) + len(numbered)
+        if picks_count > 0 and len(rec_sections) < picks_count // 2:
+            return (
+                f"Recommendation article has {picks_count} picks but only "
+                f"{len(rec_sections)} detail section(s). "
+                "Each pick needs a clear use case, rationale, and source citation."
+            )
+    return ""
+
+
+def _has_source_synthesis(markdown: str, source_quality_scores: list[dict]) -> bool:
+    """Check that sources are cited in prose (not just listed)."""
+    # Look for inline citations like [title](url)
+    inline_citations = re.findall(r"\[.+?\]\(https?://", markdown)
+    return len(inline_citations) >= 1

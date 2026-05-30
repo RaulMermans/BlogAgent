@@ -76,6 +76,14 @@ class RunResponse(BaseModel):
     final_validation_status: str = ""
     evidence_limited_count_accepted: bool = False
     run_trace: list[str] = []
+    # Publish-ready pipeline fields
+    evidence_sufficiency: dict[str, Any] = {}
+    publishability_evaluation: dict[str, Any] = {}
+    polish_summary: list[str] = []
+    publishability_score: int = 0
+    publish_ready_status: str = ""
+    search_pass_count: int = 1
+    enrichment_queries: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +270,13 @@ def _run_topic(topic: str) -> RunResponse:
         final_validation_status=state.final_validation_status or "",
         evidence_limited_count_accepted=state.evidence_limited_count_accepted,
         run_trace=list(state.run_trace),
+        evidence_sufficiency=dict(state.evidence_sufficiency) if state.evidence_sufficiency else {},
+        publishability_evaluation=dict(state.publishability_evaluation) if state.publishability_evaluation else {},
+        polish_summary=list(state.polish_summary),
+        publishability_score=state.publishability_score,
+        publish_ready_status=state.publish_ready_status or "",
+        search_pass_count=state.search_pass_count,
+        enrichment_queries=list(state.enrichment_queries),
     )
 
 
@@ -745,10 +760,14 @@ def _build_app_html() -> str:
     'Searching sources',
     'Scoring source quality',
     'Building evidence table',
+    'Evidence sufficiency check',
+    'Enrichment search (if needed)',
     'Drafting article',
     'Evaluating quality',
     'Revising if needed',
     'Final validation',
+    'Publishability evaluation',
+    'Editorial polish (if needed)',
     'Packaging blog post',
   ];
 
@@ -857,10 +876,43 @@ def _build_app_html() -> str:
     const ol = document.getElementById('workflow-steps');
     const steps = ol.querySelectorAll('.workflow-step');
 
-    // Step 8 (index 8): quality evaluation
+    // Step 7 (index 7): evidence sufficiency
+    const es = data.evidence_sufficiency || {};
+    const esStep = steps[7];
+    if (esStep && es.recommended_action) {
+      const txt = esStep.querySelector('span:last-child');
+      const icon = esStep.querySelector('.step-icon');
+      if (es.recommended_action === 'evidence_limited') {
+        esStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Evidence sufficiency — limited (' + (es.supported_count||0) + '/' + (es.requested_count||'?') + ' supported)';
+      } else if (es.recommended_action === 'search_more') {
+        esStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Evidence sufficiency — enrichment needed';
+      } else {
+        if (txt) txt.textContent = 'Evidence sufficiency — sufficient (score ' + (es.score||0) + ')';
+      }
+    }
+
+    // Step 8 (index 8): enrichment search
+    const enrStep = steps[8];
+    const searchPassCount = data.search_pass_count || 1;
+    if (enrStep) {
+      const txt = enrStep.querySelector('span:last-child');
+      const icon = enrStep.querySelector('.step-icon');
+      if (searchPassCount > 1) {
+        if (txt) txt.textContent = 'Enrichment search — ' + (data.enrichment_queries||[]).length + ' queries, +sources added';
+        if (icon) icon.textContent = '✓';
+      } else {
+        if (txt) txt.textContent = 'Enrichment search — skipped';
+      }
+    }
+
+    // Step 10 (index 10): quality evaluation
     const qe = data.quality_evaluation || {};
     if (qe.score !== undefined) {
-      const qStep = steps[8];
+      const qStep = steps[10];
       if (qStep) {
         const icon = qStep.querySelector('.step-icon');
         if (!qe.passes) {
@@ -872,9 +924,9 @@ def _build_app_html() -> str:
       }
     }
 
-    // Step 9 (index 9): revision
+    // Step 11 (index 11): revision
     const revCount = data.revision_count || 0;
-    const revStep = steps[9];
+    const revStep = steps[11];
     if (revStep) {
       const txt = revStep.querySelector('span:last-child');
       const icon = revStep.querySelector('.step-icon');
@@ -886,9 +938,9 @@ def _build_app_html() -> str:
       }
     }
 
-    // Step 10 (index 10): final validation
+    // Step 12 (index 12): final validation
     const fvStatus = data.final_validation_status || 'passed';
-    const fvStep = steps[10];
+    const fvStep = steps[12];
     if (fvStep) {
       const txt = fvStep.querySelector('span:last-child');
       const icon = fvStep.querySelector('.step-icon');
@@ -903,6 +955,37 @@ def _build_app_html() -> str:
         if (txt) txt.textContent = 'Final validation — ' + (evLimited ? 'evidence-limited count accepted' : 'passed with warnings');
       } else {
         if (txt) txt.textContent = 'Final validation — passed';
+      }
+    }
+
+    // Step 13 (index 13): publishability evaluation
+    const pe = data.publishability_evaluation || {};
+    const peStep = steps[13];
+    if (peStep && pe.score !== undefined) {
+      const txt = peStep.querySelector('span:last-child');
+      const icon = peStep.querySelector('.step-icon');
+      if (pe.polish_required) {
+        peStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (polish needed)';
+      } else if (pe.publish_ready) {
+        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (ready)';
+      } else {
+        peStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (not ready)';
+      }
+    }
+
+    // Step 14 (index 14): editorial polish
+    const polishStep = steps[14];
+    const polishSummary = data.polish_summary || [];
+    if (polishStep) {
+      const txt = polishStep.querySelector('span:last-child');
+      if (polishSummary.length > 0) {
+        if (txt) txt.textContent = 'Editorial polish — completed';
+      } else {
+        if (txt) txt.textContent = 'Editorial polish — skipped';
       }
     }
   }
@@ -1051,6 +1134,34 @@ def _build_app_html() -> str:
       addStat(statsRow, 'quality ' + qualityEval.score + '/100', qType);
     }
 
+    // Publishability score
+    const publishabilityEval = data.publishability_evaluation || {};
+    const publishScore = data.publishability_score || publishabilityEval.score;
+    if (publishScore !== undefined && publishScore > 0) {
+      const pubReady = publishabilityEval.publish_ready;
+      addStat(statsRow, 'publish score ' + publishScore + '/100', pubReady ? 'ok' : 'warn');
+    }
+
+    // Publish ready status
+    const pubStatus = data.publish_ready_status || '';
+    if (pubStatus === 'publish_ready') {
+      addStat(statsRow, '✓ publish ready', 'ok');
+    } else if (pubStatus === 'publish_ready_with_warnings') {
+      addStat(statsRow, '⚠ publish ready (warnings)', 'warn');
+    } else if (pubStatus === 'draft_only_not_publish_ready') {
+      addStat(statsRow, '⚠ draft only', 'danger');
+    }
+
+    // Research depth badge
+    const esData = data.evidence_sufficiency || {};
+    const searchPasses = data.search_pass_count || 1;
+    if (searchPasses > 1) {
+      addStat(statsRow, 'research depth: enriched (' + searchPasses + ' passes)', 'ok');
+    } else if (esData.score !== undefined) {
+      const depthType = esData.sufficient ? 'ok' : 'warn';
+      addStat(statsRow, 'research depth: ' + (esData.sufficient ? 'sufficient' : 'limited'), depthType);
+    }
+
     // Skills row
     if (selectedSkills.length) {
       const skillsDiv = document.createElement('div');
@@ -1066,6 +1177,42 @@ def _build_app_html() -> str:
         skillsDiv.appendChild(span);
       });
       document.getElementById('title-display').closest('.form-card').appendChild(skillsDiv);
+    }
+
+    // Polish summary
+    const polishSummary = data.polish_summary || [];
+    if (polishSummary.length > 0) {
+      const polishDiv = document.createElement('div');
+      polishDiv.style.marginBottom = '0.8rem';
+      const polishLabel = document.createElement('div');
+      polishLabel.className = 'meta-label';
+      polishLabel.textContent = 'Editorial Polish';
+      polishDiv.appendChild(polishLabel);
+      polishSummary.forEach(s => {
+        const p = document.createElement('p');
+        p.style.cssText = 'font-size:0.85rem;color:#444;margin:0.2rem 0;';
+        p.textContent = s;
+        polishDiv.appendChild(p);
+      });
+      document.getElementById('title-display').closest('.form-card').appendChild(polishDiv);
+    }
+
+    // Enrichment queries (if used)
+    const enrichmentQueries = data.enrichment_queries || [];
+    if (enrichmentQueries.length > 0) {
+      const enrDiv = document.createElement('div');
+      enrDiv.style.marginBottom = '0.8rem';
+      const enrLabel = document.createElement('div');
+      enrLabel.className = 'meta-label';
+      enrLabel.textContent = 'Enrichment Queries';
+      enrDiv.appendChild(enrLabel);
+      enrichmentQueries.forEach(q => {
+        const p = document.createElement('p');
+        p.style.cssText = 'font-size:0.82rem;color:#555;font-style:italic;margin:0.15rem 0;';
+        p.textContent = '→ ' + q;
+        enrDiv.appendChild(p);
+      });
+      document.getElementById('title-display').closest('.form-card').appendChild(enrDiv);
     }
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
@@ -1106,13 +1253,16 @@ def _build_app_html() -> str:
       srcList.innerHTML = '';
       sourceQualityScores.forEach(sq => {
         const li = document.createElement('li');
-        const badge = '<span class="quality-badge ' + (sq.quality || 'medium') + '">' + (sq.quality || '?') + '</span>';
+        const qualityClass = sq.quality || 'medium';
+        const badge = '<span class="quality-badge ' + qualityClass + '">' + qualityClass + '</span>';
         const titleText = sq.title ? sq.title : (sq.url || '');
-        li.innerHTML = badge + ' ' + escapeHtml(titleText);
+        const rawDomain = sq.url ? sq.url.replace('https://','').replace('http://','').split('/')[0] : '';
+        const domainText = rawDomain ? (' <span style="color:#999;font-size:0.75rem;">(' + rawDomain + ')</span>') : '';
+        li.innerHTML = badge + ' ' + escapeHtml(titleText) + domainText;
         if (sq.reason) {
-          const small = document.createElement('span');
-          small.style.cssText = 'color:#888;margin-left:0.5rem;font-size:0.78rem;';
-          small.textContent = '— ' + sq.reason;
+          const small = document.createElement('div');
+          small.style.cssText = 'color:#888;margin-left:1.4rem;font-size:0.75rem;';
+          small.textContent = sq.reason;
           li.appendChild(small);
         }
         srcList.appendChild(li);

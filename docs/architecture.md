@@ -71,26 +71,107 @@ The mock provider has registered responses for every output schema. All tests ru
 ## Deterministic Pipeline Steps
 
 ```text
-intake_topic             → normalize and validate topic string; detect recommendation/financial intent
-check_external_effects   → guardrail: block publishing/posting requests; extract requested_count
-select_skills            → deterministic skill selection based on intent (recommendation/financial/factual)
-generate_research_qs     → Editor Agent: research planning (mock or LLM); skill briefs injected
-run_web_search           → call web_search tool (mock default; Tavily optional via env)
-extract_webpages         → call webpage_extract tool (httpx + BS4; mock for mock URLs)
-score_sources            → call source_score tool (deterministic; no LLM)
-score_source_quality     → classify each source as high/medium/low quality (domain heuristic)
-build_evidence_table     → assemble EvidenceItem list from scored sources
-generate_outline         → Editor Agent: outline (mock or LLM); skill briefs injected
-write_draft              → Editor Agent: draft (mock or LLM); skill briefs injected
-evaluate_quality         → deterministic quality checks on draft; score capped at 69 on HIGH defect
-revise_if_needed         → Revision Agent called if any HIGH-severity defect (at most once)
-final_validate_quality   → sets final_validation_status / final_validation_defects; top-N uses count_recommendations()
-revise_if_final_validation_failed → safety-net: if final validation failed with fixable HIGH defect and revision_count < 1, calls Revision Agent and re-runs final_validate_quality
-extract_claims           → claim_extractor tool (heuristic or LLM)
-match_citations          → citation_matcher tool (deterministic heuristic)
-run_fact_check           → assemble FactCheckReport (+ optional LLM judgment)
-[fact-check revision]    → Editor Agent fact-check revision + re-run claims/citations/fact-check
-package_article          → assemble and validate ArticlePackage (with SEO fields)
+intake_topic                     → normalize topic; detect recommendation/financial intent
+check_external_effects           → guardrail: block publishing requests; extract requested_count
+select_skills                    → deterministic skill selection (fragrance/lifestyle/rec/financial/factual)
+generate_research_qs             → Editor Agent: research plan (mock or LLM); skill briefs injected
+run_web_search [pass 1]          → call web_search tool (mock default; Tavily optional)
+extract_webpages                 → call webpage_extract tool
+score_sources                    → call source_score tool (deterministic)
+score_source_quality             → classify each source as high/medium/low (domain heuristic)
+build_evidence_table             → assemble EvidenceItem list from scored sources
+evaluate_evidence_sufficiency    → deterministic pre-draft gate; sets recommended_action
+[if recommended_action=search_more + tavily + pass < 2]
+  run_enrichment_search          → 3 targeted queries; re-extract + re-score + rebuild evidence
+generate_outline                 → Editor Agent: outline (mock or LLM); skill briefs injected
+write_draft                      → Editor Agent: draft (mock or LLM); skill briefs injected
+evaluate_quality                 → deterministic quality checks; score capped at 69 on HIGH defect
+revise_if_needed                 → Revision Agent if HIGH-severity defect (at most once)
+final_validate_quality           → sets final_validation_status / final_validation_defects
+revise_if_final_validation_failed → safety-net: one more revision if fixable HIGH defect
+extract_claims                   → claim_extractor tool (heuristic or LLM)
+match_citations                  → citation_matcher tool (deterministic heuristic)
+run_fact_check                   → assemble FactCheckReport (+ optional LLM judgment)
+[fact-check revision]            → Editor Agent fact-check revision + re-run
+evaluate_publishability          → heuristic publish-readiness check; scores 0–100
+[if polish_required=True]
+  run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
+package_article                  → assemble ArticlePackage (with SEO fields)
+compute_publish_ready_status     → sets publish_ready_status field
+```
+
+---
+
+## Publish-Ready Pipeline
+
+### Evidence Sufficiency Evaluator
+
+`blogagent/agents/evidence_sufficiency.py` — deterministic, no LLM.
+
+For recommendation topics, it checks:
+- Number of high/medium sources (proxy for distinct recommendation coverage)
+- Whether `supported_count >= requested_count`
+- Thin evidence (< 3 real facts)
+- Low-source dominance (all sources are low-quality)
+
+Output: `EvidenceSufficiencyResult` with `sufficient`, `score`, `supported_count`, `recommended_action` (`proceed | search_more | evidence_limited`).
+
+### Enrichment Search
+
+`run_enrichment_search` in `blogagent/workflow/nodes.py`:
+- Triggers when `recommended_action == "search_more"` and Tavily is active
+- Generates 3 targeted editorial queries via `generate_enrichment_queries()`
+- Runs up to `_MAX_SEARCH_PASSES=2` total (initial + enrichment)
+- Caps sources at `_MAX_SOURCES_TOTAL=10`
+- Re-extracts, re-scores, and rebuilds evidence after enrichment
+
+### Publishability Evaluator
+
+`blogagent/agents/publishability_evaluator.py` — heuristic, deterministic, no LLM.
+
+Checks:
+- Generic intro phrases (content-mill openers)
+- Editorial POV (opinion signal words)
+- Recommendation depth (each pick has use-case context)
+- Fragrance/beauty sensory detail (notes, mood, occasion terms)
+- Source synthesis (inline citations in prose)
+- Conclusion quality (not a generic wrap-up)
+- Title specificity (no "ultimate guide" filler)
+
+Score thresholds: `publish_ready = score >= 72 and no high defects`. `polish_required = score < 80 or ≥2 medium/high defects`.
+
+### Editorial Polish Agent
+
+`blogagent/agents/editorial_polish_agent.py` — LLM-gated (`BLOGAGENT_USE_LLM_EDITOR=true`).
+
+- Runs at most once per pipeline
+- Improves intro, voice, sensory detail, and conclusion
+- Does not invent unsupported facts
+- Preserves all citations and financial disclaimers
+- Mock fallback: returns article unchanged with explanatory summary
+
+### New Skills
+
+Five new skills added to `blogagent/skills/specs.py`:
+
+| Skill | Applies To | Role |
+|---|---|---|
+| `beauty-fragrance-writing` | perfume/fragrance/cologne topics | Sensory language, notes, occasion, mood |
+| `fashion-lifestyle-editorial` | beauty/fashion/lifestyle topics | Curated, opinionated editorial voice |
+| `product-recommendation-depth` | all recommendation topics | Per-pick use case, pros/caveats |
+| `personal-blog-voice` | all topics | Editorial confidence, cleaner prose |
+| `publishability-review` | all topics | Pre-publication quality gate reminder |
+
+### State Fields Added
+
+```python
+evidence_sufficiency: Optional[dict]       # EvidenceSufficiencyResult dict
+search_pass_count: int = 1                 # total search passes run
+enrichment_queries: list[str]              # queries used in enrichment pass
+publishability_evaluation: Optional[dict]  # PublishabilityEvaluation dict
+polish_summary: list[str]                  # editorial polish change summary
+publishability_score: int = 0             # convenience field from evaluation
+publish_ready_status: str                  # "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
 ```
 
 ---
