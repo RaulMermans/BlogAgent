@@ -5,13 +5,10 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-import pytest
-
 from blogagent.skills.loader import select_skills
 from blogagent.skills.specs import SKILL_SPECS
 from blogagent.workflow.graph import run_pipeline
 from blogagent.workflow.state import BlogRunState
-
 
 # ---------------------------------------------------------------------------
 # Skill selection tests
@@ -202,7 +199,7 @@ class TestEnrichmentSearchNode:
 
     def test_enrichment_respects_max_search_passes(self):
         """When search_pass_count already at max, enrichment is skipped."""
-        from blogagent.workflow.nodes import run_enrichment_search, _MAX_SEARCH_PASSES
+        from blogagent.workflow.nodes import _MAX_SEARCH_PASSES, run_enrichment_search
 
         state = BlogRunState(topic="top 10 perfumes")
         state.is_recommendation = True
@@ -217,8 +214,8 @@ class TestEnrichmentSearchNode:
 
     def test_enrichment_provider_events_recorded(self):
         """Enrichment search emits an event in provider_events."""
-        from blogagent.workflow.nodes import run_enrichment_search
         from blogagent.tools.web_search import SearchOutput, SearchResult
+        from blogagent.workflow.nodes import run_enrichment_search
 
         state = BlogRunState(topic="top 5 perfumes for a date")
         state.is_recommendation = True

@@ -16,7 +16,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-
 PublishabilityDefectType = Literal[
     "generic_voice",
     "weak_pov",
@@ -370,7 +369,7 @@ def _extract_intro(markdown: str) -> str:
                 break
             if line.strip():
                 intro_lines.append(line)
-                if sum(len(l) for l in intro_lines) > 300:
+                if sum(len(ln) for ln in intro_lines) > 300:
                     break
     return " ".join(intro_lines)
 

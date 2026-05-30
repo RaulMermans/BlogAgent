@@ -345,7 +345,7 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
 
     # Editorial polish
     if state.polish_summary:
-        trace.append(f"✓ Editorial polish: completed")
+        trace.append("✓ Editorial polish: completed")
 
     # Final publish status
     pub_status = state.publish_ready_status

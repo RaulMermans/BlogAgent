@@ -15,8 +15,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from blogagent.workflow.state import EvidenceItem, SourceScore
-
+from blogagent.workflow.state import EvidenceItem
 
 RecommendedAction = Literal["proceed", "search_more", "evidence_limited"]
 

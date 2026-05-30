@@ -10,12 +10,10 @@ from blogagent.agents.editorial_polish_agent import (
     polish_article,
 )
 from blogagent.agents.evidence_sufficiency import (
-    EvidenceSufficiencyResult,
     evaluate_evidence_sufficiency,
     generate_enrichment_queries,
 )
 from blogagent.agents.publishability_evaluator import (
-    PublishabilityEvaluation,
     evaluate_publishability,
 )
 from blogagent.llm.client import detect_repeated_excerpts
