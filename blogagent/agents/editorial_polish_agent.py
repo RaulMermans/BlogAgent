@@ -18,7 +18,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from blogagent.llm import client as llm_client
-from blogagent.llm.schemas import LLMResult, RevisionOutput
+from blogagent.llm.schemas import LLMResult
 
 _MOCK_MODEL = "mock-1.0"
 _MOCK_PROVIDER = "mock"
@@ -132,7 +132,10 @@ def polish_article(
     requested_count: Optional[int],
     evidence_sufficiency: Optional[dict],
 ) -> LLMResult:
-    """Polish the article for publish-readiness. Returns an LLMResult wrapping EditorialPolishOutput."""
+    """Polish the article for publish-readiness.
+
+    Returns an LLMResult wrapping EditorialPolishOutput.
+    """
     if not _use_llm():
         return _mock_llm_result(_mock_polish(article_markdown, publishability_evaluation))
 

@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
 from blogagent.agents.editorial_polish_agent import (
     EditorialPolishOutput,
     polish_article,
 )
-from blogagent.workflow.state import EvidenceItem, SourceScore
 
 _DRAFT = """# Best Perfumes for a Date Night
 
@@ -74,7 +69,8 @@ class TestEditorialPolishAgent:
 
     def test_mock_preserves_citations(self):
         """Mock polish doesn't strip inline citations."""
-        draft_with_citations = _DRAFT + "\n\nAccording to [Allure](https://allure.com): Chanel Chance is fresh."
+        citation_line = "\n\nAccording to [Allure](https://allure.com): Chanel Chance is fresh."
+        draft_with_citations = _DRAFT + citation_line
         result = polish_article(
             article_markdown=draft_with_citations,
             topic="best perfumes for a date",

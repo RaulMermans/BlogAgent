@@ -72,7 +72,12 @@ We've got you covered with our selection criteria. Without further ado, let's di
 In conclusion, as you can see, choosing a perfume is important. We hope this guide was helpful.
 """
 
-_HIGH_QUALITY_SOURCE = {"quality": "high", "reason": "allure.com is editorial", "url": "https://allure.com", "title": "Allure"}
+_HIGH_QUALITY_SOURCE = {
+    "quality": "high",
+    "reason": "allure.com is editorial",
+    "url": "https://allure.com",
+    "title": "Allure",
+}
 
 
 class TestPublishabilityEvaluator:
@@ -89,7 +94,10 @@ class TestPublishabilityEvaluator:
         assert isinstance(result, PublishabilityEvaluation)
         assert result.score >= 65  # Should score reasonably well
         # Should not have high-severity generic_voice defect
-        high_generic = [d for d in result.defects if d.type == "generic_voice" and d.severity == "high"]
+        high_generic = [
+            d for d in result.defects
+            if d.type == "generic_voice" and d.severity == "high"
+        ]
         assert len(high_generic) == 0
 
     def test_generic_intro_fails_or_polish_required(self):

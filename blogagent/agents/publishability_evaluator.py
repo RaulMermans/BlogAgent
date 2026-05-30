@@ -11,7 +11,6 @@ Output: PublishabilityEvaluation with a score, defect list, and polish flag.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Literal, Optional
 
@@ -380,7 +379,8 @@ def _extract_conclusion(markdown: str) -> str:
     """Extract the last section content."""
     # Find Final Takeaway or Conclusion section
     m = re.search(
-        r"#{1,3}\s*(?:Final Takeaway|Conclusion|Takeaway|Closing Thoughts)\s*\n(.*?)(?=\n#{1,3}|\Z)",
+        r"#{1,3}\s*(?:Final Takeaway|Conclusion|Takeaway|Closing Thoughts)"
+        r"\s*\n(.*?)(?=\n#{1,3}|\Z)",
         markdown,
         re.DOTALL | re.IGNORECASE,
     )

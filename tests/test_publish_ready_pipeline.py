@@ -20,7 +20,9 @@ from blogagent.workflow.state import BlogRunState
 
 class TestNewSkillSelection:
     def test_fragrance_topic_selects_beauty_fragrance_writing(self):
-        skills = select_skills("best perfumes for a date", is_recommendation=True, is_financial=False)
+        skills = select_skills(
+            "best perfumes for a date", is_recommendation=True, is_financial=False
+        )
         assert "beauty-fragrance-writing" in skills
 
     def test_lifestyle_topic_selects_fashion_lifestyle_editorial(self):
@@ -28,7 +30,9 @@ class TestNewSkillSelection:
         assert "fashion-lifestyle-editorial" in skills
 
     def test_recommendation_topic_selects_product_recommendation_depth(self):
-        skills = select_skills("top 10 laptops for developers", is_recommendation=True, is_financial=False)
+        skills = select_skills(
+            "top 10 laptops for developers", is_recommendation=True, is_financial=False
+        )
         assert "product-recommendation-depth" in skills
 
     def test_all_blog_posts_select_personal_blog_voice(self):
@@ -49,13 +53,17 @@ class TestNewSkillSelection:
             assert "publishability-review" in skills, f"publishability-review missing for {topic}"
 
     def test_financial_topic_does_not_select_beauty_skills(self):
-        skills = select_skills("top ETFs for retirement", is_recommendation=False, is_financial=True)
+        skills = select_skills(
+            "top ETFs for retirement", is_recommendation=False, is_financial=True
+        )
         assert "beauty-fragrance-writing" not in skills
         assert "fashion-lifestyle-editorial" not in skills
 
     def test_fragrance_topic_does_not_get_fashion_lifestyle_separately(self):
         """Fragrance uses beauty-fragrance-writing, not also fashion-lifestyle."""
-        skills = select_skills("best perfumes for date night", is_recommendation=True, is_financial=False)
+        skills = select_skills(
+            "best perfumes for date night", is_recommendation=True, is_financial=False
+        )
         assert "beauty-fragrance-writing" in skills
         # fashion-lifestyle-editorial not needed when beauty-fragrance-writing is present
         # (only one of them applies per logic in loader.py)

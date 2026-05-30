@@ -168,5 +168,6 @@ class BlogRunState(BaseModel):
     polish_summary: list[str] = Field(default_factory=list)
     # Publishability score 0-100 (extracted from publishability_evaluation for convenience)
     publishability_score: int = 0
-    # Final publish readiness: "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
+    # Final publish readiness:
+    # "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
     publish_ready_status: str = ""

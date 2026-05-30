@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from blogagent.agents.evidence_sufficiency import (
     EvidenceSufficiencyResult,
     evaluate_evidence_sufficiency,
     generate_enrichment_queries,
 )
-from blogagent.workflow.state import EvidenceItem, SourceScore
+from blogagent.workflow.state import EvidenceItem
 
 
 # ---------------------------------------------------------------------------
@@ -19,10 +17,18 @@ from blogagent.workflow.state import EvidenceItem, SourceScore
 
 def _make_source_quality(quality: str, is_mock: bool = False) -> dict:
     reason = "Mock placeholder source" if is_mock else f"{quality} source"
-    return {"url": f"https://example.com/{quality}", "title": f"{quality} source", "quality": quality, "reason": reason}
+    return {
+        "url": f"https://example.com/{quality}",
+        "title": f"{quality} source",
+        "quality": quality,
+        "reason": reason,
+    }
 
 
-def _make_evidence_item(fact: str = "Great perfume with floral notes", source_url: str = "https://allure.com/1") -> EvidenceItem:
+def _make_evidence_item(
+    fact: str = "Great perfume with floral notes",
+    source_url: str = "https://allure.com/1",
+) -> EvidenceItem:
     return EvidenceItem(
         fact=fact,
         source_url=source_url,
@@ -66,7 +72,10 @@ class TestEvidenceSufficiencyRecommendation:
         """5 high/medium sources with 10 evidence items → sufficient for top 5."""
         source_quality = [_make_source_quality("high")] * 4 + [_make_source_quality("medium")] * 4
         evidence = [
-            _make_evidence_item(f"Named pick #{i} floral notes fresh citrus", f"https://allure.com/{i}")
+            _make_evidence_item(
+                f"Named pick #{i} floral notes fresh citrus",
+                f"https://allure.com/{i}",
+            )
             for i in range(10)
         ]
         result = evaluate_evidence_sufficiency(
@@ -128,7 +137,10 @@ class TestEvidenceSufficiencyRecommendation:
     def test_no_requested_count_proceeds(self):
         """No requested count with decent evidence → proceed."""
         source_quality = [_make_source_quality("high")] * 3
-        evidence = [_make_evidence_item(f"Good pick #{i}", f"https://allure.com/{i}") for i in range(5)]
+        evidence = [
+            _make_evidence_item(f"Good pick #{i}", f"https://allure.com/{i}")
+            for i in range(5)
+        ]
         result = evaluate_evidence_sufficiency(
             topic="best perfumes for a date",
             requested_count=None,

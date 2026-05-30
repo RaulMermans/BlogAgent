@@ -131,7 +131,9 @@ def _is_mock_source(source_quality: dict) -> bool:
     return "Mock placeholder" in reason or "mock" in reason.lower()
 
 
-def generate_enrichment_queries(topic: str, missing: list[str], requested_count: Optional[int]) -> list[str]:
+def generate_enrichment_queries(
+    topic: str, missing: list[str], requested_count: Optional[int]
+) -> list[str]:
     """Generate targeted search queries to fill evidence gaps for recommendation topics."""
     base = topic.lower().strip()
 
