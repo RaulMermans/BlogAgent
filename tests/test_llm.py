@@ -1070,3 +1070,209 @@ def test_pipeline_repeated_text_guardrail_does_not_break_pipeline():
     state = run_pipeline("The water cycle")
     assert state.final_article_package is not None
     assert state.blocked is False
+
+
+# ---------------------------------------------------------------------------
+# clean_article_markdown — fence stripping
+# ---------------------------------------------------------------------------
+
+
+def test_clean_article_markdown_strips_markdown_fence():
+    from blogagent.llm.client import clean_article_markdown
+
+    fenced = "```markdown\n# Title\n\nContent here.\n```"
+    result = clean_article_markdown(fenced)
+    assert result.startswith("# Title")
+    assert "```" not in result
+
+
+def test_clean_article_markdown_strips_plain_fence():
+    from blogagent.llm.client import clean_article_markdown
+
+    fenced = "```\n# Title\n\nContent here.\n```"
+    result = clean_article_markdown(fenced)
+    assert result.startswith("# Title")
+    assert "```" not in result
+
+
+def test_clean_article_markdown_preserves_no_fence_content():
+    from blogagent.llm.client import clean_article_markdown
+
+    article = "# Title\n\nContent here."
+    result = clean_article_markdown(article)
+    assert result == article
+
+
+def test_clean_article_markdown_preserves_internal_code_fences():
+    from blogagent.llm.client import clean_article_markdown
+
+    article = "# Title\n\n```python\nprint('hi')\n```\n\nMore content."
+    result = clean_article_markdown(article)
+    assert "```python" in result
+
+
+def test_clean_article_markdown_empty_returns_empty():
+    from blogagent.llm.client import clean_article_markdown
+
+    assert clean_article_markdown("") == ""
+
+
+# ---------------------------------------------------------------------------
+# DraftOutput missing-field completion — no mock fallback when article exists
+# ---------------------------------------------------------------------------
+
+
+def test_missing_meta_description_does_not_cause_mock_fallback(monkeypatch):
+    """Gemini returns article_markdown but omits meta_description → no mock fallback."""
+    import json
+
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        # Missing meta_description intentionally
+        payload = {
+            "article_markdown": "# Great Perfumes\n\nPerfume is wonderful for summer use.",
+            "seo_keywords": ["perfume", "summer"],
+        }
+        return ProviderResponse(
+            text=json.dumps(payload),
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=DraftOutput,
+    )
+    assert result.is_mock is False, f"Should not fall back to mock: error={result.error}"
+    assert result.provider == "google"
+    assert result.data is not None
+    assert result.data.article_markdown.startswith("# Great Perfumes")
+    assert result.data.meta_description.strip() != ""
+    assert result.warning == "structured_output_completed_missing_fields=true"
+
+
+def test_missing_meta_description_synthesised_from_article(monkeypatch):
+    """Synthesised meta_description should come from first prose paragraph."""
+    import json
+
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        payload = {
+            "article_markdown": (
+                "# Summer Scents\n\n"
+                "Perfume is a wonderful way to express yourself in summer heat. "
+                "The right fragrance can lift your mood and leave a lasting impression."
+            ),
+        }
+        return ProviderResponse(
+            text=json.dumps(payload),
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=DraftOutput,
+    )
+    assert result.is_mock is False
+    desc = result.data.meta_description
+    assert "Perfume" in desc or "summer" in desc.lower()
+
+
+def test_no_article_markdown_still_falls_back_to_mock(monkeypatch):
+    """When article_markdown is empty, field completion cannot help → mock fallback."""
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        # No article_markdown either
+        return ProviderResponse(
+            text="not json at all",
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=DraftOutput,
+    )
+    assert result.is_mock is True
+
+
+def test_article_markdown_fence_stripped_in_draft_output(monkeypatch):
+    """article_markdown wrapped in ```markdown fences should be stripped."""
+    import json
+
+    from blogagent.llm.providers import GoogleProvider, ProviderResponse
+
+    def fake_generate(self, system_prompt, user_prompt, temperature=0.2):
+        payload = {
+            "article_markdown": "```markdown\n# Summer Scents\n\nContent here.\n```",
+            "meta_description": "A guide to summer scents.",
+            "seo_keywords": ["summer", "scents"],
+        }
+        return ProviderResponse(
+            text=json.dumps(payload),
+            model="gemini-2.5-flash",
+            provider="google",
+        )
+
+    monkeypatch.setattr(GoogleProvider, "generate", fake_generate)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    result = generate_structured(
+        system_prompt="s",
+        user_prompt="u",
+        output_model=DraftOutput,
+    )
+    assert result.is_mock is False
+    assert not result.data.article_markdown.startswith("```"), (
+        f"Fences not stripped: {result.data.article_markdown[:50]!r}"
+    )
+    assert result.data.article_markdown.startswith("# Summer Scents")
+
+
+# ---------------------------------------------------------------------------
+# Post-article recommendation grounding integration
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_grounds_recommendations_for_recommendation_topic():
+    """Pipeline should populate article_recommendations_count in candidates summary."""
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("7 best perfumes for summer")
+    cs = state.recommendation_candidates_summary
+    # article_recommendations_count should be present (even if 0 in mock mode)
+    assert "article_recommendations_count" in cs
+
+    # grounded_recommendations_count should also be present
+    assert "grounded_recommendations_count" in cs
+
+
+def test_pipeline_non_recommendation_topic_skips_grounding():
+    """Non-recommendation topics should not have article recommendation grounding."""
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("How photosynthesis works")
+    assert not state.is_recommendation
+    # recommendation_candidates_summary should be empty (no grounding ran)
+    cs = state.recommendation_candidates_summary
+    assert cs == {} or cs.get("article_recommendations_count") is None

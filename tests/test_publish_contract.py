@@ -352,3 +352,149 @@ Worth understanding — it powers all plant-based life on Earth.
         assert len(qp_defects) == 0
         count_defects = [d for d in result.defects if d.type == "unmet_requested_count"]
         assert len(count_defects) == 0
+
+
+class TestPublishContractRecommendationGrounding:
+    """Tests for recommendation_grounding parameter in publish contract."""
+
+    def test_7_grounded_of_7_can_pass_contract(self):
+        """When 7 recommendations are grounded, contract should not fail on count."""
+        grounding = {
+            "article_recommendations_count": 7,
+            "grounded_recommendations_count": 7,
+            "usable_count": 7,
+            "unmatched_names": [],
+        }
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=88,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency={"recommended_action": "proceed", "supported_count": 7},
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding=grounding,
+        )
+        # With grounding confirming 7 recs, should not get unmet_requested_count high defect
+        high_unmet = [
+            d for d in result.defects
+            if d.type == "unmet_requested_count" and d.severity == "high"
+        ]
+        msgs = [d.message for d in result.defects]
+        assert len(high_unmet) == 0, f"Unexpected high defects: {msgs}"
+        assert result.status in ("publish_ready", "publish_ready_with_warnings")
+
+    def test_0_grounded_of_7_fails_contract(self):
+        """When 7 article recs exist but 0 are grounded, contract should flag it."""
+        grounding = {
+            "article_recommendations_count": 7,
+            "grounded_recommendations_count": 0,
+            "usable_count": 0,
+            "unmatched_names": [
+                "Guerlain Terracotta Le Parfum",
+                "Giorgio Armani Ocean di Gioia",
+                "Tom Ford Soleil Blanc",
+            ],
+        }
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=88,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency=None,
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding=grounding,
+        )
+        # 0 grounded < 3 minimum → unsupported_recommendations high defect
+        unsupported = [d for d in result.defects if d.type == "unsupported_recommendations"]
+        defect_types = [d.type for d in result.defects]
+        assert len(unsupported) > 0, f"Expected unsupported_recommendations defect: {defect_types}"
+        high_unsupported = [d for d in unsupported if d.severity == "high"]
+        assert len(high_unsupported) > 0
+
+    def test_5_grounded_of_7_gives_medium_warning(self):
+        """5 grounded of 7 article recs → medium unsupported defect, not high."""
+        grounding = {
+            "article_recommendations_count": 7,
+            "grounded_recommendations_count": 5,
+            "usable_count": 5,
+            "unmatched_names": ["Unknown A", "Unknown B"],
+        }
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=80,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency=None,
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding=grounding,
+        )
+        unsupported = [d for d in result.defects if d.type == "unsupported_recommendations"]
+        if unsupported:
+            assert unsupported[0].severity == "medium", (
+                f"Expected medium severity, got {unsupported[0].severity}"
+            )
+
+    def test_pre_draft_zero_usable_does_not_fail_when_grounding_succeeds(self):
+        """Pre-draft usable_count=0 must not fail if post-article grounding gives 7."""
+        grounding = {
+            "article_recommendations_count": 7,
+            "grounded_recommendations_count": 7,
+            "usable_count": 7,
+            "unmatched_names": [],
+        }
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=88,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency={"recommended_action": "proceed", "supported_count": 0},
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding=grounding,
+        )
+        # Grounding overrides pre-draft count — should not get high unmet defect
+        high_unmet = [
+            d for d in result.defects
+            if d.type == "unmet_requested_count" and d.severity == "high"
+        ]
+        assert len(high_unmet) == 0
+
+    def test_no_grounding_falls_back_to_pattern_count(self):
+        """Without recommendation_grounding, behaviour is unchanged."""
+        result_no_grounding = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=88,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency=None,
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding=None,
+        )
+        result_with_grounding = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best perfumes for summer",
+            publishability_score=88,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency=None,
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            recommendation_grounding={
+                "article_recommendations_count": 7,
+                "grounded_recommendations_count": 7,
+                "usable_count": 7,
+                "unmatched_names": [],
+            },
+        )
+        # Both should pass (same strong article); grounding should not make things worse
+        assert result_no_grounding.status in ("publish_ready", "publish_ready_with_warnings")
+        assert result_with_grounding.status in ("publish_ready", "publish_ready_with_warnings")

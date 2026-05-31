@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from blogagent.tools.recommendation_extractor import (
+    ArticleRecommendation,
     RecommendationCandidate,
     build_candidates_summary,
+    build_grounded_candidates_summary,
+    extract_recommendations_from_article,
     extract_recommendations_from_evidence,
+    match_article_recommendations_to_evidence,
+    normalize_recommendation_name,
 )
 from blogagent.workflow.state import EvidenceItem
 
@@ -262,3 +267,325 @@ class TestEvidenceSufficiencyWithCandidates:
         )
         assert not result.sufficient
         assert result.recommended_action == "evidence_limited"
+
+
+# ---------------------------------------------------------------------------
+# Article recommendation extraction
+# ---------------------------------------------------------------------------
+
+_SEVEN_PICK_ARTICLE = """# 7 Best Parfums for Summer
+
+Summer heat demands fresh, light fragrances that project just enough.
+
+## Quick Picks
+
+- **Best Solar Floral:** Guerlain Terracotta Le Parfum — citrusy golden warmth
+- **Best Aquatic:** Giorgio Armani Ocean di Gioia
+- **Best Unisex:** Eris Parfums Delta of Venus
+- **Best Luxury:** Tom Ford Soleil Blanc
+- **Best Indie:** Byredo Sundazed
+- **Best Fresh:** Jo Malone London Wood Sage & Sea Salt
+- **Best Classic:** Maison Francis Kurkdjian Aqua Universalis Forte
+
+## How We Chose
+
+We tested each fragrance for sillage, longevity, and summer wearability.
+
+## 1. Guerlain Terracotta Le Parfum
+
+**Best for:** Warm, sunny days
+**Why it works:** A solar floral with citrus and golden amber notes.
+
+## 2. Giorgio Armani Ocean di Gioia
+
+**Best for:** Beach and poolside
+**Why it works:** Light aquatic floral with cool oceanic feel.
+
+## Final Takeaway
+
+All seven fragrances deliver on their summer promise.
+"""
+
+
+class TestExtractRecommendationsFromArticle:
+    def test_extracts_quick_picks_with_bold_labels(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        names = [r.name for r in recs]
+        assert any("Guerlain" in n for n in names), f"Expected Guerlain in {names}"
+        assert any("Armani" in n or "Ocean" in n for n in names), (
+            f"Expected Armani/Ocean in {names}"
+        )
+
+    def test_extracts_seven_unique_recommendations(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        assert len(recs) >= 6, f"Expected at least 6, got {len(recs)}: {[r.name for r in recs]}"
+
+    def test_captures_quick_pick_label(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        labeled = [r for r in recs if r.quick_pick_label]
+        assert len(labeled) >= 1, "Expected at least one rec with quick_pick_label"
+        labels = [r.quick_pick_label for r in labeled]
+        assert any("Solar" in (lb or "") for lb in labels), f"Expected 'Solar' label in {labels}"
+
+    def test_extracts_best_for_from_section(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        with_best_for = [r for r in recs if r.best_for]
+        assert len(with_best_for) >= 1, "Expected at least one rec with best_for"
+
+    def test_extracts_why_it_works(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        with_why = [r for r in recs if r.why_it_works]
+        assert len(with_why) >= 1, "Expected at least one rec with why_it_works"
+
+    def test_ignores_how_we_chose(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        names_lower = [r.name.lower() for r in recs]
+        assert not any("how we chose" in n for n in names_lower)
+        assert not any(n == "how we chose" for n in names_lower)
+
+    def test_ignores_final_takeaway(self):
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        names_lower = [r.name.lower() for r in recs]
+        assert not any("final takeaway" in n for n in names_lower)
+
+    def test_deduplicates_repeated_names(self):
+        # Guerlain appears in Quick Picks and in a H2 heading — should not double-count
+        recs = extract_recommendations_from_article(_SEVEN_PICK_ARTICLE)
+        guerlain_recs = [r for r in recs if "Guerlain" in r.name or "Terracotta" in r.name]
+        assert len(guerlain_recs) == 1, (
+            f"Expected 1 Guerlain rec, got {[r.name for r in guerlain_recs]}"
+        )
+
+    def test_extracts_numbered_headings(self):
+        markdown = """# Best Perfumes
+
+## Quick Picks
+
+- Dior Sauvage
+- Chanel Bleu
+
+## 1. Dior Sauvage
+
+Best for summer outdoors.
+
+## 2. Chanel Bleu
+
+Best for evening events.
+"""
+        recs = extract_recommendations_from_article(markdown)
+        names = [r.name for r in recs]
+        assert any("Dior" in n for n in names), f"Expected Dior in {names}"
+        assert any("Chanel" in n for n in names), f"Expected Chanel in {names}"
+
+    def test_extracts_label_colon_name_headings(self):
+        markdown = """# Best Perfumes
+
+## Best Solar Floral: Guerlain Terracotta Le Parfum
+
+Great for warm days.
+
+## Best Aquatic: Giorgio Armani Ocean di Gioia
+
+Ideal for beach.
+"""
+        recs = extract_recommendations_from_article(markdown)
+        names = [r.name for r in recs]
+        assert any("Guerlain" in n for n in names), f"Expected Guerlain in {names}"
+
+    def test_ignores_source_section(self):
+        markdown = """# Best Perfumes
+
+## Quick Picks
+
+- Tom Ford Soleil Blanc
+
+## Sources
+
+- Tom Ford Soleil Blanc Official Site
+- https://allure.com
+"""
+        recs = extract_recommendations_from_article(markdown)
+        names = [r.name for r in recs]
+        assert len([n for n in names if "Tom Ford" in n]) == 1, (
+            f"Sources section added duplicate: {names}"
+        )
+
+    def test_empty_article_returns_empty(self):
+        assert extract_recommendations_from_article("") == []
+
+    def test_generic_article_returns_empty(self):
+        markdown = """# About Perfumes
+
+## How We Chose
+
+We looked at many sources.
+
+## Final Takeaway
+
+Buy the best for you.
+"""
+        recs = extract_recommendations_from_article(markdown)
+        assert recs == [], f"Expected empty, got {[r.name for r in recs]}"
+
+
+class TestNormalizeRecommendationName:
+    def test_lowercase(self):
+        assert normalize_recommendation_name("Tom Ford") == "tom ford"
+
+    def test_strips_markdown_bold(self):
+        assert normalize_recommendation_name("**Tom Ford**") == "tom ford"
+
+    def test_strips_brackets(self):
+        assert normalize_recommendation_name("[Tom Ford](https://example.com)") == "tom ford"
+
+    def test_strips_leading_the(self):
+        assert normalize_recommendation_name("The Tom Ford Collection") == "tom ford collection"
+
+    def test_collapses_whitespace(self):
+        assert normalize_recommendation_name("Tom   Ford  Soleil") == "tom ford soleil"
+
+    def test_empty_returns_empty(self):
+        assert normalize_recommendation_name("") == ""
+
+
+class TestMatchArticleRecommendationsToEvidence:
+    def _make_candidate(self, name: str, quality: str = "high") -> dict:
+        return {
+            "name": name,
+            "source_urls": [f"https://allure.com/{name.lower().replace(' ', '-')}"],
+            "source_quality": quality,
+            "usable": True,
+            "low_confidence": False,
+            "supported_context": ["summer"],
+            "sensory_terms": ["fresh"],
+            "reason": "test",
+        }
+
+    def test_exact_match_gives_high_confidence(self):
+        recs = [ArticleRecommendation(name="Tom Ford Soleil Blanc")]
+        candidates = [self._make_candidate("Tom Ford Soleil Blanc")]
+        groundings = match_article_recommendations_to_evidence(
+            article_recs=recs,
+            evidence_candidates=candidates,
+            source_quality_scores=[
+                {"url": "https://allure.com/tom-ford-soleil-blanc", "quality": "high"}
+            ],
+        )
+        assert len(groundings) == 1
+        assert groundings[0].matched is True
+        assert groundings[0].confidence == "high"
+
+    def test_partial_name_match_gives_medium_confidence(self):
+        recs = [ArticleRecommendation(name="Soleil Blanc")]
+        candidates = [self._make_candidate("Tom Ford Soleil Blanc")]
+        groundings = match_article_recommendations_to_evidence(
+            article_recs=recs,
+            evidence_candidates=candidates,
+            source_quality_scores=[],
+        )
+        assert groundings[0].matched is True
+        assert groundings[0].confidence in ("medium", "high")
+
+    def test_unmatched_recommendation_flagged(self):
+        recs = [ArticleRecommendation(name="Completely Unknown Fragrance XYZ")]
+        candidates = [self._make_candidate("Tom Ford Soleil Blanc")]
+        groundings = match_article_recommendations_to_evidence(
+            article_recs=recs,
+            evidence_candidates=candidates,
+            source_quality_scores=[],
+        )
+        assert groundings[0].matched is False
+
+    def test_citation_url_in_section_grounds_recommendation(self):
+        recs = [
+            ArticleRecommendation(
+                name="Unknown Fragrance XYZ",
+                source_urls=["https://allure.com/article"],
+            )
+        ]
+        candidates = []
+        groundings = match_article_recommendations_to_evidence(
+            article_recs=recs,
+            evidence_candidates=candidates,
+            source_quality_scores=[{"url": "https://allure.com/article", "quality": "high"}],
+        )
+        assert groundings[0].matched is True
+
+    def test_empty_recs_returns_empty(self):
+        groundings = match_article_recommendations_to_evidence(
+            article_recs=[],
+            evidence_candidates=[],
+            source_quality_scores=[],
+        )
+        assert groundings == []
+
+
+class TestBuildGroundedCandidatesSummary:
+    def _make_candidate_obj(self, name: str, usable: bool = True) -> RecommendationCandidate:
+        return RecommendationCandidate(
+            name=name,
+            source_urls=["https://allure.com"],
+            source_quality="high",
+            supported_context=["summer"],
+            sensory_terms=["fresh"],
+            usable=usable,
+            reason="test",
+            low_confidence=not usable,
+        )
+
+    def test_seven_grounded_gives_usable_count_seven(self):
+        from blogagent.tools.recommendation_extractor import RecommendationGrounding
+
+        groundings = [
+            RecommendationGrounding(
+                name=f"Fragrance {i}",
+                matched=True,
+                confidence="high",
+                support_reason="test",
+            )
+            for i in range(7)
+        ]
+        summary = build_grounded_candidates_summary(candidates=[], groundings=groundings)
+        assert summary["usable_count"] == 7
+        assert summary["article_recommendations_count"] == 7
+        assert summary["grounded_recommendations_count"] == 7
+        assert summary["unmatched_names"] == []
+
+    def test_article_with_2_unmatched_gives_usable_count_5(self):
+        from blogagent.tools.recommendation_extractor import RecommendationGrounding
+
+        groundings = [
+            RecommendationGrounding(
+                name=f"Fragrance {i}",
+                matched=(i < 5),
+                confidence="high" if i < 5 else "low",
+                support_reason="test",
+            )
+            for i in range(7)
+        ]
+        summary = build_grounded_candidates_summary(candidates=[], groundings=groundings)
+        assert summary["usable_count"] == 5
+        assert summary["grounded_recommendations_count"] == 5
+        assert len(summary["unmatched_names"]) == 2
+
+    def test_no_article_recs_falls_back_to_evidence_candidates(self):
+        candidates = [self._make_candidate_obj("Tom Ford"), self._make_candidate_obj("Chanel")]
+        summary = build_grounded_candidates_summary(candidates=candidates, groundings=[])
+        assert summary["usable_count"] == 2
+        assert summary["article_recommendations_count"] == 0
+
+    def test_summary_includes_evidence_candidates_count(self):
+        from blogagent.tools.recommendation_extractor import RecommendationGrounding
+
+        candidates = [self._make_candidate_obj("Tom Ford")]
+        groundings = [
+            RecommendationGrounding(
+                name="Tom Ford",
+                matched=True,
+                confidence="high",
+                support_reason="test",
+            )
+        ]
+        summary = build_grounded_candidates_summary(candidates=candidates, groundings=groundings)
+        assert "evidence_candidates_count" in summary
+        assert summary["evidence_candidates_count"] == 1

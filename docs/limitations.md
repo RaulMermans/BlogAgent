@@ -136,13 +136,20 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 
 ## Recommendation Candidate Extraction
 
-`recommendation_extractor.py` uses text pattern matching (bold/list items, brand prefixes) to identify named product candidates. Limitations:
+The recommendation extractor runs in two phases:
 
+**Pre-draft evidence extraction** (`extract_recommendations_from_evidence`): Extracts named product candidates from evidence snippets using bold/list/brand-prefix patterns. Limitations:
 - Products mentioned only in body prose (no list or bold formatting) may be missed.
 - Brand names with unusual capitalization or abbreviations may not be detected.
-- The extractor cannot distinguish a product mention from a product recommendation.
 - In mock mode, all evidence is placeholder text — the extractor correctly returns 0 usable candidates, which correctly flags evidence as insufficient.
-- Candidate deduplication is case-sensitive-normalized; near-duplicates with different capitalization may appear as separate entries.
+
+**Post-article grounding** (`extract_recommendations_from_article` + `match_article_recommendations_to_evidence`): After editorial polish, the pipeline re-extracts named products from the **final article** and matches them to source evidence. This is the primary proof layer.
+- Article extraction detects Quick Picks bullets, numbered/labeled H2–H3 headings, and bold product-name fields.
+- Generic headings (How We Chose, Final Takeaway, Buying Tips) are excluded.
+- Matching uses exact name, containment, brand-word overlap, evidence table text, and source title matching.
+- Matching is heuristic — product aliases, transliterations, and ambiguous short names may not match correctly.
+- Human review is still recommended for final source verification.
+- In mock mode, both evidence candidates and article grounding data are present; usable_count reflects what the mock draft contains, which is limited by design.
 
 ## Enrichment Search
 

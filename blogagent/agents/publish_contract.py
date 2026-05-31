@@ -54,6 +54,7 @@ _SCORE_CAPS: dict[str, int] = {
     "unmet_requested_count": 59,  # requested count not met, no valid explanation
     "insufficient_recommendations": 65,  # fewer than 3 total recommendations
     "missing_quick_picks": 65,  # no Quick Picks section
+    "unsupported_recommendations": 69,  # recommendations without source grounding
     "weak_source_dominance": 74,  # low-quality sources dominate core picks
     "weak_sensory_detail": 79,  # fragrance article with thin scent detail
     "generic_seo_voice": 79,  # generic intro / no editorial thesis
@@ -83,10 +84,21 @@ def check_publish_contract(
     requested_count: Optional[int],
     evidence_sufficiency: Optional[dict],
     source_quality_scores: list[dict],
+    recommendation_grounding: Optional[dict] = None,
 ) -> PublishContractResult:
     """Run hard-fail publish contract checks.
 
     Returns a PublishContractResult that is the final authority on publish status.
+
+    recommendation_grounding (optional) is the output of post-article grounding:
+    {
+        "article_recommendations_count": int,
+        "grounded_recommendations_count": int,
+        "usable_count": int,
+        "unmatched_names": list[str],
+    }
+    When provided, the contract uses article_recommendations_count as the primary count
+    and grounded_recommendations_count to verify source backing.
     """
     defects: list[ContractDefect] = []
     score = publishability_score
@@ -97,7 +109,25 @@ def check_publish_contract(
     )
 
     # --- 1. Actual recommendation count ---
-    actual_count = _count_recs(article_markdown) if is_recommendation else None
+    # Prefer post-article grounding count; fall back to pattern count.
+    grounding_article_count: Optional[int] = None
+    grounding_grounded_count: Optional[int] = None
+    grounding_unmatched: list[str] = []
+    if recommendation_grounding:
+        grounding_article_count = recommendation_grounding.get("article_recommendations_count")
+        grounding_grounded_count = recommendation_grounding.get("grounded_recommendations_count")
+        grounding_unmatched = recommendation_grounding.get("unmatched_names", [])
+
+    actual_count: Optional[int]
+    if is_recommendation:
+        if grounding_article_count is not None and grounding_article_count > 0:
+            # Use grounding count when available — it's derived from the final article
+            actual_count = grounding_article_count
+        else:
+            actual_count = _count_recs(article_markdown)
+    else:
+        actual_count = None
+
     quick_picks_present = "Quick Picks" in article_markdown
 
     # --- 2. Missing Quick Picks section ---
@@ -157,6 +187,44 @@ def check_publish_contract(
                         fixable=True,
                     )
                 )
+
+    # --- 4b. Unsupported recommendations (grounding failed) ---
+    if (
+        is_recommendation
+        and grounding_grounded_count is not None
+        and grounding_article_count is not None
+        and grounding_article_count > 0
+    ):
+        unmatched_count = grounding_article_count - grounding_grounded_count
+        if unmatched_count > 0 and grounding_grounded_count < 3:
+            # Too few grounded recommendations to be publishable
+            names_str = ", ".join(grounding_unmatched[:3])
+            defects.append(
+                ContractDefect(
+                    type="unsupported_recommendations",
+                    severity="high",
+                    message=(
+                        f"{unmatched_count} recommendation(s) could not be matched to source "
+                        f"evidence and fewer than 3 are grounded. "
+                        + (f"Unsupported: {names_str}" if names_str else "")
+                    ),
+                    fixable=False,
+                )
+            )
+        elif unmatched_count > 0:
+            names_str = ", ".join(grounding_unmatched[:3])
+            defects.append(
+                ContractDefect(
+                    type="unsupported_recommendations",
+                    severity="medium",
+                    message=(
+                        f"{unmatched_count} recommendation(s) could not be fully matched to "
+                        f"source evidence."
+                        + (f" Names: {names_str}" if names_str else "")
+                    ),
+                    fixable=True,
+                )
+            )
 
     # --- 5. Weak source dominance ---
     if source_quality_scores:

@@ -25,6 +25,7 @@ from blogagent.workflow.nodes import (
     final_validate_quality,
     generate_outline,
     generate_research_questions,
+    ground_article_recommendations,
     intake_topic,
     match_citations,
     package_article,
@@ -166,7 +167,14 @@ def run_pipeline(topic: str) -> BlogRunState:
     state = run_editorial_polish(state)
     state.stage_timings["run_editorial_polish"] = round(time.monotonic() - t0, 3)
 
-    # Re-run contract after polish to reflect any improvements.
+    # Post-article recommendation grounding — extracts and matches recommendations from
+    # the final (polished) article text to source evidence.  Runs after polish so the
+    # grounding proof reflects the final published text, not an intermediate draft.
+    t0 = time.monotonic()
+    state = ground_article_recommendations(state)
+    state.stage_timings["ground_article_recommendations"] = round(time.monotonic() - t0, 3)
+
+    # Re-run contract after polish + grounding to reflect any improvements.
     t0 = time.monotonic()
     state = check_publish_contract_node(state)
     state.stage_timings["check_publish_contract_post_polish"] = round(time.monotonic() - t0, 3)
@@ -225,7 +233,13 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     if draft_event:
         m = re.search(r"actual_provider=(\S+)", draft_event)
         provider_name = m.group(1) if m else "unknown"
-        trace.append(f"✓ Draft: {provider_name}")
+        is_fallback = "fallback=true" in draft_event
+        if is_fallback:
+            trace.append("⚠ Draft fallback: mock (live provider unavailable)")
+        else:
+            completed_fields = "structured_output_completed_missing_fields" in draft_event
+            note = " (metadata synthesised from article)" if completed_fields else ""
+            trace.append(f"✓ Draft: {provider_name}{note}")
 
     # Quality evaluation
     if state.quality_evaluation:
@@ -305,16 +319,42 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     else:
         trace.append("✓ Final validation: passed")
 
-    # Recommendation candidates (pre-enrichment)
+    # Recommendation grounding (post-article)
     if state.is_recommendation and state.recommendation_candidates_summary:
         cs = state.recommendation_candidates_summary
+        article_count = cs.get("article_recommendations_count")
+        grounded_count = cs.get("grounded_recommendations_count")
         usable = cs.get("usable_count", 0)
+        unmatched = cs.get("unmatched_names", [])
         requested = state.requested_count
-        if requested is not None:
-            symbol = "✓" if usable >= requested else "⚠"
-            trace.append(f"{symbol} Usable recommendations: {usable}/{requested}")
+
+        if article_count is not None:
+            # Post-article grounding data is available
+            if grounded_count == article_count and article_count > 0:
+                trace.append(
+                    f"✓ Article recommendations: {article_count} detected, "
+                    f"{grounded_count} grounded in source evidence"
+                )
+            elif article_count > 0:
+                trace.append(
+                    f"⚠ Article recommendations: {article_count} detected, "
+                    f"{grounded_count} grounded, {len(unmatched)} unsupported"
+                )
+                if unmatched:
+                    trace.append(f"⚠ Unsupported recommendations: {', '.join(unmatched[:3])}")
+            else:
+                trace.append("⚠ Article recommendations: none detected in final article")
+
+            if requested is not None:
+                symbol = "✓" if usable >= requested else "⚠"
+                trace.append(f"{symbol} Usable recommendations: {usable}/{requested}")
         else:
-            trace.append(f"✓ Usable recommendations: {usable}")
+            # Only pre-draft evidence candidates available
+            if requested is not None:
+                symbol = "✓" if usable >= requested else "⚠"
+                trace.append(f"{symbol} Usable recommendations (evidence): {usable}/{requested}")
+            else:
+                trace.append(f"✓ Usable recommendations (evidence): {usable}")
 
     # Evidence sufficiency
     if state.evidence_sufficiency:

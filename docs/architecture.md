@@ -66,6 +66,15 @@ When fallback occurs, `is_mock=True` and `warning` contains the reason (e.g. "GO
 
 The mock provider has registered responses for every output schema. All tests run against the mock provider.
 
+**DraftOutput missing-field completion**: When a live provider returns valid `article_markdown` but omits the required `meta_description` (e.g. Gemini skips the field), the client deterministically synthesises the missing field from the article body before attempting a repair call or falling back to mock:
+- `meta_description`: first prose paragraph, capped at 160 characters
+- `seo_keywords`: top keywords from article headings
+- `is_mock` remains `False`; `provider` remains the live provider; `warning` is set to `"structured_output_completed_missing_fields=true"`
+
+Mock fallback only happens when `article_markdown` itself is absent, empty, or irrecoverable.
+
+**Article markdown fence stripping**: `clean_article_markdown()` strips outer `` ```markdown `` / `` ``` `` wrappers that some LLMs add around article content. Internal code fences are preserved. Applied to `DraftOutput.article_markdown` on every live provider response.
+
 ---
 
 ## Deterministic Pipeline Steps
@@ -94,10 +103,11 @@ match_citations                  → citation_matcher tool (deterministic heuris
 run_fact_check                   → assemble FactCheckReport (+ optional LLM judgment)
 [fact-check revision]            → Editor Agent fact-check revision + re-run
 evaluate_publishability          → heuristic publish-readiness check; scores 0–100
-check_publish_contract           → deterministic final truth layer; hard-fail conditions
+check_publish_contract           → deterministic final truth layer; hard-fail conditions (pre-polish)
 [if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
-check_publish_contract           → re-run after polish to reflect improvements
+ground_article_recommendations   → extract recs from final article; match to evidence; update summary
+check_publish_contract           → re-run after polish + grounding to reflect improvements
 package_article                  → assemble ArticlePackage (with SEO fields)
 compute_publish_ready_status     → uses publish_contract as final authority
 ```
@@ -139,7 +149,33 @@ Each candidate tracks:
 - `usable` — True if named in high/medium quality source with some context
 - `low_confidence` — True if only in a single low-quality source
 
-`state.recommendation_candidates_summary` exposes `usable_count`, `low_confidence_count`, and `names` for the API response and UI.
+`state.recommendation_candidates_summary` exposes `evidence_candidates_count`, `usable_count`, `low_confidence_count`, and `names` for the API response and UI.
+
+### Post-Article Recommendation Grounding
+
+`ground_article_recommendations` in `blogagent/workflow/nodes.py` — deterministic, no LLM. Runs **after editorial polish** so grounding reflects the final published text.
+
+1. `extract_recommendations_from_article(markdown)` — extracts named recommendations from the final article:
+   - Quick Picks bullets: `- **Best X:** Product Name` or `- Product Name`
+   - Numbered/labeled H2–H3 headings: `## 1. Product` / `### Best X: Product`
+   - Bold `**Name**: Product` fields
+   - Excludes generic headings (How We Chose, Buying Tips, Final Takeaway, Sources)
+   - Deduplicates by normalised name
+
+2. `match_article_recommendations_to_evidence(article_recs, evidence_candidates, ...)` — matches each recommendation to source evidence:
+   - Exact normalised name match → `high` confidence
+   - Containment / partial name match → `medium` confidence
+   - Brand+word overlap, evidence-table text, source title → `medium/low` confidence
+   - Article citation URLs in the recommendation section → `medium` confidence
+   - No match → `unmatched`
+
+3. `build_grounded_candidates_summary(candidates, groundings)` — updates `recommendation_candidates_summary`:
+   - `article_recommendations_count` — how many named products were detected
+   - `grounded_recommendations_count` — how many were matched to evidence
+   - `usable_count` — grounded count (replaces pre-draft evidence count as primary signal)
+   - `unmatched_names` — names that could not be matched
+
+The publish contract uses this grounding data to verify that article recommendations have source backing.
 
 ### Evidence Sufficiency Evaluator
 

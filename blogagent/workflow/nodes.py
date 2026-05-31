@@ -679,6 +679,78 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
     return state
 
 
+def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
+    """Extract recommendations from the final article and match to source evidence.
+
+    Runs after editorial polish so the grounding reflects the final published text.
+    Updates recommendation_candidates_summary with article_recommendations_count,
+    grounded_recommendations_count, usable_count, and unmatched_names.
+    """
+    if not state.is_recommendation:
+        return state
+    if not state.draft or not state.draft.strip():
+        return state
+
+    from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
+        build_grounded_candidates_summary,
+        extract_recommendations_from_article,
+        match_article_recommendations_to_evidence,
+    )
+
+    article_recs = extract_recommendations_from_article(state.draft)
+    article_count = len(article_recs)
+
+    # Re-hydrate evidence candidates from stored dicts
+    evidence_candidates = list(state.recommendation_candidates)
+
+    groundings = match_article_recommendations_to_evidence(
+        article_recs=article_recs,
+        evidence_candidates=evidence_candidates,
+        source_quality_scores=state.source_quality_scores,
+        evidence_table=state.evidence_table,
+        source_scores=state.source_scores,
+    )
+
+    # Rebuild the candidates summary with grounding data
+    from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
+        RecommendationCandidate,
+    )
+
+    # Re-hydrate RecommendationCandidate objects for the summary builder
+    cand_objs: list[RecommendationCandidate] = []
+    for c in evidence_candidates:
+        try:
+            cand_objs.append(RecommendationCandidate.model_validate(c))
+        except Exception:  # noqa: BLE001
+            pass
+
+    state.recommendation_candidates_summary = build_grounded_candidates_summary(
+        candidates=cand_objs,
+        groundings=groundings,
+    )
+
+    grounded_count = state.recommendation_candidates_summary.get(
+        "grounded_recommendations_count", 0
+    )
+    unmatched = state.recommendation_candidates_summary.get("unmatched_names", [])
+
+    if article_count > 0 and grounded_count == article_count:
+        _event(
+            state,
+            f"article_grounding: detected={article_count} grounded={grounded_count} unmatched=0",
+        )
+    elif article_count > 0:
+        _event(
+            state,
+            f"article_grounding: detected={article_count} grounded={grounded_count} "
+            f"unmatched={len(unmatched)}",
+        )
+    else:
+        _event(state, "article_grounding: no recommendations detected in article")
+
+    return state
+
+
 def package_article(state: BlogRunState) -> BlogRunState:
     assert state.fact_check_report is not None, "Fact-check must run before packaging"
     assert state.outline is not None, "Outline must exist before packaging"
@@ -925,6 +997,8 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
 def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
     """Apply the publish contract — the final editorial truth layer."""
     pub_eval = state.publishability_evaluation or {}
+    # Pass recommendation grounding data when available (after ground_article_recommendations ran)
+    rec_grounding = state.recommendation_candidates_summary if state.is_recommendation else None
     result: PublishContractResult = check_publish_contract(
         article_markdown=state.draft,
         topic=state.topic,
@@ -934,6 +1008,7 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         requested_count=state.requested_count,
         evidence_sufficiency=state.evidence_sufficiency,
         source_quality_scores=state.source_quality_scores,
+        recommendation_grounding=rec_grounding if rec_grounding else None,
     )
     state.publish_contract = result.model_dump()
     _event(

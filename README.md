@@ -102,6 +102,21 @@ When `polish_required=True`, an LLM-backed polish pass:
 - Makes evidence-limited framing reader-friendly
 - Runs at most once; does not invent unsupported facts; preserves all citations
 
+#### Post-Article Recommendation Grounding
+After editorial polish, for recommendation topics, the pipeline extracts named products from the **final article** and matches them back to source evidence. This answers: "Can we prove these recommendations are grounded?"
+
+- `extract_recommendations_from_article()` detects Quick Picks bullets, numbered/labeled headings, and bold product-name fields
+- `match_article_recommendations_to_evidence()` matches each article recommendation to evidence candidates, source titles, and citation URLs
+- `recommendation_candidates_summary` is updated with: `article_recommendations_count`, `grounded_recommendations_count`, `usable_count`, `unmatched_names`
+- The publish contract uses this grounding to verify source backing — a recommendation present in the article but unmatched to evidence does not count as usable
+
+#### DraftOutput Missing-Field Completion
+When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omits `meta_description` or `seo_keywords`:
+- The client synthesises missing fields deterministically from the article body (first prose paragraph → meta_description; headings → seo_keywords)
+- `is_mock` remains `False`; `actual_provider` remains the live provider
+- `warning` is set to `"structured_output_completed_missing_fields=true"`
+- Mock fallback only happens when `article_markdown` itself is absent or unrecoverable
+
 #### Publish Ready Status
 The final `publish_ready_status` field indicates:
 - `publish_ready` — article meets editorial standards, ready to post
@@ -139,8 +154,11 @@ User Topic
 → [if not passed and revision_count < 1]
     → Editor Agent revision
 → Publishability Evaluator (heuristic + optional LLM; scores 0–100)
+→ Publish Contract (pre-polish check)
 → [if polish_required=True]
     → Editorial Polish Agent (LLM; runs at most once; skill briefs injected)
+→ ground_article_recommendations  (post-article grounding: extract recs from final article; match to evidence)
+→ Publish Contract (post-polish + grounding check — final truth layer)
 → blog_package_validator
 → compute_publish_ready_status
 → Final Article Package

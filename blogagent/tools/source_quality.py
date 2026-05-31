@@ -35,19 +35,31 @@ _LOW_QUALITY_DOMAINS: frozenset[str] = frozenset(
     }
 )
 
+# Fragrantica forum path patterns — community content, not editorial reviews.
+# The domain may be high-authority editorial OR a user forum; URL path disambiguates.
+_FRAGRANTICA_FORUM_PATHS: tuple[str, ...] = (
+    "/forum/",
+    "/community/",
+    "/board/",
+    "/thread/",
+    "/user/",
+    "/member/",
+)
+
 # Retailer/editorial hybrids and niche databases — medium quality
 _MEDIUM_QUALITY_DOMAINS: frozenset[str] = frozenset(
     {
         "scentbird.com",
-        "fragrantica.com",  # community/database, use carefully
+        "fragrantica.com",  # community/database — medium; editorial content only
         "perfumania.com",
-        "thebeautylookbook.com",
+        "thebeautylookbook.com",  # retailer-editorial hybrid
         "beautybay.com",
         "sephora.com",
         "ulta.com",
         "nordstrom.com",
         "cultbeauty.co.uk",
         "spacenk.com",
+        "bluemercury.com",  # prestige retailer with editorial content
     }
 )
 
@@ -87,6 +99,7 @@ _HIGH_QUALITY_DOMAINS: frozenset[str] = frozenset(
         "techradar.com",
         "rtings.com",
         "goodhousekeeping.com",
+        "realsimple.com",
         "seriouseats.com",
         "epicurious.com",
         "thespruce.com",
@@ -95,6 +108,7 @@ _HIGH_QUALITY_DOMAINS: frozenset[str] = frozenset(
         # Beauty / lifestyle / fragrance editorial
         "byrdie.com",
         "allure.com",
+        "allure.ph",
         "vogue.com",
         "harpersbazaar.com",
         "elle.com",
@@ -105,7 +119,8 @@ _HIGH_QUALITY_DOMAINS: frozenset[str] = frozenset(
         "esquire.com",
         "the-independent.com",
         "independent.co.uk",
-        "fragrantica.com",
+        "marieclaire.com",
+        "editorialist.com",
     }
 )
 
@@ -140,6 +155,18 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                     f"{domain} is a user-generated or social platform with low editorial authority"
                 ),
             )
+
+    # Fragrantica forum/community pages: community content, not editorial — medium quality.
+    url_lower = source.url.lower()
+    if "fragrantica.com" in domain:
+        is_forum = any(p in url_lower for p in _FRAGRANTICA_FORUM_PATHS)
+        quality = "low" if is_forum else "medium"
+        reason = (
+            "fragrantica.com forum/community page — user-generated content"
+            if is_forum
+            else "fragrantica.com is a fragrance database with mixed editorial/community content"
+        )
+        return SourceQuality(url=source.url, title=source.title, quality=quality, reason=reason)  # type: ignore[arg-type]
 
     for high_domain in _HIGH_QUALITY_DOMAINS:
         if high_domain in domain:

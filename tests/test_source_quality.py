@@ -54,12 +54,51 @@ def test_social_domains_are_low(domain: str):
         "nytimes.com",
         "wirecutter.com",
         "pcmag.com",
-        "fragrantica.com",
+        "allure.com",
+        "realsimple.com",
+        "marieclaire.com",
+        "editorialist.com",
     ],
 )
 def test_editorial_domains_are_high(domain: str):
     result = classify_source_quality(_make_score(domain))
     assert result.quality == "high", f"Expected high for {domain}, got {result.quality}"
+
+
+def test_fragrantica_domain_is_medium():
+    """fragrantica.com should be medium (community/database), not high."""
+    result = classify_source_quality(_make_score("fragrantica.com"))
+    assert result.quality == "medium", f"Expected medium for fragrantica.com, got {result.quality}"
+
+
+def test_fragrantica_forum_url_is_low():
+    """fragrantica.com/forum/ paths should be classified as low (user-generated)."""
+    from blogagent.workflow.state import SourceScore
+
+    score = SourceScore(
+        url="https://www.fragrantica.com/forum/t/12345",
+        title="Forum post",
+        domain="fragrantica.com",
+        credibility_score=0.5,
+        relevance_score=0.5,
+        recency_score=0.5,
+        overall_score=0.5,
+        is_mock=False,
+    )
+    result = classify_source_quality(score)
+    assert result.quality == "low", (
+        f"Expected low for fragrantica.com/forum/ URL, got {result.quality}"
+    )
+
+
+def test_bluemercury_is_medium():
+    result = classify_source_quality(_make_score("bluemercury.com"))
+    assert result.quality == "medium"
+
+
+def test_thebeautylookbook_is_medium():
+    result = classify_source_quality(_make_score("thebeautylookbook.com"))
+    assert result.quality == "medium"
 
 
 def test_edu_domain_is_high():

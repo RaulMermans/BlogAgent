@@ -4,6 +4,7 @@ Public interface:
     generate_structured(system_prompt, user_prompt, output_model, temperature) -> LLMResult
     parse_json_object(text) -> dict
     detect_repeated_excerpts(text, threshold) -> list[str]
+    clean_article_markdown(text) -> str
 
 Provider is selected via BLOGAGENT_LLM_PROVIDER (default: "mock").
 If provider is configured but the API key is missing or the package is
@@ -14,8 +15,10 @@ Every returned LLMResult includes:
     configured_provider — what BLOGAGENT_LLM_PROVIDER requested
     provider            — what actually produced the output
     is_mock             — True when output came from mock data registry
-    warning             — set when a configured live provider fell back to mock
-                          or "structured_output_repaired=true" after a repair
+    warning             — set when a configured live provider fell back to mock,
+                          "structured_output_repaired=true" after a repair, or
+                          "structured_output_completed_missing_fields=true" when
+                          missing DraftOutput metadata was synthesised from the article
 """
 
 from __future__ import annotations
@@ -49,6 +52,51 @@ from blogagent.llm.schemas import (
 _DEFAULT_TIMEOUT = 60
 _MOCK_MODEL = "mock-1.0"
 _MOCK_PROVIDER = "mock"
+
+# ---------------------------------------------------------------------------
+# Article markdown fence cleaner
+# ---------------------------------------------------------------------------
+
+
+def clean_article_markdown(text: str) -> str:
+    """Strip outer markdown code fences from article_markdown.
+
+    Handles the case where an LLM wraps the entire article in:
+        ```markdown
+        # Title
+        ...
+        ```
+    or plain ``` fences.
+
+    Only strips the outermost fence pair when:
+    - The string starts with ```markdown or ```
+    - The string ends with ``` (after the newline)
+    - The inner content starts with a # heading
+
+    Internal code fences (within the article body) are preserved.
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+
+    for prefix in ("```markdown\n", "```markdown\r\n", "```\n", "```\r\n"):
+        if stripped.startswith(prefix):
+            inner = stripped[len(prefix):]
+            # Strip trailing fence
+            if inner.endswith("\n```"):
+                inner = inner[:-4]
+            elif inner.endswith("```"):
+                inner = inner[:-3]
+            inner = inner.strip()
+            # Only accept if content looks like a markdown article
+            if inner.startswith("#") or "\n#" in inner:
+                return inner
+            # Accept any non-empty stripped content when clearly wrapped
+            if inner.strip():
+                return inner
+
+    return text
+
 
 # ---------------------------------------------------------------------------
 # JSON parsing utilities
@@ -273,6 +321,15 @@ def generate_structured(
     # --- JSON parse ---
     try:
         parsed = _parse_json_response(response.text, output_model)
+        # Strip outer markdown fences from article_markdown if present.
+        if output_model.__name__ == "DraftOutput" and parsed is not None:
+            cleaned = clean_article_markdown(parsed.article_markdown)
+            if cleaned != parsed.article_markdown:
+                parsed = type(parsed)(
+                    article_markdown=cleaned,
+                    meta_description=parsed.meta_description,
+                    seo_keywords=parsed.seo_keywords,
+                )
         return LLMResult(
             data=parsed,
             provider=provider_name,
@@ -282,6 +339,22 @@ def generate_structured(
             raw_text=response.text,
         )
     except Exception as parse_exc:  # noqa: BLE001
+        # For DraftOutput: try deterministic field completion before repair/mock.
+        # This handles the common case where the model returned valid article_markdown
+        # but omitted meta_description (a required field).
+        if output_model.__name__ == "DraftOutput":
+            completed, ok = _try_complete_draft_output(response.text, output_model)
+            if ok:
+                return LLMResult(
+                    data=completed,
+                    provider=provider_name,
+                    model=response.model,
+                    is_mock=False,
+                    configured_provider=provider_name,
+                    raw_text=response.text,
+                    warning="structured_output_completed_missing_fields=true",
+                )
+
         # One repair retry before falling back to mock.
         repaired, ok = _try_repair(provider, response.text, output_model, temperature)
         if ok:
@@ -364,16 +437,130 @@ def _try_repair(
     repair_system = (
         "You are a JSON repair assistant. Return only valid JSON with no commentary or explanation."
     )
+
+    # Schema-specific instructions for DraftOutput to avoid common failures
+    if output_model.__name__ == "DraftOutput":
+        schema_hint = (
+            "\n\nFor a DraftOutput the required fields are:\n"
+            '  "article_markdown": the full article as markdown text (string)\n'
+            '  "meta_description": 120-160 character summary (string, required)\n'
+            '  "seo_keywords": list of 3-6 keywords (array of strings, may be empty)\n\n'
+            "Rules:\n"
+            "- Do NOT wrap article_markdown in ```markdown or ``` fences.\n"
+            "- Preserve article_markdown exactly unless it is malformed.\n"
+            "- If meta_description is missing, write a 1-2 sentence description from the article.\n"
+            "- Output valid JSON only, no code fences around the JSON."
+        )
+    else:
+        schema_hint = ""
+
     repair_user = (
         "Convert the following malformed model output into valid JSON only. "
-        "Preserve all fields and content. Do not add commentary.\n\n" + text
+        "Preserve all fields and content. Do not add commentary."
+        + schema_hint
+        + "\n\n"
+        + text
     )
     try:
         response = provider.generate(repair_system, repair_user, temperature=0.0)
         data = parse_json_object(response.text)
-        return output_model.model_validate(data), True
+        parsed = output_model.model_validate(data)
+        # Clean fences in repaired DraftOutput too
+        if output_model.__name__ == "DraftOutput":
+            cleaned = clean_article_markdown(parsed.article_markdown)
+            if cleaned != parsed.article_markdown:
+                parsed = type(parsed)(
+                    article_markdown=cleaned,
+                    meta_description=parsed.meta_description,
+                    seo_keywords=parsed.seo_keywords,
+                )
+        return parsed, True
     except Exception:  # noqa: BLE001
         return None, False
+
+
+def _try_complete_draft_output(
+    raw_text: str,
+    output_model: type[BaseModel],
+) -> tuple[Any, bool]:
+    """Attempt to complete missing required fields for DraftOutput.
+
+    Called when JSON parsed but model validation failed (e.g., meta_description missing).
+    Synthesises missing title/meta_description/seo_keywords from the article_markdown.
+
+    Returns (parsed_instance, True) on success or (None, False).
+    Only applies when output_model is DraftOutput and article_markdown is present.
+    """
+    if output_model.__name__ != "DraftOutput":
+        return None, False
+
+    try:
+        data = parse_json_object(raw_text)
+    except Exception:
+        return None, False
+
+    markdown = data.get("article_markdown", "")
+    if not markdown or not markdown.strip():
+        return None, False
+
+    # Strip outer fences first
+    markdown = clean_article_markdown(markdown)
+    data["article_markdown"] = markdown
+
+    # Synthesise meta_description from first prose paragraph
+    if not data.get("meta_description", "").strip():
+        desc = _synthesise_meta_description(markdown)
+        if desc:
+            data["meta_description"] = desc
+
+    # Synthesise seo_keywords from headings
+    if not data.get("seo_keywords"):
+        data["seo_keywords"] = _synthesise_seo_keywords(markdown)
+
+    try:
+        return output_model.model_validate(data), True
+    except Exception:
+        return None, False
+
+
+def _synthesise_meta_description(markdown: str) -> str:
+    """Extract the first prose paragraph from markdown as a meta description."""
+    for line in markdown.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Skip headings, bullets, numbered items, blockquotes, and code blocks
+        if line.startswith(("#", "-", "*", ">", "`", "!", "1.", "2.", "3.")):
+            continue
+        # Use as description; cap at 160 chars on a word boundary
+        if len(line) <= 160:
+            return line
+        truncated = line[:157].rsplit(" ", 1)[0]
+        return truncated + "..."
+    return ""
+
+
+def _synthesise_seo_keywords(markdown: str) -> list[str]:
+    """Derive 3–6 keywords from headings in the article markdown."""
+    headings = re.findall(r"^#{1,3}\s+(.+)", markdown, re.MULTILINE)
+    words: list[str] = []
+    seen: set[str] = set()
+    # Stop-words to skip
+    skip = {
+        "the", "a", "an", "and", "or", "but", "for", "to", "in", "of", "is",
+        "are", "was", "were", "with", "by", "at", "on", "how", "why", "what",
+        "our", "we", "you", "your", "this", "that", "it", "be", "been", "as",
+    }
+    for heading in headings:
+        for word in re.findall(r"\b[a-zA-Z]{4,}\b", heading.lower()):
+            if word not in skip and word not in seen:
+                seen.add(word)
+                words.append(word)
+            if len(words) >= 6:
+                break
+        if len(words) >= 6:
+            break
+    return words[:6]
 
 
 def _mock_result(output_model: type[BaseModel], *, configured_provider: str = "mock") -> LLMResult:

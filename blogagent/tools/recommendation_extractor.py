@@ -267,8 +267,36 @@ _BRAND_PREFIXES: tuple[str, ...] = (
     "paula's choice",
 )
 
+# Generic headings that are NOT product recommendation names
+_NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
+    {
+        "quick picks",
+        "how we chose",
+        "how we tested",
+        "buying tips",
+        "buying guide",
+        "final takeaway",
+        "conclusion",
+        "sources",
+        "references",
+        "citations",
+        "further reading",
+        "introduction",
+        "overview",
+        "about",
+        "summary",
+        "key takeaways",
+        "editor's note",
+        "methodology",
+        "what to look for",
+        "faq",
+        "frequently asked questions",
+        "the bottom line",
+    }
+)
+
 # ---------------------------------------------------------------------------
-# Output model
+# Output models
 # ---------------------------------------------------------------------------
 
 
@@ -281,6 +309,29 @@ class RecommendationCandidate(BaseModel):
     usable: bool
     reason: str
     low_confidence: bool = False
+
+
+class ArticleRecommendation(BaseModel):
+    """A named recommendation extracted from the final article markdown."""
+
+    name: str
+    section_title: str = ""
+    quick_pick_label: str | None = None
+    best_for: str | None = None
+    why_it_works: str | None = None
+    source_urls: list[str] = []
+    evidence_terms: list[str] = []
+
+
+class RecommendationGrounding(BaseModel):
+    """Result of matching an article recommendation to source evidence."""
+
+    name: str
+    matched: bool
+    confidence: Literal["high", "medium", "low"]
+    matched_sources: list[str] = []
+    support_reason: str
+    source_quality: Literal["high", "medium", "low"] = "medium"
 
 
 # ---------------------------------------------------------------------------
@@ -366,10 +417,401 @@ def build_candidates_summary(candidates: list[RecommendationCandidate]) -> dict:
     usable = [c for c in candidates if c.usable]
     low_conf = [c for c in candidates if c.low_confidence]
     return {
+        "evidence_candidates_count": len(candidates),
         "usable_count": len(usable),
         "low_confidence_count": len(low_conf),
         "names": [c.name for c in usable],
     }
+
+
+def build_grounded_candidates_summary(
+    candidates: list[RecommendationCandidate],
+    groundings: list[RecommendationGrounding],
+) -> dict:
+    """Build summary dict that combines pre-draft candidates and post-article grounding.
+
+    When post-article grounding is available it takes precedence for usable_count,
+    since the article is the ground truth and evidence matching is the proof layer.
+    """
+    evidence_usable = [c for c in candidates if c.usable]
+    low_conf = [c for c in candidates if c.low_confidence]
+
+    article_count = len(groundings)
+    grounded = [g for g in groundings if g.matched]
+    unmatched = [g.name for g in groundings if not g.matched]
+
+    # usable_count is from article grounding when available, else from evidence candidates
+    if article_count > 0:
+        usable_count = len(grounded)
+        names = [g.name for g in grounded]
+    else:
+        usable_count = len(evidence_usable)
+        names = [c.name for c in evidence_usable]
+
+    return {
+        "evidence_candidates_count": len(candidates),
+        "article_recommendations_count": article_count,
+        "grounded_recommendations_count": len(grounded),
+        "usable_count": usable_count,
+        "low_confidence_count": len(low_conf),
+        "unmatched_names": unmatched,
+        "names": names,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Article recommendation extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_recommendations_from_article(markdown: str) -> list[ArticleRecommendation]:
+    """Extract named recommendations from final article markdown.
+
+    Detects:
+    - Quick Picks bullets: ``- **Best X:** Product Name`` or ``- Product Name``
+    - Numbered/label H2–H3 headings: ``## 1. Product`` / ``### Best X: Product``
+    - Bold ``**Name**: Product`` fields inside recommendation sections
+    - Linked names ``[Product](url)`` near recommendation sections
+
+    Excludes generic section headings (How We Chose, Buying Tips, etc.) and
+    deduplicates by normalised name.
+    """
+    # Strip the sources section to avoid counting source list entries
+    body = re.split(
+        r"\n#{1,3}\s*(?:Sources?|References?|Citations?|Further Reading)\s*\n",
+        markdown,
+        flags=re.IGNORECASE,
+    )[0]
+
+    recs: list[ArticleRecommendation] = []
+    norm_to_index: dict[str, int] = {}
+
+    def _add(rec: ArticleRecommendation) -> None:
+        """Add a recommendation, merging metadata if the normalised name already exists."""
+        norm = normalize_recommendation_name(rec.name)
+        if not norm:
+            return
+        if norm in norm_to_index:
+            # Merge metadata from this entry into the existing one (prefer non-None values)
+            existing = recs[norm_to_index[norm]]
+            if rec.best_for and not existing.best_for:
+                recs[norm_to_index[norm]] = existing.model_copy(update={"best_for": rec.best_for})
+                existing = recs[norm_to_index[norm]]
+            if rec.why_it_works and not existing.why_it_works:
+                recs[norm_to_index[norm]] = existing.model_copy(
+                    update={"why_it_works": rec.why_it_works}
+                )
+                existing = recs[norm_to_index[norm]]
+            if rec.quick_pick_label and not existing.quick_pick_label:
+                recs[norm_to_index[norm]] = existing.model_copy(
+                    update={"quick_pick_label": rec.quick_pick_label}
+                )
+                existing = recs[norm_to_index[norm]]
+            if rec.source_urls:
+                merged_urls = list(dict.fromkeys(existing.source_urls + rec.source_urls))
+                recs[norm_to_index[norm]] = existing.model_copy(
+                    update={"source_urls": merged_urls}
+                )
+            if rec.evidence_terms:
+                merged_terms = list(dict.fromkeys(existing.evidence_terms + rec.evidence_terms))
+                recs[norm_to_index[norm]] = existing.model_copy(
+                    update={"evidence_terms": merged_terms}
+                )
+        else:
+            norm_to_index[norm] = len(recs)
+            recs.append(rec)
+
+    # --- 1. Quick Picks section ---
+    qp_m = re.search(
+        r"#{1,3}\s*Quick\s*Picks?\s*\n(.*?)(?=\n#{1,3}|\Z)",
+        body,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if qp_m:
+        section_text = qp_m.group(1)
+        for line in section_text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Pattern: "- **Best X:** Product Name — description"
+            m = re.match(
+                r"^[-*]\s+\*\*([^*:]+?)[:]\*\*\s+([^—–\n]+?)(?:\s*[—–]|$)",
+                line,
+            )
+            if m:
+                label = m.group(1).strip()
+                name_raw = m.group(2).strip(" .,;:*")
+                name = _clean_rec_name(name_raw)
+                if name and _looks_like_product_name(name):
+                    _add(ArticleRecommendation(name=name, quick_pick_label=label))
+                continue
+
+            # Pattern: "- **Best X:** Product Name" (no dash after)
+            m = re.match(r"^[-*]\s+\*\*([^*:]+?)[:]\*\*\s+(.+)", line)
+            if m:
+                label = m.group(1).strip()
+                name_raw = m.group(2).split("—")[0].split("–")[0].strip(" .,;:*")
+                name = _clean_rec_name(name_raw)
+                if name and _looks_like_product_name(name):
+                    _add(ArticleRecommendation(name=name, quick_pick_label=label))
+                continue
+
+            # Pattern: "- Product Name — description" or "- Product Name"
+            m = re.match(r"^[-*]\s+(.+?)(?:\s*[—–:]|\s*$)", line)
+            if m:
+                name_raw = m.group(1).strip(" .,;:*[]")
+                # Strip markdown links: [Name](url) → Name
+                name_raw = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", name_raw).strip()
+                name = _clean_rec_name(name_raw)
+                if (
+                    name
+                    and _looks_like_product_name(name)
+                    and not _is_generic_heading(name)
+                    and not _is_source_link_text(name)
+                ):
+                    _add(ArticleRecommendation(name=name))
+                continue
+
+            # Pattern: "1. Product Name — description"
+            m = re.match(r"^\d+[.)]\s+(.+?)(?:\s*[—–:]|\s*$)", line)
+            if m:
+                name_raw = m.group(1).strip(" .,;:*[]")
+                name_raw = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", name_raw).strip()
+                name = _clean_rec_name(name_raw)
+                if (
+                    name
+                    and _looks_like_product_name(name)
+                    and not _is_generic_heading(name)
+                    and not _is_source_link_text(name)
+                ):
+                    _add(ArticleRecommendation(name=name))
+
+    # --- 2. Recommendation section headings ---
+    # Split body into sections by H2/H3 headings
+    sections = re.split(r"\n(#{2,3}\s+.+)", body)
+    # sections is alternating: [text, heading, text, heading, text, ...]
+    i = 1
+    while i < len(sections):
+        heading_line = sections[i].strip()
+        section_body = sections[i + 1] if i + 1 < len(sections) else ""
+        i += 2
+
+        name, label = _parse_heading_as_recommendation(heading_line)
+        if name is None or _is_generic_heading(name):
+            continue
+
+        # Extract metadata from section body
+        best_for = _extract_field(section_body, ("Best for", "Best For", "best for"))
+        why = _extract_field(section_body, ("Why it works", "Why It Works", "Why", "why it works"))
+        urls = re.findall(r"\(https?://[^\s)]+\)", section_body)
+        urls = [u.strip("()") for u in urls]
+        terms = _extract_scent_terms(section_body) + _extract_context_terms(section_body)
+
+        _add(
+            ArticleRecommendation(
+                name=name,
+                section_title=heading_line,
+                quick_pick_label=label,
+                best_for=best_for,
+                why_it_works=why,
+                source_urls=urls,
+                evidence_terms=list(set(terms)),
+            )
+        )
+
+    # --- 3. **Name**: Product Name fields (fallback for unusual formats) ---
+    if not recs:
+        for m in re.finditer(r"\*\*Name\*\*[:\s]+([^\n*]{3,60})", body):
+            name = _clean_rec_name(m.group(1))
+            if name and _looks_like_product_name(name):
+                _add(ArticleRecommendation(name=name))
+
+    return recs
+
+
+def normalize_recommendation_name(name: str) -> str:
+    """Normalise a product name for deduplication and matching.
+
+    Strips markdown link syntax, bold/italic markers, surrounding punctuation,
+    collapses whitespace, and removes common leading articles.
+    """
+    name = name.strip()
+    # Strip markdown links: [Name](url) → Name
+    name = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", name)
+    name = name.lower()
+    # Strip markdown bold/italic markers
+    name = re.sub(r"[*_`]", "", name)
+    # Strip surrounding brackets / parentheses
+    name = re.sub(r"[\[\](){}]", "", name)
+    # Collapse whitespace
+    name = re.sub(r"\s+", " ", name).strip()
+    # Remove leading articles
+    for prefix in ("the ", "a ", "an "):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    return name
+
+
+def match_article_recommendations_to_evidence(
+    article_recs: list[ArticleRecommendation],
+    evidence_candidates: list[dict],
+    source_quality_scores: list[dict],
+    evidence_table: list | None = None,
+    source_scores: list | None = None,
+) -> list[RecommendationGrounding]:
+    """Match final article recommendations to source evidence.
+
+    Matching hierarchy:
+    1. Exact normalised name match against evidence candidates → high confidence
+    2. Partial/containment match against candidate names → medium confidence
+    3. Match against evidence table facts or source titles → medium confidence
+    4. No match → low confidence / unmatched
+
+    Returns a RecommendationGrounding for every article recommendation.
+    """
+    # Build quality map for source URLs
+    quality_map: dict[str, str] = {
+        sq.get("url", ""): sq.get("quality", "medium")
+        for sq in source_quality_scores
+        if sq.get("url")
+    }
+
+    # Normalised candidate names for fast lookup
+    cand_norm: list[tuple[str, dict]] = [
+        (normalize_recommendation_name(c.get("name", "")), c)
+        for c in evidence_candidates
+        if c.get("name")
+    ]
+
+    # Normalised source titles
+    src_titles: list[tuple[str, str]] = []
+    if source_scores:
+        for s in source_scores:
+            title = s.title if hasattr(s, "title") else s.get("title", "")
+            url = s.url if hasattr(s, "url") else s.get("url", "")
+            if title:
+                src_titles.append((normalize_recommendation_name(title), url))
+
+    # Evidence table facts for fallback matching
+    evidence_texts: list[str] = []
+    if evidence_table:
+        for item in evidence_table:
+            fact = item.fact if hasattr(item, "fact") else item.get("fact", "")
+            evidence_texts.append(fact.lower())
+
+    groundings: list[RecommendationGrounding] = []
+
+    for rec in article_recs:
+        norm_rec = normalize_recommendation_name(rec.name)
+        if not norm_rec:
+            groundings.append(
+                RecommendationGrounding(
+                    name=rec.name,
+                    matched=False,
+                    confidence="low",
+                    support_reason="Empty normalised name",
+                )
+            )
+            continue
+
+        matched_sources: list[str] = []
+        confidence: Literal["high", "medium", "low"] = "low"
+        matched = False
+        support_reason = "No matching evidence found"
+        best_quality: Literal["high", "medium", "low"] = "medium"
+
+        # 1. Exact match against candidate names
+        for cand_n, cand in cand_norm:
+            if norm_rec == cand_n:
+                matched = True
+                confidence = "high"
+                matched_sources.extend(cand.get("source_urls", []))
+                # Source quality from best source in candidate
+                cq = cand.get("source_quality", "medium")
+                if cq == "high":
+                    best_quality = "high"
+                support_reason = f"Exact product match in evidence: {cand.get('name')}"
+                break
+
+        # 2. Containment match against candidate names
+        if not matched:
+            for cand_n, cand in cand_norm:
+                if not cand_n:
+                    continue
+                if norm_rec in cand_n or cand_n in norm_rec:
+                    matched = True
+                    confidence = "medium"
+                    matched_sources.extend(cand.get("source_urls", []))
+                    cq = cand.get("source_quality", "medium")
+                    if cq == "high" and best_quality != "high":
+                        best_quality = "high"
+                    support_reason = (
+                        f"Partial product name match in evidence: {cand.get('name')}"
+                    )
+                    break
+
+        # 3. Brand prefix match (first word of rec matches first word of candidate)
+        if not matched:
+            rec_words = norm_rec.split()
+            for cand_n, cand in cand_norm:
+                cand_words = cand_n.split()
+                if (
+                    rec_words
+                    and cand_words
+                    and rec_words[0] == cand_words[0]
+                    and len(set(rec_words) & set(cand_words)) >= 2
+                ):
+                    matched = True
+                    confidence = "medium"
+                    matched_sources.extend(cand.get("source_urls", []))
+                    support_reason = f"Brand/product word overlap with evidence: {cand.get('name')}"
+                    break
+
+        # 4. Match against source title or evidence table text
+        if not matched:
+            for et in evidence_texts:
+                if norm_rec in et or any(w in et for w in norm_rec.split() if len(w) > 4):
+                    matched = True
+                    confidence = "medium"
+                    support_reason = "Product name found in evidence table facts"
+                    break
+
+        # 5. Match against source titles
+        if not matched:
+            for src_norm, src_url in src_titles:
+                if norm_rec in src_norm or any(
+                    w in src_norm for w in norm_rec.split() if len(w) > 4
+                ):
+                    matched = True
+                    confidence = "low"
+                    matched_sources.append(src_url)
+                    support_reason = "Product name found in source title"
+                    break
+
+        # 6. Article citation URLs as evidence (if section has linked sources)
+        if not matched and rec.source_urls:
+            url_qualities = [quality_map.get(u, "medium") for u in rec.source_urls]
+            if any(q in ("high", "medium") for q in url_qualities):
+                matched = True
+                confidence = "medium"
+                matched_sources.extend(rec.source_urls)
+                best_quality = max(  # type: ignore[assignment]
+                    url_qualities, key=lambda q: {"high": 2, "medium": 1, "low": 0}.get(q, 0)
+                )
+                support_reason = "Recommendation section contains editorial source citations"
+
+        groundings.append(
+            RecommendationGrounding(
+                name=rec.name,
+                matched=matched,
+                confidence=confidence,
+                matched_sources=list(dict.fromkeys(matched_sources)),
+                support_reason=support_reason,
+                source_quality=best_quality,
+            )
+        )
+
+    return groundings
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +829,141 @@ def _is_placeholder(text: str) -> bool:
         or "[placeholder" in lower
         or "[insert" in lower
     )
+
+
+def _is_generic_heading(name: str) -> bool:
+    """Return True if the name is a generic section heading, not a product name."""
+    return name.strip().lower() in _NON_RECOMMENDATION_HEADINGS
+
+
+def _is_source_link_text(name: str) -> bool:
+    """Return True if the name looks like a source-link instruction rather than a product.
+
+    Catches mock-mode source link bullets like:
+    "See Mock Source 1 for specific recommendations"
+    "Check the article for details"
+    "Visit allure.com for recommendations"
+    """
+    lower = name.lower().strip()
+    for prefix in ("see ", "check ", "visit ", "read ", "click ", "go to ", "find "):
+        if lower.startswith(prefix):
+            return True
+    for suffix in (
+        "for specific recommendations",
+        "for recommendations",
+        "for more information",
+        "for details",
+        "for more",
+        "for info",
+    ):
+        if lower.endswith(suffix):
+            return True
+    return False
+
+
+def _clean_rec_name(name: str) -> str:
+    """Strip markdown formatting and extra whitespace from a recommendation name."""
+    # Strip markdown links: [Name](url) → Name
+    name = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", name)
+    # Strip bold/italic
+    name = re.sub(r"\*+", "", name)
+    name = re.sub(r"_+", "", name)
+    # Strip surrounding punctuation
+    name = name.strip(" .,;:!?\"'`-–—[](){}")
+    # Collapse whitespace
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def _parse_heading_as_recommendation(heading_line: str) -> tuple[str | None, str | None]:
+    """Parse an H2/H3 heading to extract a product name and optional label.
+
+    Returns (name, label) or (None, None) if not a recommendation heading.
+
+    Handles patterns:
+    - ``## 1. Tom Ford Soleil Blanc``  → ("Tom Ford Soleil Blanc", None)
+    - ``### Best Solar Floral: Guerlain Terracotta``  → ("Guerlain Terracotta", "Best Solar Floral")
+    - ``## Best Overall: Ouai Melrose Place``  → ("Ouai Melrose Place", "Best Overall")
+    - ``## Tom Ford Soleil Blanc``  → ("Tom Ford Soleil Blanc", None)
+    """
+    # Strip heading markers
+    heading = re.sub(r"^#{2,3}\s+", "", heading_line).strip()
+    if not heading:
+        return None, None
+
+    # Pattern: "N. Product Name" (numbered)
+    m = re.match(r"^\d+[.)]\s+(.+)$", heading)
+    if m:
+        name = _clean_rec_name(m.group(1))
+        return (name, None) if name and _looks_like_product_name(name) else (None, None)
+
+    # Pattern: "Label: Product Name" (label with colon)
+    m = re.match(r"^([^:]{3,40}):\s+(.{3,80})$", heading)
+    if m:
+        label_part = m.group(1).strip()
+        name_part = _clean_rec_name(m.group(2))
+        # Check if label_part looks like a descriptive label (not a generic heading)
+        label_lower = label_part.lower()
+        if (
+            name_part
+            and _looks_like_product_name(name_part)
+            and not _is_generic_heading(label_part)
+            and not _is_generic_heading(name_part)
+        ):
+            # Detect "Best X", "Top Pick", "Why", "Caveat", etc.
+            if any(
+                w in label_lower
+                for w in ("best", "top", "pick", "editor", "our", "perfect", "ideal")
+            ):
+                return name_part, label_part
+            # Generic "N: Product" style where N isn't a label keyword — treat whole as name
+            if _looks_like_product_name(heading):
+                return _clean_rec_name(heading), None
+            return name_part, label_part
+
+    # Plain heading: whole heading is the product name
+    name = _clean_rec_name(heading)
+    if name and _looks_like_product_name(name) and not _is_generic_heading(name):
+        return name, None
+
+    return None, None
+
+
+def _extract_field(text: str, field_names: tuple[str, ...]) -> str | None:
+    """Extract the value of a bold field from text.
+
+    Handles multiple formats:
+    - ``**Best for:** value``  (colon inside bold)
+    - ``**Best for**: value``  (colon after bold close)
+    - ``**Best for** value``   (space after bold)
+    - ``Best for: value``      (plain, not bold)
+    """
+    for fn in field_names:
+        # Pattern 1: **Field:** value (colon INSIDE bold — most common in Gemini output)
+        m = re.search(
+            r"\*\*" + re.escape(fn) + r"[:\s]*\*\*\s*:?\s*([^\n*]{3,200})",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).strip(" .,;:")
+        # Pattern 2: **Field**: value or **Field** value (colon/space outside bold)
+        m = re.search(
+            r"\*\*" + re.escape(fn) + r"\*\*[:\s]+([^\n*]{3,200})",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).strip(" .,;:")
+        # Pattern 3: Field: value (plain, no bold)
+        m = re.search(
+            r"(?:^|\n)" + re.escape(fn) + r"[:\s]+([^\n]{3,200})",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).strip(" .,;:")
+    return None
 
 
 def _extract_names_from_text(text: str) -> list[str]:

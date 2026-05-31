@@ -84,8 +84,11 @@ class RunResponse(BaseModel):
     publish_ready_status: str = ""
     search_pass_count: int = 1
     enrichment_queries: list[str] = []
-    # Recommendation candidates
+    # Recommendation candidates + post-article grounding
     recommendation_candidates_summary: dict[str, Any] = {}
+    article_recommendations_count: int | None = None
+    grounded_recommendations_count: int | None = None
+    unmatched_recommendations: list[str] = []
     # Publish contract (final truth layer)
     publish_contract: dict[str, Any] = {}
 
@@ -282,6 +285,15 @@ def _run_topic(topic: str) -> RunResponse:
         search_pass_count=state.search_pass_count,
         enrichment_queries=list(state.enrichment_queries),
         recommendation_candidates_summary=dict(state.recommendation_candidates_summary),
+        article_recommendations_count=state.recommendation_candidates_summary.get(
+            "article_recommendations_count"
+        ),
+        grounded_recommendations_count=state.recommendation_candidates_summary.get(
+            "grounded_recommendations_count"
+        ),
+        unmatched_recommendations=state.recommendation_candidates_summary.get(
+            "unmatched_names", []
+        ),
         publish_contract=dict(state.publish_contract) if state.publish_contract else {},
     )
 
