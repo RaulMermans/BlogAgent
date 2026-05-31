@@ -263,7 +263,7 @@ These are all solid choices for the summer season. Each one works well
 in warm weather and has earned positive editorial coverage.
 """
 
-    _FRAGRANCE_ARTICLE_RICH_SENSORY = """# 5 Best Perfumes for Summer That Actually Smell Like Summer
+    _FRAGRANCE_ARTICLE_RICH_SENSORY = """# 5 Best Summer Perfumes That Actually Last
 
 Fresh, citrus, and aquatic notes define a good summer fragrance. Longevity matters
 when you're sweating through the afternoon. These five have the projection and sillage
@@ -319,7 +319,8 @@ The standout: Chanel Chance Eau Tendre — never wrong.
             d for d in result.defects if d.type == "weak_sensory_detail" and d.severity == "high"
         ]
         assert len(high_sensory_defects) == 0, (
-            f"Should not have HIGH sensory defect with rich sensory content; defects: {result.defects}"
+            "Should not have HIGH sensory defect with rich sensory content; "
+            f"defects: {result.defects}"
         )
 
     def test_unmet_count_adds_defect(self):
@@ -388,7 +389,8 @@ fragrance reviews are published. Fresh and floral notes dominate — worth it.
         ]
         # With valid evidence-limited framing, the defect should not be HIGH
         assert len(high_unmet) == 0, (
-            f"Should not have HIGH unmet_requested_count with valid explanation; defects: {result.defects}"
+            "Should not have HIGH unmet_requested_count with valid explanation; "
+            f"defects: {result.defects}"
         )
 
     def test_core_medium_defect_triggers_polish(self):

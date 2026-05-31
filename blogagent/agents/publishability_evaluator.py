@@ -191,7 +191,10 @@ def evaluate_publishability(
             PublishabilityDefect(
                 type="weak_intro",
                 severity="medium",
-                message="Intro contains generic opening phrase. Strengthen with editorial specificity.",
+                message=(
+                    "Intro contains generic opening phrase. "
+                    "Strengthen with editorial specificity."
+                ),
             )
         )
         score -= 8
@@ -216,7 +219,10 @@ def evaluate_publishability(
             PublishabilityDefect(
                 type="generic_voice",
                 severity="low",
-                message=f"Article contains {mill_count} generic/filler phrase(s). Consider removing.",
+                message=(
+                    f"Article contains {mill_count} generic/filler phrase(s). "
+                    "Consider removing."
+                ),
             )
         )
         score -= 4
@@ -389,7 +395,8 @@ def evaluate_publishability(
                     type="seo_issue",
                     severity="low",
                     message=(
-                        "Title uses generic SEO filler words (e.g. 'ultimate guide', 'everything'). "
+                        "Title uses generic SEO filler words "
+                        "(e.g. 'ultimate guide', 'everything'). "
                         "Use a specific, editorial title instead."
                     ),
                 )

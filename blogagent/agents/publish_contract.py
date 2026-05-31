@@ -185,7 +185,8 @@ def check_publish_contract(
                     severity="high",
                     message=(
                         f"Fragrance article mentions only {sensory_count} sensory term(s). "
-                        "Include scent families, notes, or mood descriptions where evidence supports."
+                        "Include scent families, notes, or mood descriptions where "
+                        "evidence supports."
                     ),
                     fixable=True,
                 )
@@ -212,8 +213,8 @@ def check_publish_contract(
                     type="insufficient_recommendation_depth",
                     severity="medium",
                     message=(
-                        "Recommendation items lack 'best for', 'why it works', or use-case context. "
-                        "Each pick should explain who it is for and why."
+                        "Recommendation items lack 'best for', 'why it works', or "
+                        "use-case context. Each pick should explain who it is for and why."
                     ),
                     fixable=True,
                 )

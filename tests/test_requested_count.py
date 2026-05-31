@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from blogagent.workflow.recommendation import (
     extract_requested_count,
     normalize_number_words,

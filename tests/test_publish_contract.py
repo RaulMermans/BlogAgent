@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from blogagent.agents.publish_contract import (
     PublishContractResult,
     check_publish_contract,
@@ -192,7 +191,10 @@ class TestPublishContractRecommendationPosts:
         assert result.status == "draft_only_not_publish_ready"
 
     def test_no_quick_picks_section_is_high_defect(self):
-        no_qp = """# Best Perfumes\n\nPerfume A is good. Perfume B is also nice.\n\n## Final Takeaway\nChoose wisely.\n"""
+        no_qp = (
+            "# Best Perfumes\n\nPerfume A is good. Perfume B is also nice."
+            "\n\n## Final Takeaway\nChoose wisely.\n"
+        )
         result = check_publish_contract(
             article_markdown=no_qp,
             topic="best perfumes for summer",

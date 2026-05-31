@@ -112,7 +112,8 @@ def revise_with_quality_context(
     defects = quality_evaluation.get("defects", [])
     defect_lines = (
         "\n".join(
-            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
+            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): "
+            f"{d.get('message', '')}"
             for d in defects
         )
         or "No specific defects listed."

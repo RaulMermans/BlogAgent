@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from blogagent.tools.recommendation_extractor import (
     RecommendationCandidate,
     build_candidates_summary,
@@ -60,7 +59,10 @@ class TestExtractProductNames:
         )
 
     def test_captures_scent_descriptors_near_product(self):
-        snippet = "**Chanel Chance Eau Tendre** has fresh citrus notes and white musk base. Perfect for summer."
+        snippet = (
+            "**Chanel Chance Eau Tendre** has fresh citrus notes and white musk base. "
+            "Perfect for summer."
+        )
         evidence = [_make_evidence(snippet)]
         quality = [_make_quality("https://allure.com", "high")]
         candidates = extract_recommendations_from_evidence(

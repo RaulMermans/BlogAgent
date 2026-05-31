@@ -142,7 +142,8 @@ def polish_article(
     defects = publishability_evaluation.get("defects", [])
     defect_summary = (
         "\n".join(
-            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
+            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): "
+            f"{d.get('message', '')}"
             for d in defects
         )
         or "No specific defects listed."
