@@ -31,6 +31,23 @@ _LOW_QUALITY_DOMAINS: frozenset[str] = frozenset(
         "yelp.com",
         "answers.yahoo.com",
         "ask.com",
+        "youtube.com",  # video platform — low editorial authority for written product rec
+    }
+)
+
+# Retailer/editorial hybrids and niche databases — medium quality
+_MEDIUM_QUALITY_DOMAINS: frozenset[str] = frozenset(
+    {
+        "scentbird.com",
+        "fragrantica.com",  # community/database, use carefully
+        "perfumania.com",
+        "thebeautylookbook.com",
+        "beautybay.com",
+        "sephora.com",
+        "ulta.com",
+        "nordstrom.com",
+        "cultbeauty.co.uk",
+        "spacenk.com",
     }
 )
 
@@ -70,14 +87,25 @@ _HIGH_QUALITY_DOMAINS: frozenset[str] = frozenset(
         "techradar.com",
         "rtings.com",
         "goodhousekeeping.com",
-        "byrdie.com",
-        "allure.com",
         "seriouseats.com",
         "epicurious.com",
         "thespruce.com",
         "nymag.com",
-        "fragrantica.com",
         "basenotes.net",
+        # Beauty / lifestyle / fragrance editorial
+        "byrdie.com",
+        "allure.com",
+        "vogue.com",
+        "harpersbazaar.com",
+        "elle.com",
+        "cosmopolitan.com",
+        "thecut.com",
+        "whowhatwear.com",
+        "gq.com",
+        "esquire.com",
+        "the-independent.com",
+        "independent.co.uk",
+        "fragrantica.com",
     }
 )
 
@@ -109,8 +137,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                 title=source.title,
                 quality="low",
                 reason=(
-                    f"{domain} is a user-generated or social platform "
-                    "with low editorial authority"
+                    f"{domain} is a user-generated or social platform with low editorial authority"
                 ),
             )
 
@@ -121,6 +148,15 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                 title=source.title,
                 quality="high",
                 reason=f"{domain} is a recognised editorial or expert publication",
+            )
+
+    for med_domain in _MEDIUM_QUALITY_DOMAINS:
+        if med_domain in domain:
+            return SourceQuality(
+                url=source.url,
+                title=source.title,
+                quality="medium",
+                reason=f"{domain} is a retailer/editorial hybrid with moderate authority",
             )
 
     if domain.endswith(".edu"):

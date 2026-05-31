@@ -46,9 +46,7 @@ def _mock_llm_result(data: object, configured_provider: str = "mock") -> LLMResu
 
 
 def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
-    fallback_warning = base.warning or (
-        f"LLM call failed: {base.error}" if base.error else None
-    )
+    fallback_warning = base.warning or (f"LLM call failed: {base.error}" if base.error else None)
     return LLMResult(
         data=data,
         provider=_MOCK_PROVIDER,
@@ -142,10 +140,13 @@ def polish_article(
     from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
 
     defects = publishability_evaluation.get("defects", [])
-    defect_summary = "\n".join(
-        f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
-        for d in defects
-    ) or "No specific defects listed."
+    defect_summary = (
+        "\n".join(
+            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
+            for d in defects
+        )
+        or "No specific defects listed."
+    )
 
     skill_briefs = get_skill_briefs(selected_skills) or "(none)"
     evidence_limited = (

@@ -122,9 +122,7 @@ def evaluate_quality(
         low_count = sum(1 for s in source_quality_scores if s.get("quality") == "low")
         total = len(source_quality_scores)
         if total > 0 and low_count / total > 0.6:
-            severity: Literal["low", "medium", "high"] = (
-                "high" if is_recommendation else "medium"
-            )
+            severity: Literal["low", "medium", "high"] = "high" if is_recommendation else "medium"
             defects.append(
                 QualityDefect(
                     type="weak_source_dominance",
@@ -239,24 +237,26 @@ def evaluate_quality(
 # ---------------------------------------------------------------------------
 
 # Generic headings that are NOT individual recommendations
-_GENERIC_HEADINGS: frozenset[str] = frozenset({
-    "how we chose",
-    "how to choose",
-    "methodology",
-    "our methodology",
-    "final takeaway",
-    "takeaway",
-    "conclusion",
-    "introduction",
-    "overview",
-    "buying guide",
-    "faqs",
-    "frequently asked questions",
-    "further reading",
-    "sources",
-    "references",
-    "citations",
-})
+_GENERIC_HEADINGS: frozenset[str] = frozenset(
+    {
+        "how we chose",
+        "how to choose",
+        "methodology",
+        "our methodology",
+        "final takeaway",
+        "takeaway",
+        "conclusion",
+        "introduction",
+        "overview",
+        "buying guide",
+        "faqs",
+        "frequently asked questions",
+        "further reading",
+        "sources",
+        "references",
+        "citations",
+    }
+)
 
 # Source/reference section headings — strip these before counting
 _SOURCE_SECTION_PATTERN = re.compile(
@@ -295,9 +295,7 @@ def count_recommendations(markdown: str) -> int:
             return count
 
     # --- 2. Numbered H2/H3 recommendation headings ---
-    numbered_headings = re.findall(
-        r"^#{2,3}\s+\d+[.)]\s+\S", no_sources, re.MULTILINE
-    )
+    numbered_headings = re.findall(r"^#{2,3}\s+\d+[.)]\s+\S", no_sources, re.MULTILINE)
     if numbered_headings:
         return len(numbered_headings)
 
@@ -344,10 +342,7 @@ def _is_evidence_limited_article(draft: str, actual_count: int, requested_count:
     # Title must not claim the wrong count.
     title_match = re.search(r"^#\s+(.+)", draft, re.MULTILINE)
     title = title_match.group(1).lower() if title_match else ""
-    title_falsely_claims = (
-        f"top {requested_count}" in title
-        or f"best {requested_count}" in title
-    )
+    title_falsely_claims = f"top {requested_count}" in title or f"best {requested_count}" in title
 
     return has_explanation and not title_falsely_claims
 

@@ -36,9 +36,17 @@ def _minimal_package(**overrides) -> dict:
         "article_markdown": "# Heading\n\n" + "word " * 650,
         "revision_summary": "No issues found.",
         "source_list": [
-            {"url": f"https://example.com/{i}", "title": f"Source {i}", "domain": "example.com",
-             "credibility_score": 0.8, "relevance_score": 0.8, "recency_score": 0.8,
-             "overall_score": 0.8, "notes": "", "is_mock": False}
+            {
+                "url": f"https://example.com/{i}",
+                "title": f"Source {i}",
+                "domain": "example.com",
+                "credibility_score": 0.8,
+                "relevance_score": 0.8,
+                "recency_score": 0.8,
+                "overall_score": 0.8,
+                "notes": "",
+                "is_mock": False,
+            }
             for i in range(3)
         ],
         "fact_check_report": {

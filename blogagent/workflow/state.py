@@ -171,3 +171,9 @@ class BlogRunState(BaseModel):
     # Final publish readiness:
     # "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
     publish_ready_status: str = ""
+    # Extracted recommendation candidates (list of RecommendationCandidate dicts)
+    recommendation_candidates: list[dict] = Field(default_factory=list)
+    # Compact summary for API responses
+    recommendation_candidates_summary: dict = Field(default_factory=dict)
+    # Publish contract result (dict-serialized PublishContractResult)
+    publish_contract: Optional[dict] = None

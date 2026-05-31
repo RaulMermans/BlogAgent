@@ -75,9 +75,7 @@ class OpenAIProvider:
         try:
             import openai  # noqa: PLC0415
         except ImportError as exc:
-            raise ImportError(
-                "openai package is not installed. Run: pip install openai"
-            ) from exc
+            raise ImportError("openai package is not installed. Run: pip install openai") from exc
 
         client = openai.OpenAI(api_key=self.api_key, timeout=self.timeout)
         response = client.chat.completions.create(

@@ -94,25 +94,62 @@ match_citations                  → citation_matcher tool (deterministic heuris
 run_fact_check                   → assemble FactCheckReport (+ optional LLM judgment)
 [fact-check revision]            → Editor Agent fact-check revision + re-run
 evaluate_publishability          → heuristic publish-readiness check; scores 0–100
-[if polish_required=True]
+check_publish_contract           → deterministic final truth layer; hard-fail conditions
+[if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
+check_publish_contract           → re-run after polish to reflect improvements
 package_article                  → assemble ArticlePackage (with SEO fields)
-compute_publish_ready_status     → sets publish_ready_status field
+compute_publish_ready_status     → uses publish_contract as final authority
 ```
 
 ---
 
 ## Publish-Ready Pipeline
 
+### Requested Count Detection
+
+`blogagent/workflow/recommendation.py` — deterministic, no LLM.
+
+`extract_requested_count(topic)` detects explicit list counts:
+- `"7 best parfums for summer"` → 7 (digit before keyword)
+- `"top 10 perfumes"` → 10 (keyword before digit)
+- `"seven best perfumes"` → 7 (number word via `normalize_number_words`)
+- `"a list of 7 perfumes"` → 7 (list context)
+- `"recommend 5 fragrances"` → 5 (suggest context)
+
+False-positive guards: years (1900–2099), price contexts (`under $50`), quantity phrases (`for 2 people`) are excluded.
+
+`requested_count` is stored in state and used by evidence sufficiency, quality evaluator, publishability evaluator, publish contract, revision agent, and the final run trace.
+
+### Recommendation Candidate Extraction
+
+`blogagent/tools/recommendation_extractor.py` — deterministic, no LLM.
+
+Runs during `build_evidence_table` for recommendation topics. Extracts named product/entity candidates from evidence text:
+- Bold markdown names: `**Brand Name**`
+- Numbered list items: `1. Brand Name`
+- Bullet list items: `- Brand Name`
+- Known brand prefix scan (fragrance/beauty brands)
+
+Each candidate tracks:
+- `source_urls` — which sources mention it
+- `source_quality` — best quality of its sources (high/medium/low)
+- `sensory_terms` — scent/sensory words found nearby (fragrance posts)
+- `supported_context` — suitability terms (summer, tested, best for, etc.)
+- `usable` — True if named in high/medium quality source with some context
+- `low_confidence` — True if only in a single low-quality source
+
+`state.recommendation_candidates_summary` exposes `usable_count`, `low_confidence_count`, and `names` for the API response and UI.
+
 ### Evidence Sufficiency Evaluator
 
 `blogagent/agents/evidence_sufficiency.py` — deterministic, no LLM.
 
-For recommendation topics, it checks:
-- Number of high/medium sources (proxy for distinct recommendation coverage)
-- Whether `supported_count >= requested_count`
-- Thin evidence (< 3 real facts)
-- Low-source dominance (all sources are low-quality)
+For recommendation topics, uses actual `recommendation_candidates` when available:
+- `supported_count` = number of usable candidates (not a source-count proxy)
+- If `supported_count < requested_count` → `recommended_action = search_more` (triggers enrichment)
+- After enrichment: if still insufficient → `evidence_limited`
+- Low-source dominance and thin evidence table are penalised
 
 Output: `EvidenceSufficiencyResult` with `sufficient`, `score`, `supported_count`, `recommended_action` (`proceed | search_more | evidence_limited`).
 
@@ -120,34 +157,64 @@ Output: `EvidenceSufficiencyResult` with `sufficient`, `score`, `supported_count
 
 `run_enrichment_search` in `blogagent/workflow/nodes.py`:
 - Triggers when `recommended_action == "search_more"` and Tavily is active
-- Generates 3 targeted editorial queries via `generate_enrichment_queries()`
+- Generates 3 topic-specific queries (fragrance-aware queries for perfume topics)
 - Runs up to `_MAX_SEARCH_PASSES=2` total (initial + enrichment)
 - Caps sources at `_MAX_SOURCES_TOTAL=10`
-- Re-extracts, re-scores, and rebuilds evidence after enrichment
+- Re-extracts webpages, re-scores, re-classifies quality, re-extracts candidates, rebuilds evidence table after enrichment
 
 ### Publishability Evaluator
 
 `blogagent/agents/publishability_evaluator.py` — heuristic, deterministic, no LLM.
 
-Checks:
+Recalibrated checks:
 - Generic intro phrases (content-mill openers)
+- Unmet requested count (HIGH: no explanation; LOW: evidence-limited framing present)
 - Editorial POV (opinion signal words)
 - Recommendation depth (each pick has use-case context)
-- Fragrance/beauty sensory detail (notes, mood, occasion terms)
+- Fragrance/beauty sensory detail (notes, mood, occasion terms) — treated as CORE for fragrance
 - Source synthesis (inline citations in prose)
 - Conclusion quality (not a generic wrap-up)
 - Title specificity (no "ultimate guide" filler)
 
-Score thresholds: `publish_ready = score >= 72 and no high defects`. `polish_required = score < 80 or ≥2 medium/high defects`.
+Advisory thresholds: `publish_ready = score >= 75 and no high defects`. `polish_required` triggers on ANY core medium defect (weak_sensory_detail, unmet_requested_count, weak_pov, thin_recommendations) or score < 80 or ≥2 medium/high defects.
+
+The publish contract is the final authority; the publishability evaluator is advisory.
+
+### Publish Contract (Final Truth Layer)
+
+`blogagent/agents/publish_contract.py` — deterministic, no LLM.
+
+Hard-fail conditions that override everything else:
+
+| Defect | Severity | Score Cap |
+|---|---|---|
+| Missing Quick Picks section | HIGH | 65 |
+| Fewer than 3 recommendations | HIGH | 65 |
+| Unmet requested count without valid evidence-limited explanation | HIGH | 59 |
+| Weak source dominance (>60% low-quality) | MEDIUM | 74 |
+| Weak sensory detail in fragrance post | HIGH (<3 terms) / MEDIUM (3–5) | 79 |
+| Insufficient recommendation depth | MEDIUM | 74 |
+| Generic intro with no editorial POV | MEDIUM | 79 |
+| Thin article (<200 words) | HIGH | 65 |
+
+Status rules:
+- `publish_ready` — score ≥ 85, no high defects, no unresolved count mismatch
+- `publish_ready_with_warnings` — score ≥ 75, no high defects, evidence-limited count accepted
+- `draft_only_not_publish_ready` — score < 75 or any high defect
+
+`state.publish_contract` is set twice: once before editorial polish, once after. The post-polish result is used by `compute_publish_ready_status` as the final truth.
 
 ### Editorial Polish Agent
 
 `blogagent/agents/editorial_polish_agent.py` — LLM-gated (`BLOGAGENT_USE_LLM_EDITOR=true`).
 
+Triggers when `publishability_evaluation.polish_required=True` OR `publish_contract.status != "publish_ready"`.
+
 - Runs at most once per pipeline
 - Improves intro, voice, sensory detail, and conclusion
 - Does not invent unsupported facts
 - Preserves all citations and financial disclaimers
+- For evidence-limited articles: frames the reduced count elegantly
 - Mock fallback: returns article unchanged with explanatory summary
 
 ### New Skills
@@ -162,17 +229,33 @@ Five new skills added to `blogagent/skills/specs.py`:
 | `personal-blog-voice` | all topics | Editorial confidence, cleaner prose |
 | `publishability-review` | all topics | Pre-publication quality gate reminder |
 
-### State Fields Added
+### State Fields
 
 ```python
+requested_count: Optional[int]             # count from topic ("7 best…" → 7)
+recommendation_candidates: list[dict]      # RecommendationCandidate dicts
+recommendation_candidates_summary: dict    # {usable_count, low_confidence_count, names}
 evidence_sufficiency: Optional[dict]       # EvidenceSufficiencyResult dict
 search_pass_count: int = 1                 # total search passes run
 enrichment_queries: list[str]              # queries used in enrichment pass
 publishability_evaluation: Optional[dict]  # PublishabilityEvaluation dict
 polish_summary: list[str]                  # editorial polish change summary
 publishability_score: int = 0             # convenience field from evaluation
-publish_ready_status: str                  # "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
+publish_contract: Optional[dict]           # PublishContractResult dict (final truth)
+publish_ready_status: str                  # mirrors publish_contract.status
 ```
+
+### Source Quality Classification
+
+`blogagent/tools/source_quality.py` — domain heuristic, no LLM.
+
+High quality domains now include beauty/lifestyle editorial:
+`byrdie.com`, `allure.com`, `vogue.com`, `harpersbazaar.com`, `elle.com`, `cosmopolitan.com`, `thecut.com`, `whowhatwear.com`, `gq.com`, `esquire.com`, `independent.co.uk`
+
+Medium quality domains include retailer/editorial hybrids:
+`fragrantica.com`, `scentbird.com`, `sephora.com`, `ulta.com`, `thebeautylookbook.com`
+
+Low quality: social platforms — `reddit.com`, `quora.com`, `instagram.com`, `tiktok.com`, `pinterest.com`, `youtube.com`
 
 ---
 

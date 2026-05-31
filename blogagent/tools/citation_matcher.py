@@ -43,9 +43,7 @@ def citation_matcher(input: CitationMatchInput) -> CitationMatchOutput:
     Uses heuristic by default. When BLOGAGENT_USE_LLM_CITATION_JUDGE=true and
     source_packets are provided, calls the citation judge per claim.
     """
-    use_llm_judge = (
-        os.getenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false").strip().lower() == "true"
-    )
+    use_llm_judge = os.getenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false").strip().lower() == "true"
 
     heuristic_status, heuristic_notes, supporting = _evaluate_sources(input.sources)
 

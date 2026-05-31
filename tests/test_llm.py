@@ -337,12 +337,14 @@ def test_google_provider_can_return_structured_output(monkeypatch):
 
 def test_env_example_has_google_api_key():
     from pathlib import Path
+
     env_example = (Path(__file__).parent.parent / ".env.example").read_text()
     assert "GOOGLE_API_KEY" in env_example
 
 
 def test_env_example_has_google_model():
     from pathlib import Path
+
     env_example = (Path(__file__).parent.parent / ".env.example").read_text()
     assert "BLOGAGENT_GOOGLE_MODEL" in env_example
 
@@ -488,6 +490,7 @@ def test_editor_research_plan_fallback_warning_when_anthropic_key_missing(monkey
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     from blogagent.agents.editor_agent import generate_research_plan
+
     result = generate_research_plan("Test Topic")
 
     assert result.is_mock is True
@@ -503,6 +506,7 @@ def test_editor_research_plan_fallback_warning_when_google_key_missing(monkeypat
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     from blogagent.agents.editor_agent import generate_research_plan
+
     result = generate_research_plan("Test Topic")
 
     assert result.is_mock is True
@@ -779,6 +783,7 @@ def test_revision_summary_set_after_revision(monkeypatch):
 def test_mock_mode_has_no_llm_fallback_warning():
     """Pure mock mode must not produce fallback warnings — they indicate unexpected fallback."""
     from blogagent.agents.editor_agent import generate_research_plan
+
     result = generate_research_plan("Test")
     assert result.warning is None
 
@@ -791,6 +796,7 @@ def test_pipeline_completes_without_api_keys(monkeypatch):
     monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
 
     from blogagent.workflow.graph import run_pipeline, validate_final_state
+
     state = run_pipeline("Photosynthesis")
     assert state.final_article_package is not None
     errors = validate_final_state(state)
@@ -898,7 +904,7 @@ def test_repair_success_preserves_live_provider_data(monkeypatch):
             )
         # first call — malformed
         return ProviderResponse(
-            text='INVALID {research_questions: [broken',
+            text="INVALID {research_questions: [broken",
             model="gemini-2.5-flash",
             provider="google",
         )
@@ -962,8 +968,12 @@ def test_recommendation_draft_prompt_forbids_one_more():
     from blogagent.agents import prompts
 
     p = prompts.RECOMMENDATION_DRAFT_PROMPT.lower()
-    assert "not one more" in p or "not more" in p or "not 1 more" in p or "not exceed" in p or (
-        "exactly" in p and "more" in p
+    assert (
+        "not one more" in p
+        or "not more" in p
+        or "not 1 more" in p
+        or "not exceed" in p
+        or ("exactly" in p and "more" in p)
     ), "Prompt must guard against producing one extra item"
 
 
@@ -995,16 +1005,18 @@ def test_detect_repeated_excerpts_catches_repeated_sentences():
     from blogagent.llm.client import detect_repeated_excerpts
 
     repeated = "This is a very long sentence that appears in multiple sections of the article text."
-    article = "\n".join([
-        "## Section One",
-        f"Some intro. {repeated}",
-        "",
-        "## Section Two",
-        f"More content. {repeated}",
-        "",
-        "## Section Three",
-        f"Even more. {repeated}",
-    ])
+    article = "\n".join(
+        [
+            "## Section One",
+            f"Some intro. {repeated}",
+            "",
+            "## Section Two",
+            f"More content. {repeated}",
+            "",
+            "## Section Three",
+            f"Even more. {repeated}",
+        ]
+    )
     warnings = detect_repeated_excerpts(article, min_phrase_length=30, threshold=3)
     assert len(warnings) >= 1
     assert any("repeated" in w.lower() for w in warnings)
@@ -1014,16 +1026,18 @@ def test_detect_repeated_excerpts_no_false_positive():
     """detect_repeated_excerpts should not flag short or non-repeated text."""
     from blogagent.llm.client import detect_repeated_excerpts
 
-    article = "\n".join([
-        "## Introduction",
-        "Solar energy is a renewable resource that powers homes and businesses worldwide.",
-        "",
-        "## Key Facts",
-        "Photovoltaic cells convert sunlight into electricity using semiconductor materials.",
-        "",
-        "## Conclusion",
-        "Continued investment in solar infrastructure is essential for a sustainable future.",
-    ])
+    article = "\n".join(
+        [
+            "## Introduction",
+            "Solar energy is a renewable resource that powers homes and businesses worldwide.",
+            "",
+            "## Key Facts",
+            "Photovoltaic cells convert sunlight into electricity using semiconductor materials.",
+            "",
+            "## Conclusion",
+            "Continued investment in solar infrastructure is essential for a sustainable future.",
+        ]
+    )
     warnings = detect_repeated_excerpts(article, threshold=3)
     assert warnings == []
 
@@ -1033,16 +1047,18 @@ def test_detect_repeated_excerpts_threshold_two():
     from blogagent.llm.client import detect_repeated_excerpts
 
     repeated = "This is a very specific sentence that appears more than once in the document here."
-    article = "\n".join([
-        "## Section One",
-        repeated,
-        "",
-        "## Section Two",
-        repeated,
-        "",
-        "## Section Three",
-        "Something completely different and unrelated to the earlier content.",
-    ])
+    article = "\n".join(
+        [
+            "## Section One",
+            repeated,
+            "",
+            "## Section Two",
+            repeated,
+            "",
+            "## Section Three",
+            "Something completely different and unrelated to the earlier content.",
+        ]
+    )
     warnings = detect_repeated_excerpts(article, min_phrase_length=30, threshold=3)
     assert warnings == []
 

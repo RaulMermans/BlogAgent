@@ -82,6 +82,7 @@ class TestNewSkillSpecs:
 
     def test_skill_briefs_appear_in_prompt_injection(self):
         from blogagent.skills.registry import get_skill_briefs
+
         skills = ["beauty-fragrance-writing", "personal-blog-voice", "publishability-review"]
         result = get_skill_briefs(skills)
         for sk in skills:
@@ -238,22 +239,29 @@ class TestEnrichmentSearchNode:
             domain="allure.com",
             is_mock=False,
         )
-        mock_output = SearchOutput(
-            results=[mock_result], query="test", provider="tavily"
-        )
+        mock_output = SearchOutput(results=[mock_result], query="test", provider="tavily")
 
-        with patch("blogagent.workflow.nodes.is_real_search_active", return_value=True), \
-             patch("blogagent.workflow.nodes.web_search", return_value=mock_output), \
-             patch("blogagent.workflow.nodes.webpage_extract") as mock_extract, \
-             patch("blogagent.workflow.nodes.source_score") as mock_score, \
-             patch("blogagent.workflow.nodes.build_evidence_table", return_value=state):
+        with (
+            patch("blogagent.workflow.nodes.is_real_search_active", return_value=True),
+            patch("blogagent.workflow.nodes.web_search", return_value=mock_output),
+            patch("blogagent.workflow.nodes.webpage_extract") as mock_extract,
+            patch("blogagent.workflow.nodes.source_score") as mock_score,
+            patch("blogagent.workflow.nodes.build_evidence_table", return_value=state),
+        ):
             from blogagent.workflow.state import SourcePacket, SourceScore
-            mock_extract.return_value = type("O", (), {"packet": SourcePacket(
-                url="https://allure.com/new-perfume",
-                title="New Perfume Pick",
-                domain="allure.com",
-                extracted_text="Great floral notes",
-            )})()
+
+            mock_extract.return_value = type(
+                "O",
+                (),
+                {
+                    "packet": SourcePacket(
+                        url="https://allure.com/new-perfume",
+                        title="New Perfume Pick",
+                        domain="allure.com",
+                        extracted_text="Great floral notes",
+                    )
+                },
+            )()
             mock_score.return_value = SourceScore(
                 url="https://allure.com/new-perfume",
                 title="New Perfume Pick",
@@ -278,24 +286,28 @@ class TestEnrichmentSearchNode:
 class TestAPINewFields:
     def test_api_response_includes_evidence_sufficiency(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "evidence_sufficiency")
         assert isinstance(resp.evidence_sufficiency, dict)
 
     def test_api_response_includes_publishability_evaluation(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "publishability_evaluation")
         assert isinstance(resp.publishability_evaluation, dict)
 
     def test_api_response_includes_polish_summary(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "polish_summary")
         assert isinstance(resp.polish_summary, list)
 
     def test_api_response_includes_publish_ready_status(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "publish_ready_status")
         assert resp.publish_ready_status in (
@@ -307,18 +319,21 @@ class TestAPINewFields:
 
     def test_api_response_includes_search_pass_count(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "search_pass_count")
         assert resp.search_pass_count >= 1
 
     def test_api_response_includes_enrichment_queries(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "enrichment_queries")
         assert isinstance(resp.enrichment_queries, list)
 
     def test_api_response_includes_publishability_score(self):
         from api.index import _run_topic
+
         resp = _run_topic("top 5 best perfumes for a date")
         assert hasattr(resp, "publishability_score")
         assert 0 <= resp.publishability_score <= 100

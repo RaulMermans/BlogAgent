@@ -644,8 +644,12 @@ def test_blog_evaluator_skill_exists():
 
 def test_blog_output_template_exists():
     template = (
-        _ROOT / ".claude" / "skills" / "blog-post-seo-writing"
-        / "references" / "blog-output-template.md"
+        _ROOT
+        / ".claude"
+        / "skills"
+        / "blog-post-seo-writing"
+        / "references"
+        / "blog-output-template.md"
     )
     assert template.exists()
 
@@ -757,7 +761,7 @@ def test_successful_auth_path_calls_show_authenticated_app():
     html = response.text
     idx = html.find("function login()")
     assert idx != -1
-    login_body = html[idx: idx + 800]
+    login_body = html[idx : idx + 800]
     assert "resp.ok" in login_body
     assert "showAuthenticatedApp" in login_body
 
@@ -767,7 +771,7 @@ def test_failed_auth_path_calls_show_access_screen():
     html = response.text
     idx = html.find("function login()")
     assert idx != -1
-    login_body = html[idx: idx + 800]
+    login_body = html[idx : idx + 800]
     assert "showAccessScreen" in login_body
 
 
@@ -862,7 +866,7 @@ def test_generate_function_calls_render_output():
     html = response.text
     idx = html.find("async function generate()")
     assert idx != -1, "generate() function not found in HTML"
-    gen_body = html[idx: idx + 3000]
+    gen_body = html[idx : idx + 3000]
     assert "renderOutput(data)" in gen_body
 
 
@@ -871,7 +875,7 @@ def test_generate_wraps_render_output_in_try_catch():
     html = response.text
     idx = html.find("async function generate()")
     assert idx != -1
-    gen_body = html[idx: idx + 3000]
+    gen_body = html[idx : idx + 3000]
     assert "renderErr" in gen_body or "Render error" in gen_body
 
 
@@ -890,7 +894,7 @@ def test_render_output_sets_output_section_display_block():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1, "renderOutput() function not found in HTML"
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "output-section" in render_body
     assert "display = 'block'" in render_body or 'display = "block"' in render_body
 
@@ -900,7 +904,7 @@ def test_render_output_renders_article_markdown_field():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "article_markdown" in render_body
 
 
@@ -909,7 +913,7 @@ def test_render_output_has_camel_case_article_markdown_fallback():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "articleMarkdown" in render_body
 
 
@@ -918,7 +922,7 @@ def test_render_output_has_content_fallback():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "data.content" in render_body or "|| ''" in render_body
 
 
@@ -932,7 +936,7 @@ def test_render_output_calls_scroll_into_view():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "scrollIntoView" in render_body
 
 
@@ -941,7 +945,7 @@ def test_render_output_scroll_uses_smooth_behavior():
     html = response.text
     idx = html.find("function renderOutput(")
     assert idx != -1
-    render_body = html[idx: idx + 4000]
+    render_body = html[idx : idx + 4000]
     assert "smooth" in render_body
 
 
@@ -1190,7 +1194,7 @@ def test_html_generate_calls_start_workflow_animation():
     html = response.text
     idx = html.find("async function generate()")
     assert idx != -1, "generate() not found"
-    gen_body = html[idx: idx + 2000]
+    gen_body = html[idx : idx + 2000]
     assert "startWorkflowAnimation" in gen_body
 
 
@@ -1199,7 +1203,7 @@ def test_html_generate_calls_complete_workflow_animation_on_success():
     html = response.text
     idx = html.find("async function generate()")
     assert idx != -1
-    gen_body = html[idx: idx + 2000]
+    gen_body = html[idx : idx + 2000]
     assert "completeWorkflowAnimation" in gen_body
 
 
@@ -1208,7 +1212,7 @@ def test_html_generate_calls_fail_workflow_animation_on_error():
     html = response.text
     idx = html.find("async function generate()")
     assert idx != -1
-    gen_body = html[idx: idx + 2000]
+    gen_body = html[idx : idx + 2000]
     assert "failWorkflowAnimation" in gen_body
 
 
@@ -1218,7 +1222,7 @@ def test_html_response_data_updates_workflow_panel():
     html = response.text
     idx = html.find("function completeWorkflowAnimation(")
     assert idx != -1, "completeWorkflowAnimation not found"
-    fn_body = html[idx: idx + 3000]
+    fn_body = html[idx : idx + 3000]
     assert "final_validation_status" in fn_body or "fvStatus" in fn_body
 
 
@@ -1236,5 +1240,5 @@ def test_html_clear_output_hides_workflow_panel():
     html = response.text
     idx = html.find("function clearOutput()")
     assert idx != -1
-    clear_body = html[idx: idx + 800]
+    clear_body = html[idx : idx + 800]
     assert "_hideWorkflowPanel" in clear_body or "workflow-panel" in clear_body

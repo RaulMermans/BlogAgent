@@ -124,6 +124,33 @@ Editorial skills are **prompt-injected text**, not autonomous agents or tool-exe
 
 Skills only affect the content of the system prompt sent to the LLM. Their benefit is entirely dependent on the LLM following the injected brief. In mock mode, skills are selected but have no visible effect (mock output is deterministic regardless of prompt content).
 
+## Publishability and Publish Contract
+
+The publishability evaluator and publish contract are **heuristic layers**, not human editorial judgment:
+
+- Publish-ready status does not guarantee the article is good enough to publish — it means it passed structured automated checks.
+- Human editorial review is always recommended before publishing any AI-generated content.
+- The publish contract uses word-count patterns, term lists, and phrase matching. It can be fooled by content that matches surface patterns without genuine quality.
+- `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
+- For `publish_ready_with_warnings`: evidence-limited articles are accepted when the framing is detected as valid, but the framing detection is pattern-matching, not semantic judgment.
+
+## Recommendation Candidate Extraction
+
+`recommendation_extractor.py` uses text pattern matching (bold/list items, brand prefixes) to identify named product candidates. Limitations:
+
+- Products mentioned only in body prose (no list or bold formatting) may be missed.
+- Brand names with unusual capitalization or abbreviations may not be detected.
+- The extractor cannot distinguish a product mention from a product recommendation.
+- In mock mode, all evidence is placeholder text — the extractor correctly returns 0 usable candidates, which correctly flags evidence as insufficient.
+- Candidate deduplication is case-sensitive-normalized; near-duplicates with different capitalization may appear as separate entries.
+
+## Enrichment Search
+
+- Enrichment search runs at most once (2 total search passes: initial + enrichment).
+- Enrichment queries are template-based heuristics, not topic-specific research strategy.
+- If Tavily search is not active, enrichment is skipped entirely — mock mode cannot enrich evidence.
+- After max search passes, the pipeline proceeds with whatever evidence is available; the article may be `evidence_limited`.
+
 ## Source Quality Scoring
 
 Source quality classification is a **domain heuristic**, not a live quality assessment:

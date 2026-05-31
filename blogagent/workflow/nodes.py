@@ -13,6 +13,10 @@ from blogagent.agents.evidence_sufficiency import (
     evaluate_evidence_sufficiency,
     generate_enrichment_queries,
 )
+from blogagent.agents.publish_contract import (
+    PublishContractResult,
+    check_publish_contract,
+)
 from blogagent.agents.publishability_evaluator import (
     evaluate_publishability,
 )
@@ -214,7 +218,15 @@ def score_sources(state: BlogRunState) -> BlogRunState:
 
 
 def build_evidence_table(state: BlogRunState) -> BlogRunState:
-    """Build the evidence table, using real extracted text or snippets when available."""
+    """Build the evidence table, using real extracted text or snippets when available.
+
+    Also extracts recommendation candidates for recommendation topics.
+    """
+    from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
+        build_candidates_summary,
+        extract_recommendations_from_evidence,
+    )
+
     # Build lookup maps so we can attach real content to each scored source.
     packet_map = {p.url: p for p in state.selected_sources}
     search_map = {r.url: r for r in state.search_results}
@@ -244,6 +256,17 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
         )
 
     state.evidence_table = evidence_items
+
+    # Extract recommendation candidates when this is a recommendation topic.
+    if state.is_recommendation:
+        candidates = extract_recommendations_from_evidence(
+            evidence_items=evidence_items,
+            source_quality_scores=state.source_quality_scores,
+            topic=state.topic,
+        )
+        state.recommendation_candidates = [c.model_dump() for c in candidates]
+        state.recommendation_candidates_summary = build_candidates_summary(candidates)
+
     return state
 
 
@@ -351,9 +374,7 @@ def run_fact_check(state: BlogRunState) -> BlogRunState:
         if m.status == CitationStatus.unsupported and m.claim.importance == ClaimImportance.high
     ]
 
-    use_llm_factcheck = (
-        os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
-    )
+    use_llm_factcheck = os.getenv("BLOGAGENT_USE_LLM_FACTCHECK", "false").strip().lower() == "true"
 
     if use_llm_factcheck:
         llm_result = fact_check_evaluator.evaluate_draft(
@@ -614,7 +635,8 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
         return state
 
     high_fixable = [
-        d for d in state.final_validation_defects
+        d
+        for d in state.final_validation_defects
         if d.get("severity") == "high" and d.get("fixable", False)
     ]
     if not high_fixable:
@@ -664,10 +686,7 @@ def package_article(state: BlogRunState) -> BlogRunState:
     title = state.outline.title
     slug = _slugify(title)
 
-    meta_description = (
-        state.draft_meta_description
-        or f"A comprehensive overview of {state.topic}."
-    )
+    meta_description = state.draft_meta_description or f"A comprehensive overview of {state.topic}."
     seo_keywords = state.draft_seo_keywords or list(state.outline.seo_keywords)
 
     revision_summary = state.revision_summary or "No revision performed."
@@ -705,6 +724,9 @@ def evaluate_evidence_sufficiency_node(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
         evidence_table=state.evidence_table,
         enrichment_already_ran=enrichment_ran,
+        recommendation_candidates=state.recommendation_candidates
+        if state.is_recommendation
+        else None,
     )
     state.evidence_sufficiency = result.model_dump()
     _event(
@@ -808,11 +830,12 @@ def _rebuild_sources_and_evidence(state: BlogRunState, existing_result_urls: set
 
     # Re-classify source quality
     from blogagent.tools.source_quality import classify_source_quality  # noqa: PLC0415
+
     state.source_quality_scores = [
         classify_source_quality(s).model_dump() for s in state.source_scores
     ]
 
-    # Rebuild evidence table
+    # Rebuild evidence table (also re-extracts recommendation candidates)
     state = build_evidence_table(state)
     return state
 
@@ -826,6 +849,9 @@ _POLISH_MAX_COUNT = 1
 
 def evaluate_publishability_node(state: BlogRunState) -> BlogRunState:
     """Run publishability evaluation on the draft."""
+    from blogagent.agents.quality_evaluator import count_recommendations  # noqa: PLC0415
+
+    actual_count = count_recommendations(state.draft) if state.is_recommendation else None
     result = evaluate_publishability(
         article_markdown=state.draft,
         topic=state.topic,
@@ -833,6 +859,8 @@ def evaluate_publishability_node(state: BlogRunState) -> BlogRunState:
         selected_skills=state.selected_skills,
         source_quality_scores=state.source_quality_scores,
         evidence_sufficiency=state.evidence_sufficiency,
+        requested_count=state.requested_count,
+        actual_recommendation_count=actual_count,
     )
     state.publishability_evaluation = result.model_dump()
     state.publishability_score = result.score
@@ -844,14 +872,25 @@ def evaluate_publishability_node(state: BlogRunState) -> BlogRunState:
     return state
 
 
-def run_editorial_polish(state: BlogRunState) -> BlogRunState:
-    """Run editorial polish when publishability requires it.
-
-    Runs at most once. Triggers when publishability_evaluation.polish_required=True.
-    """
+def _should_run_polish(state: BlogRunState) -> bool:
+    """Return True when editorial polish should run."""
     if state.publishability_evaluation is None:
-        return state
-    if not state.publishability_evaluation.get("polish_required", False):
+        return False
+    pub_eval = state.publishability_evaluation
+    if pub_eval.get("polish_required", False):
+        return True
+    # Also trigger when the publish contract is not publish_ready
+    if state.publish_contract and state.publish_contract.get("status") != "publish_ready":
+        return True
+    return False
+
+
+def run_editorial_polish(state: BlogRunState) -> BlogRunState:
+    """Run editorial polish when publishability or publish contract requires it.
+
+    Runs at most once.
+    """
+    if not _should_run_polish(state):
         return state
 
     from blogagent.agents.editor_agent import _format_evidence  # noqa: PLC0415
@@ -879,19 +918,60 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
 
 
 # ---------------------------------------------------------------------------
+# Publish contract check (final truth layer)
+# ---------------------------------------------------------------------------
+
+
+def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
+    """Apply the publish contract — the final editorial truth layer."""
+    pub_eval = state.publishability_evaluation or {}
+    result: PublishContractResult = check_publish_contract(
+        article_markdown=state.draft,
+        topic=state.topic,
+        publishability_score=pub_eval.get("score", state.publishability_score),
+        publishability_defects=pub_eval.get("defects", []),
+        is_recommendation=state.is_recommendation,
+        requested_count=state.requested_count,
+        evidence_sufficiency=state.evidence_sufficiency,
+        source_quality_scores=state.source_quality_scores,
+    )
+    state.publish_contract = result.model_dump()
+    _event(
+        state,
+        f"publish_contract: status={result.status} passes={result.passes} "
+        f"score_cap={result.score_cap} defects={len(result.defects)}",
+    )
+    return state
+
+
+# ---------------------------------------------------------------------------
 # Publish ready status computation
 # ---------------------------------------------------------------------------
 
 
 def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
-    """Compute the final publish_ready_status after all evaluations."""
-    pub_eval = state.publishability_evaluation
+    """Compute the final publish_ready_status after all evaluations.
+
+    The publish contract is the final truth layer. If it has not run (no contract
+    present), falls back to the legacy publishability + final-validation logic.
+    """
     fv_status = state.final_validation_status or "passed"
 
+    # If final validation hard-failed, that overrides everything
+    if fv_status == "failed":
+        state.publish_ready_status = "draft_only_not_publish_ready"
+        return state
+
+    # Use publish contract as the primary authority
+    if state.publish_contract:
+        contract_status = state.publish_contract.get("status", "draft_only_not_publish_ready")
+        state.publish_ready_status = contract_status
+        return state
+
+    # Legacy fallback (no contract ran)
+    pub_eval = state.publishability_evaluation
     if pub_eval is None:
-        if fv_status == "failed":
-            state.publish_ready_status = "draft_only_not_publish_ready"
-        elif fv_status == "passed_with_warnings" or state.final_validation_warnings:
+        if fv_status == "passed_with_warnings" or state.final_validation_warnings:
             state.publish_ready_status = "publish_ready_with_warnings"
         else:
             state.publish_ready_status = "publish_ready"
@@ -900,9 +980,7 @@ def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
     publish_ready = pub_eval.get("publish_ready", False)
     score = pub_eval.get("score", 0)
 
-    if fv_status == "failed":
-        state.publish_ready_status = "draft_only_not_publish_ready"
-    elif not publish_ready or score < 60:
+    if not publish_ready or score < 60:
         state.publish_ready_status = "draft_only_not_publish_ready"
     elif (
         fv_status == "passed_with_warnings"

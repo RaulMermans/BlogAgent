@@ -6,6 +6,7 @@ All functions are deterministic — no LLM calls, no I/O side effects.
 from __future__ import annotations
 
 import os
+import re
 
 # Keywords (as substrings of topic.lower()) that indicate the user wants a
 # curated list or ranking of specific products, services, or entities.
@@ -78,40 +79,90 @@ def is_real_search_active() -> bool:
     return provider != "mock"
 
 
+_WORD_NUMBERS: dict[str, int] = {
+    "twenty": 20,
+    "fifteen": 15,
+    "twelve": 12,
+    "eleven": 11,
+    "ten": 10,
+    "nine": 9,
+    "eight": 8,
+    "seven": 7,
+    "six": 6,
+    "five": 5,
+    "four": 4,
+    "three": 3,
+    "two": 2,
+    "one": 1,
+}
+
+
+def normalize_number_words(text: str) -> str:
+    """Replace English number words with digits (longest first to avoid partial matches)."""
+    result = text
+    for word, num in _WORD_NUMBERS.items():
+        result = re.sub(rf"\b{word}\b", str(num), result, flags=re.IGNORECASE)
+    return result
+
+
+def _is_year_or_price(n: int, text_lower: str) -> bool:
+    """Return True if n looks like a year or price context, not a list count."""
+    if 1900 <= n <= 2099:
+        return True
+    if re.search(
+        rf"\b(?:under|over|below|above|less\s+than|more\s+than|\$)\s*{n}\b",
+        text_lower,
+    ):
+        return True
+    if re.search(rf"\b{n}\s*(?:dollars?|usd|euros?|pounds?|€|\$)\b", text_lower):
+        return True
+    if re.search(rf"\b(?:for)\s+{n}\s+(?:people|persons?|guests?|users?)\b", text_lower):
+        return True
+    return False
+
+
 def extract_requested_count(topic: str) -> "int | None":
     """Extract an explicit item count from the topic string.
 
-    Recognises patterns like 'top 10', 'best 5', 'top five', 'best ten'.
+    Handles patterns like:
+      '7 best parfums for summer' → 7
+      'seven best perfumes' → 7
+      'top 10 perfumes' → 10
+      'best 5 options' → 5
+      'top ten picks' → 10
+      'a list of 7 perfumes' → 7
+      'recommend 5 summer fragrances' → 5
+      'give me five options' → 5
+
+    False-positive guards prevent matching years (2025) and prices (under $50).
     Returns None if no explicit count is stated.
     """
-    import re  # noqa: PLC0415
+    # Normalize word numbers first so all branches only handle digits
+    normalized = normalize_number_words(topic)
+    lower = normalized.lower()
 
-    lower = topic.lower()
-
-    # Numeric: "top 10", "best 5"
-    m = re.search(r"\b(?:top|best)\s+(\d+)\b", lower)
+    # Pattern 1: ranking keyword BEFORE digit — "top 10", "best 7"
+    m = re.search(r"\b(?:top|best|recommended?)\s+(\d+)\b", lower)
     if m:
-        return int(m.group(1))
+        n = int(m.group(1))
+        if not _is_year_or_price(n, lower):
+            return n
 
-    # Word numbers: "top five", "best ten"
-    _WORD_NUMBERS = {
-        "one": 1,
-        "two": 2,
-        "three": 3,
-        "four": 4,
-        "five": 5,
-        "six": 6,
-        "seven": 7,
-        "eight": 8,
-        "nine": 9,
-        "ten": 10,
-        "eleven": 11,
-        "twelve": 12,
-        "fifteen": 15,
-        "twenty": 20,
-    }
-    for word, val in _WORD_NUMBERS.items():
-        if re.search(rf"\b(?:top|best)\s+{word}\b", lower):
-            return val
+    # Pattern 2: digit BEFORE ranking keyword — "7 best", "10 top"
+    m = re.search(r"\b(\d+)\s+(?:top|best|recommended?)\b", lower)
+    if m:
+        n = int(m.group(1))
+        if not _is_year_or_price(n, lower):
+            return n
+
+    # Pattern 3: list/suggest context — "a list of 7", "give me 5", "recommend 5"
+    m = re.search(
+        r"\b(?:(?:a\s+)?list\s+of|give\s+me|show\s+me|find\s+me|suggest|recommend)\s+(\d+)\b",
+        lower,
+    )
+    if m:
+        n = int(m.group(1))
+        if not _is_year_or_price(n, lower):
+            return n
 
     return None

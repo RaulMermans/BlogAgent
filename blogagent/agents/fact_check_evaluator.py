@@ -139,9 +139,7 @@ def _format_claim_summary(claims: list, citation_matches: list[CitationMatch]) -
         return "No claims extracted."
     rows = []
     for m in citation_matches:
-        rows.append(
-            f"- [{m.claim.importance.value}] {m.claim.text!r} → {m.status.value}"
-        )
+        rows.append(f"- [{m.claim.importance.value}] {m.claim.text!r} → {m.status.value}")
     return "\n".join(rows)
 
 

@@ -84,6 +84,10 @@ class RunResponse(BaseModel):
     publish_ready_status: str = ""
     search_pass_count: int = 1
     enrichment_queries: list[str] = []
+    # Recommendation candidates
+    recommendation_candidates_summary: dict[str, Any] = {}
+    # Publish contract (final truth layer)
+    publish_contract: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +193,7 @@ def run_get(
             content={
                 "detail": "Use POST /run with JSON body or GET /run?topic=...",
                 "example_get": "/run?topic=Why%20elephants%20are%20the%20heaviest%20land%20animals",
-                "example_post_body": {
-                    "topic": "Why elephants are the heaviest land animals"
-                },
+                "example_post_body": {"topic": "Why elephants are the heaviest land animals"},
             }
         )
     _check_worker_secret(request, query_secret=worker_secret)
@@ -271,12 +273,16 @@ def _run_topic(topic: str) -> RunResponse:
         evidence_limited_count_accepted=state.evidence_limited_count_accepted,
         run_trace=list(state.run_trace),
         evidence_sufficiency=dict(state.evidence_sufficiency) if state.evidence_sufficiency else {},
-        publishability_evaluation=dict(state.publishability_evaluation) if state.publishability_evaluation else {},
+        publishability_evaluation=dict(state.publishability_evaluation)
+        if state.publishability_evaluation
+        else {},
         polish_summary=list(state.polish_summary),
         publishability_score=state.publishability_score,
         publish_ready_status=state.publish_ready_status or "",
         search_pass_count=state.search_pass_count,
         enrichment_queries=list(state.enrichment_queries),
+        recommendation_candidates_summary=dict(state.recommendation_candidates_summary),
+        publish_contract=dict(state.publish_contract) if state.publish_contract else {},
     )
 
 
@@ -985,7 +991,27 @@ def _build_app_html() -> str:
       if (polishSummary.length > 0) {
         if (txt) txt.textContent = 'Editorial polish — completed';
       } else {
-        if (txt) txt.textContent = 'Editorial polish — skipped';
+        const pePolishRequired = (data.publishability_evaluation || {}).polish_required;
+        if (txt) txt.textContent = pePolishRequired ? 'Editorial polish — skipped (mock mode)' : 'Editorial polish — skipped';
+      }
+    }
+
+    // Step 15 (index 15) if it exists: packaging — annotate with publish contract
+    const pcData = data.publish_contract || {};
+    const pkgStep = steps[15];
+    if (pkgStep && pcData.status) {
+      const txt = pkgStep.querySelector('span:last-child');
+      const icon = pkgStep.querySelector('.step-icon');
+      if (pcData.status === 'publish_ready') {
+        if (txt) txt.textContent = 'Packaging blog post — publish ready';
+      } else if (pcData.status === 'publish_ready_with_warnings') {
+        pkgStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Packaging blog post — publish ready with warnings';
+      } else {
+        pkgStep.className = 'workflow-step warn';
+        if (icon) icon.textContent = '⚠';
+        if (txt) txt.textContent = 'Packaging blog post — draft only';
       }
     }
   }
@@ -1142,14 +1168,16 @@ def _build_app_html() -> str:
       addStat(statsRow, 'publish score ' + publishScore + '/100', pubReady ? 'ok' : 'warn');
     }
 
-    // Publish ready status
+    // Publish ready status — only show green if contract is truly publish_ready
     const pubStatus = data.publish_ready_status || '';
-    if (pubStatus === 'publish_ready') {
+    const pubContract = data.publish_contract || {};
+    const contractStatus = pubContract.status || pubStatus;
+    if (contractStatus === 'publish_ready') {
       addStat(statsRow, '✓ publish ready', 'ok');
-    } else if (pubStatus === 'publish_ready_with_warnings') {
-      addStat(statsRow, '⚠ publish ready (warnings)', 'warn');
-    } else if (pubStatus === 'draft_only_not_publish_ready') {
-      addStat(statsRow, '⚠ draft only', 'danger');
+    } else if (contractStatus === 'publish_ready_with_warnings') {
+      addStat(statsRow, '⚠ publish ready with warnings', 'warn');
+    } else if (contractStatus === 'draft_only_not_publish_ready' || pubStatus === 'draft_only_not_publish_ready') {
+      addStat(statsRow, '✗ draft only', 'danger');
     }
 
     // Research depth badge
@@ -1197,6 +1225,34 @@ def _build_app_html() -> str:
       document.getElementById('title-display').closest('.form-card').appendChild(polishDiv);
     }
 
+    // Recommendation candidates summary
+    const recCandidates = data.recommendation_candidates_summary || {};
+    if (recCandidates.usable_count !== undefined) {
+      const reqCount = data.requested_count;
+      const usableCount = recCandidates.usable_count;
+      const candDiv = document.createElement('div');
+      candDiv.style.marginBottom = '0.8rem';
+      const candLabel = document.createElement('div');
+      candLabel.className = 'meta-label';
+      candLabel.textContent = 'Recommendation Candidates';
+      candDiv.appendChild(candLabel);
+      const candText = document.createElement('p');
+      const countNote = reqCount ? ` of ${reqCount} requested` : '';
+      candText.style.cssText = 'font-size:0.85rem;color:#444;margin:0.2rem 0;';
+      candText.textContent = `${usableCount} usable${countNote}`;
+      if (recCandidates.low_confidence_count > 0) {
+        candText.textContent += ` (${recCandidates.low_confidence_count} low-confidence)`;
+      }
+      candDiv.appendChild(candText);
+      if (recCandidates.names && recCandidates.names.length > 0) {
+        const namesList = document.createElement('p');
+        namesList.style.cssText = 'font-size:0.8rem;color:#666;font-style:italic;margin:0.1rem 0;';
+        namesList.textContent = recCandidates.names.slice(0, 5).join(', ') + (recCandidates.names.length > 5 ? '…' : '');
+        candDiv.appendChild(namesList);
+      }
+      document.getElementById('title-display').closest('.form-card').appendChild(candDiv);
+    }
+
     // Enrichment queries (if used)
     const enrichmentQueries = data.enrichment_queries || [];
     if (enrichmentQueries.length > 0) {
@@ -1216,6 +1272,23 @@ def _build_app_html() -> str:
     }
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
+
+    // Draft-only banner — shown when article is not publish-ready
+    const effectiveStatus = (pubContract && pubContract.status) ? pubContract.status : pubStatus;
+    if (effectiveStatus === 'draft_only_not_publish_ready') {
+      const draftBanner = document.createElement('div');
+      draftBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
+      const contractDefects = pubContract.defects || [];
+      const highContractDefects = contractDefects.filter(d => d.severity === 'high');
+      const contractMsg = highContractDefects.length > 0 ? highContractDefects.map(d => d.message).slice(0, 2).join(' | ') : 'Article needs additional evidence or editorial review before publishing.';
+      draftBanner.textContent = '✗ Draft only: ' + contractMsg;
+      document.getElementById('output-section').insertBefore(draftBanner, document.getElementById('output-section').firstChild);
+    } else if (effectiveStatus === 'publish_ready_with_warnings') {
+      const warnBanner = document.createElement('div');
+      warnBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
+      warnBanner.textContent = '⚠ Publish ready with warnings — review before publishing.';
+      document.getElementById('output-section').insertBefore(warnBanner, document.getElementById('output-section').firstChild);
+    }
 
     // Final validation status — show prominently if failed or evidence-limited
     const fvStatus = data.final_validation_status || 'passed';

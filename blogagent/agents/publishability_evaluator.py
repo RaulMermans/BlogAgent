@@ -25,6 +25,12 @@ PublishabilityDefectType = Literal[
     "weak_intro",
     "weak_conclusion",
     "seo_issue",
+    "thin_article",
+    "unmet_requested_count",
+    "weak_evidence_limited_framing",
+    "insufficient_recommendation_depth",
+    "missing_product_context",
+    "generic_seo_voice",
 ]
 
 DefectSeverity = Literal["low", "medium", "high"]
@@ -147,6 +153,8 @@ def evaluate_publishability(
     selected_skills: list[str],
     source_quality_scores: list[dict],
     evidence_sufficiency: Optional[dict] = None,
+    requested_count: Optional[int] = None,
+    actual_recommendation_count: Optional[int] = None,
 ) -> PublishabilityEvaluation:
     """Run deterministic publishability checks on the article."""
     defects: list[PublishabilityDefect] = []
@@ -155,8 +163,7 @@ def evaluate_publishability(
     topic_lower = topic.lower()
 
     is_fragrance = any(
-        kw in topic_lower
-        for kw in ("perfume", "parfum", "fragrance", "cologne", "scent", "eau de")
+        kw in topic_lower for kw in ("perfume", "parfum", "fragrance", "cologne", "scent", "eau de")
     )
     is_lifestyle = any(
         kw in topic_lower
@@ -168,128 +175,189 @@ def evaluate_publishability(
     intro_lower = intro.lower()
     generic_intro_count = sum(1 for p in _GENERIC_INTRO_PHRASES if p in intro_lower)
     if generic_intro_count >= 2:
-        defects.append(PublishabilityDefect(
-            type="generic_voice",
-            severity="high",
-            message=(
-                f"Intro uses {generic_intro_count} generic filler phrase(s). "
-                "Open with a specific observation, question, or editorial thesis instead."
-            ),
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="generic_voice",
+                severity="high",
+                message=(
+                    f"Intro uses {generic_intro_count} generic filler phrase(s). "
+                    "Open with a specific observation, question, or editorial thesis instead."
+                ),
+            )
+        )
         score -= 20
     elif generic_intro_count == 1:
-        defects.append(PublishabilityDefect(
-            type="weak_intro",
-            severity="medium",
-            message="Intro contains generic opening phrase. Strengthen with editorial specificity.",
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="weak_intro",
+                severity="medium",
+                message="Intro contains generic opening phrase. Strengthen with editorial specificity.",
+            )
+        )
         score -= 8
 
     # --- 2. Content-mill phrasing ---
     mill_count = sum(1 for p in _CONTENT_MILL_PHRASES if p in lower)
     if mill_count >= 3:
-        defects.append(PublishabilityDefect(
-            type="generic_voice",
-            severity="medium",
-            message=(
-                f"Article contains {mill_count} content-mill phrases "
-                "(e.g. 'look no further', 'comprehensive guide'). "
-                "Replace with specific, editorial language."
-            ),
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="generic_voice",
+                severity="medium",
+                message=(
+                    f"Article contains {mill_count} content-mill phrases "
+                    "(e.g. 'look no further', 'comprehensive guide'). "
+                    "Replace with specific, editorial language."
+                ),
+            )
+        )
         score -= 10
     elif mill_count >= 1:
-        defects.append(PublishabilityDefect(
-            type="generic_voice",
-            severity="low",
-            message=f"Article contains {mill_count} generic/filler phrase(s). Consider removing.",
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="generic_voice",
+                severity="low",
+                message=f"Article contains {mill_count} generic/filler phrase(s). Consider removing.",
+            )
+        )
         score -= 4
 
     # --- 3. Editorial POV / thesis ---
     has_pov = _has_editorial_pov(article_markdown)
     if not has_pov:
-        defects.append(PublishabilityDefect(
-            type="weak_pov",
-            severity="medium",
-            message=(
-                "Article lacks a clear editorial thesis or opinion. "
-                "Add a specific point of view in the intro or throughout."
-            ),
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="weak_pov",
+                severity="medium",
+                message=(
+                    "Article lacks a clear editorial thesis or opinion. "
+                    "Add a specific point of view in the intro or throughout."
+                ),
+            )
+        )
         score -= 12
 
-    # --- 4. Recommendation depth (recommendation topics) ---
+    # --- 4. Unmet requested count ---
+    if is_recommendation and requested_count is not None:
+        from blogagent.agents.quality_evaluator import (  # noqa: PLC0415
+            _is_evidence_limited_article,
+            count_recommendations,
+        )
+
+        actual = actual_recommendation_count
+        if actual is None:
+            actual = count_recommendations(article_markdown)
+        if actual < requested_count:
+            has_explanation = _is_evidence_limited_article(
+                article_markdown, actual, requested_count
+            )
+            if has_explanation and actual >= 3:
+                defects.append(
+                    PublishabilityDefect(
+                        type="weak_evidence_limited_framing",
+                        severity="low",
+                        message=(
+                            f"Article has {actual} of {requested_count} requested items. "
+                            "Evidence-limited framing present — verify it is clearly worded."
+                        ),
+                    )
+                )
+                score -= 5
+            else:
+                defects.append(
+                    PublishabilityDefect(
+                        type="unmet_requested_count",
+                        severity="high",
+                        message=(
+                            f"Topic requests {requested_count} items but article has {actual}. "
+                            "Add evidence-limited framing or additional recommendations."
+                        ),
+                    )
+                )
+                score -= 25
+
+    # --- 5. Recommendation depth (recommendation topics) ---
     if is_recommendation:
         thin_recs = _check_thin_recommendations(article_markdown)
         if thin_recs:
-            defects.append(PublishabilityDefect(
-                type="thin_recommendations",
-                severity="high",
-                message=thin_recs,
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="thin_recommendations",
+                    severity="high",
+                    message=thin_recs,
+                )
+            )
             score -= 20
 
-    # --- 5. Fragrance sensory detail ---
+    # --- 6. Fragrance sensory detail ---
     if is_fragrance:
         sensory_count = sum(1 for t in _FRAGRANCE_SENSORY_TERMS if t in lower)
         lifestyle_count = sum(1 for t in _LIFESTYLE_CONTEXT_TERMS if t in lower)
         if sensory_count < 3:
-            defects.append(PublishabilityDefect(
-                type="weak_sensory_detail",
-                severity="high",
-                message=(
-                    f"Fragrance article mentions only {sensory_count} sensory/note term(s). "
-                    "Include scent families, notes (top/heart/base), or mood descriptions "
-                    "where evidence supports them."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="weak_sensory_detail",
+                    severity="high",
+                    message=(
+                        f"Fragrance article mentions only {sensory_count} sensory/note term(s). "
+                        "Include scent families, notes (top/heart/base), or mood descriptions "
+                        "where evidence supports them."
+                    ),
+                )
+            )
             score -= 18
         elif sensory_count < 6:
-            defects.append(PublishabilityDefect(
-                type="weak_sensory_detail",
-                severity="medium",
-                message=(
-                    f"Fragrance article mentions {sensory_count} sensory terms — "
-                    "could include more context (occasion, scent family, projection)."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="weak_sensory_detail",
+                    severity="medium",
+                    message=(
+                        f"Fragrance article mentions {sensory_count} sensory terms — "
+                        "could include more context (occasion, scent family, projection)."
+                    ),
+                )
+            )
             score -= 8
         if lifestyle_count < 2 and is_lifestyle:
-            defects.append(PublishabilityDefect(
-                type="weak_sensory_detail",
-                severity="low",
-                message=(
-                    "Lifestyle/beauty article could include more occasion or mood context "
-                    "(e.g. 'date night', 'season', 'vibe')."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="weak_sensory_detail",
+                    severity="low",
+                    message=(
+                        "Lifestyle/beauty article could include more occasion or mood context "
+                        "(e.g. 'date night', 'season', 'vibe')."
+                    ),
+                )
+            )
             score -= 5
 
     # --- 6. Lifestyle/beauty editorial depth ---
     elif is_lifestyle and is_recommendation:
         lifestyle_count = sum(1 for t in _LIFESTYLE_CONTEXT_TERMS if t in lower)
         if lifestyle_count < 2:
-            defects.append(PublishabilityDefect(
-                type="thin_recommendations",
-                severity="medium",
-                message=(
-                    "Lifestyle recommendation article lacks occasion/mood/context detail. "
-                    "Connect product choices to mood, styling, or identity."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="thin_recommendations",
+                    severity="medium",
+                    message=(
+                        "Lifestyle recommendation article lacks occasion/mood/context detail. "
+                        "Connect product choices to mood, styling, or identity."
+                    ),
+                )
+            )
             score -= 10
 
     # --- 7. Source synthesis (not just list) ---
     if not _has_source_synthesis(article_markdown, source_quality_scores):
-        defects.append(PublishabilityDefect(
-            type="poor_source_synthesis",
-            severity="low",
-            message=(
-                "Sources appear listed rather than synthesised. "
-                "Weave source insights into prose for better editorial authority."
-            ),
-        ))
+        defects.append(
+            PublishabilityDefect(
+                type="poor_source_synthesis",
+                severity="low",
+                message=(
+                    "Sources appear listed rather than synthesised. "
+                    "Weave source insights into prose for better editorial authority."
+                ),
+            )
+        )
         score -= 6
 
     # --- 8. Weak conclusion ---
@@ -298,14 +366,16 @@ def evaluate_publishability(
         concl_lower = conclusion.lower()
         weak_concl_count = sum(1 for p in _WEAK_CONCLUSION_PHRASES if p in concl_lower)
         if weak_concl_count >= 1 or len(conclusion.strip()) < 80:
-            defects.append(PublishabilityDefect(
-                type="weak_conclusion",
-                severity="low",
-                message=(
-                    "Conclusion is generic or too short. "
-                    "End with an editorial recommendation or memorable insight."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="weak_conclusion",
+                    severity="low",
+                    message=(
+                        "Conclusion is generic or too short. "
+                        "End with an editorial recommendation or memorable insight."
+                    ),
+                )
+            )
             score -= 5
 
     # --- 9. Title quality ---
@@ -314,25 +384,41 @@ def evaluate_publishability(
         title_text = title_match.group(1).lower()
         generic_title_words = {"guide", "everything", "ultimate", "complete", "comprehensive"}
         if any(w in title_text for w in generic_title_words):
-            defects.append(PublishabilityDefect(
-                type="seo_issue",
-                severity="low",
-                message=(
-                    "Title uses generic SEO filler words (e.g. 'ultimate guide', 'everything'). "
-                    "Use a specific, editorial title instead."
-                ),
-            ))
+            defects.append(
+                PublishabilityDefect(
+                    type="seo_issue",
+                    severity="low",
+                    message=(
+                        "Title uses generic SEO filler words (e.g. 'ultimate guide', 'everything'). "
+                        "Use a specific, editorial title instead."
+                    ),
+                )
+            )
             score -= 4
 
     score = max(0, min(100, score))
 
-    # Polish is needed when score < 80 or there are medium/high defects
-    high_or_medium = [d for d in defects if d.severity in ("high", "medium")]
-    polish_required = score < 80 or len(high_or_medium) >= 2
-
-    # Publish ready when score >= 72 and no high defects
     high_defects = [d for d in defects if d.severity == "high"]
-    publish_ready = score >= 72 and len(high_defects) == 0
+    medium_defects = [d for d in defects if d.severity == "medium"]
+
+    # Core domain dimensions that always require polish when defective:
+    # - weak_sensory_detail for fragrance posts
+    # - unmet_requested_count
+    # - thin_recommendations
+    # - weak_pov
+    _CORE_DEFECT_TYPES = {
+        "weak_sensory_detail",
+        "unmet_requested_count",
+        "thin_recommendations",
+        "weak_pov",
+    }
+    has_core_medium = any(d.type in _CORE_DEFECT_TYPES for d in medium_defects)
+    polish_required = (
+        score < 80 or len(high_defects) > 0 or len(medium_defects) >= 2 or has_core_medium
+    )
+
+    # Advisory publish_ready (stricter than before; publish_contract is the final truth)
+    publish_ready = score >= 75 and len(high_defects) == 0
 
     if not defects:
         summary = f"Score: {score}/100. Article meets publish standards."

@@ -47,10 +47,7 @@ class TestEvidenceSufficiencyRecommendation:
     def test_top10_with_5_supported_returns_insufficient(self):
         """top 10 with only 5 supported recommendation sources → insufficient."""
         source_quality = [_make_source_quality("high")] * 2 + [_make_source_quality("medium")] * 1
-        evidence = [
-            _make_evidence_item(f"Pick #{i}", f"https://example.com/{i}")
-            for i in range(3)
-        ]
+        evidence = [_make_evidence_item(f"Pick #{i}", f"https://example.com/{i}") for i in range(3)]
         result = evaluate_evidence_sufficiency(
             topic="top 10 best perfumes for a date",
             requested_count=10,
@@ -137,8 +134,7 @@ class TestEvidenceSufficiencyRecommendation:
         """No requested count with decent evidence → proceed."""
         source_quality = [_make_source_quality("high")] * 3
         evidence = [
-            _make_evidence_item(f"Good pick #{i}", f"https://allure.com/{i}")
-            for i in range(5)
+            _make_evidence_item(f"Good pick #{i}", f"https://allure.com/{i}") for i in range(5)
         ]
         result = evaluate_evidence_sufficiency(
             topic="best perfumes for a date",

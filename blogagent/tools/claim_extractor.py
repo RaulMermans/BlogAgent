@@ -27,7 +27,7 @@ from blogagent.workflow.state import Claim, ClaimImportance
 
 # Patterns that mark a claim as high importance.
 _HIGH_IMPORTANCE_RE = re.compile(
-    r"(\d[\d,.]*\s*%)"           # percentages: 85%, 3.5%
+    r"(\d[\d,.]*\s*%)"  # percentages: 85%, 3.5%
     r"|(\d+\s*(?:million|billion|trillion|thousand))"  # large numbers
     r"|\b(more than|less than|over|under|at least|up to|increased by|decreased by"
     r"|higher than|lower than|fastest|slowest|largest|smallest|first|doubled|tripled)\b",
@@ -80,7 +80,8 @@ def _heuristic_extract(input: ClaimExtractInput) -> ClaimExtractOutput:
     # 2. Scan sentences in the body for numerical/comparative patterns → high.
     # Split on sentence boundaries; skip heading lines.
     body_lines = [
-        line for line in input.draft.splitlines()
+        line
+        for line in input.draft.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     body_text = " ".join(body_lines)

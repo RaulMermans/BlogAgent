@@ -136,8 +136,7 @@ def score_output(data: dict[str, Any]) -> tuple[int, list[str]]:
     # no_unsupported_high_importance: +20
     statuses = data.get("claim_support_statuses") or []
     has_blocking = any(
-        m.get("status") == "unsupported"
-        and (m.get("claim") or {}).get("importance") == "high"
+        m.get("status") == "unsupported" and (m.get("claim") or {}).get("importance") == "high"
         for m in statuses
     )
     if not has_blocking:
@@ -294,9 +293,7 @@ def format_comparison_table(metrics_list: list[RunMetrics]) -> str:
     lines.append("")
     lines.append("ARTICLE")
     lines.append(_row("  has_title", *[_yn(m.has_title) for m in ok_metrics]))
-    lines.append(
-        _row("  has_meta_description", *[_yn(m.has_meta_description) for m in ok_metrics])
-    )
+    lines.append(_row("  has_meta_description", *[_yn(m.has_meta_description) for m in ok_metrics]))
     lines.append(_row("  word_count", *[str(m.word_count) for m in ok_metrics]))
     lines.append(_row("  heading_count", *[str(m.heading_count) for m in ok_metrics]))
 
@@ -347,17 +344,13 @@ def format_comparison_table(metrics_list: list[RunMetrics]) -> str:
 
     # Warn when live/hybrid runs have supported claims but citation judge was not active.
     live_runs_with_supported = [
-        m
-        for m in ok_metrics
-        if m.execution_mode in ("live", "hybrid") and m.supported_count > 0
+        m for m in ok_metrics if m.execution_mode in ("live", "hybrid") and m.supported_count > 0
     ]
     if live_runs_with_supported:
         lines.append(
             "NOTE: Live/hybrid runs with 'supported' claims used heuristic citation matching."
         )
-        lines.append(
-            "      Set BLOGAGENT_USE_LLM_CITATION_JUDGE=true for semantic verification."
-        )
+        lines.append("      Set BLOGAGENT_USE_LLM_CITATION_JUDGE=true for semantic verification.")
 
     lines.append(sep)
     lines.append("")

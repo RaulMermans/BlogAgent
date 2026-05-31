@@ -130,10 +130,9 @@ def detect_repeated_excerpts(
     for phrase, count in phrase_section_count.items():
         if count >= threshold:
             preview = phrase[:80] + ("..." if len(phrase) > 80 else "")
-            warnings.append(
-                f"Repeated excerpt detected in {count} sections: \"{preview}\""
-            )
+            warnings.append(f'Repeated excerpt detected in {count} sections: "{preview}"')
     return warnings
+
 
 # ---------------------------------------------------------------------------
 # Mock data registry — topic-agnostic stand-ins used by the mock provider
@@ -328,29 +327,21 @@ def _build_provider(
     if name == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
-            raise MissingAPIKeyError(
-                "OPENAI_API_KEY is not set; falling back to mock LLM output."
-            )
+            raise MissingAPIKeyError("OPENAI_API_KEY is not set; falling back to mock LLM output.")
         model = model_override or "gpt-4o-mini"
         return OpenAIProvider(api_key=api_key, model=model, timeout=timeout)
 
     if name == "google":
         api_key = os.getenv("GOOGLE_API_KEY", "").strip()
         if not api_key:
-            raise MissingAPIKeyError(
-                "GOOGLE_API_KEY is not set; falling back to mock LLM output."
-            )
+            raise MissingAPIKeyError("GOOGLE_API_KEY is not set; falling back to mock LLM output.")
         # Model priority: BLOGAGENT_LLM_MODEL > BLOGAGENT_GOOGLE_MODEL > default
         model = (
-            model_override
-            or os.getenv("BLOGAGENT_GOOGLE_MODEL", "").strip()
-            or "gemini-2.5-flash"
+            model_override or os.getenv("BLOGAGENT_GOOGLE_MODEL", "").strip() or "gemini-2.5-flash"
         )
         return GoogleProvider(api_key=api_key, model=model, timeout=timeout)
 
-    raise ValueError(
-        f"Unknown LLM provider '{name}'. Supported: mock, anthropic, openai, google."
-    )
+    raise ValueError(f"Unknown LLM provider '{name}'. Supported: mock, anthropic, openai, google.")
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> Any:
@@ -371,13 +362,11 @@ def _try_repair(
     instruction.  Returns (parsed_data, True) on success or (None, False).
     """
     repair_system = (
-        "You are a JSON repair assistant. "
-        "Return only valid JSON with no commentary or explanation."
+        "You are a JSON repair assistant. Return only valid JSON with no commentary or explanation."
     )
     repair_user = (
         "Convert the following malformed model output into valid JSON only. "
-        "Preserve all fields and content. Do not add commentary.\n\n"
-        + text
+        "Preserve all fields and content. Do not add commentary.\n\n" + text
     )
     try:
         response = provider.generate(repair_system, repair_user, temperature=0.0)
@@ -396,8 +385,7 @@ def _mock_result(output_model: type[BaseModel], *, configured_provider: str = "m
         is_mock=True,
         configured_provider=configured_provider,
         warning=(
-            None if data is not None
-            else f"No mock data registered for {output_model.__name__}"
+            None if data is not None else f"No mock data registered for {output_model.__name__}"
         ),
     )
 

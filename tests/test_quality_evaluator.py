@@ -205,8 +205,7 @@ def test_recommendation_no_quick_picks():
 
 def test_financial_missing_disclaimer():
     draft = (
-        "# Best Stocks\n\n## Introduction\n\nHere are some stocks.\n\n"
-        "## Criteria\n\nLook at P/E.\n"
+        "# Best Stocks\n\n## Introduction\n\nHere are some stocks.\n\n## Criteria\n\nLook at P/E.\n"
     )
     result = evaluate_quality(
         topic="best investment stocks",

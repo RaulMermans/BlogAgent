@@ -27,30 +27,36 @@ def test_mock_source_is_low():
     assert "mock" in result.reason.lower()
 
 
-@pytest.mark.parametrize("domain", [
-    "quora.com",
-    "reddit.com",
-    "instagram.com",
-    "tiktok.com",
-    "pinterest.com",
-    "twitter.com",
-    "x.com",
-])
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "quora.com",
+        "reddit.com",
+        "instagram.com",
+        "tiktok.com",
+        "pinterest.com",
+        "twitter.com",
+        "x.com",
+    ],
+)
 def test_social_domains_are_low(domain: str):
     result = classify_source_quality(_make_score(domain))
     assert result.quality == "low", f"Expected low for {domain}, got {result.quality}"
 
 
-@pytest.mark.parametrize("domain", [
-    "wikipedia.org",
-    "britannica.com",
-    "bbc.com",
-    "reuters.com",
-    "nytimes.com",
-    "wirecutter.com",
-    "pcmag.com",
-    "fragrantica.com",
-])
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "wikipedia.org",
+        "britannica.com",
+        "bbc.com",
+        "reuters.com",
+        "nytimes.com",
+        "wirecutter.com",
+        "pcmag.com",
+        "fragrantica.com",
+    ],
+)
 def test_editorial_domains_are_high(domain: str):
     result = classify_source_quality(_make_score(domain))
     assert result.quality == "high", f"Expected high for {domain}, got {result.quality}"

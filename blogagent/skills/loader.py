@@ -7,14 +7,31 @@ agent prompts as concise editorial briefs.
 
 from __future__ import annotations
 
-_FRAGRANCE_KEYWORDS: frozenset[str] = frozenset({
-    "perfume", "parfum", "fragrance", "cologne", "scent", "eau de",
-})
+_FRAGRANCE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "perfume",
+        "parfum",
+        "fragrance",
+        "cologne",
+        "scent",
+        "eau de",
+    }
+)
 
-_LIFESTYLE_KEYWORDS: frozenset[str] = frozenset({
-    "beauty", "fashion", "lifestyle", "fragrance", "makeup", "skincare",
-    "perfume", "parfum", "cologne", "scent",
-})
+_LIFESTYLE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "beauty",
+        "fashion",
+        "lifestyle",
+        "fragrance",
+        "makeup",
+        "skincare",
+        "perfume",
+        "parfum",
+        "cologne",
+        "scent",
+    }
+)
 
 
 def select_skills(

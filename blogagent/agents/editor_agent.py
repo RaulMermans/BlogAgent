@@ -56,9 +56,7 @@ def _mock_llm_result(data: object, configured_provider: str = "mock") -> LLMResu
 
 def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
     """Wrap topic-specific mock data in an LLMResult that preserves fallback metadata."""
-    fallback_warning = base.warning or (
-        f"LLM call failed: {base.error}" if base.error else None
-    )
+    fallback_warning = base.warning or (f"LLM call failed: {base.error}" if base.error else None)
     return LLMResult(
         data=data,
         provider=_MOCK_PROVIDER,
@@ -144,9 +142,7 @@ def generate_outline(
             topic=topic, evidence_table=evidence_summary
         )
     else:
-        system_prompt = prompts.OUTLINE_PROMPT.format(
-            topic=topic, evidence_table=evidence_summary
-        )
+        system_prompt = prompts.OUTLINE_PROMPT.format(topic=topic, evidence_table=evidence_summary)
     if skill_briefs:
         system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
 
@@ -156,9 +152,7 @@ def generate_outline(
         output_model=OutlineOutput,
     )
     if result.is_mock:
-        return _fallback_llm_result(
-            _mock_outline(topic, evidence_table, is_recommendation), result
-        )
+        return _fallback_llm_result(_mock_outline(topic, evidence_table, is_recommendation), result)
     return result
 
 
@@ -349,9 +343,7 @@ def _mock_recommendation_draft(
         lines.append("")
 
     # Detect whether evidence contains real (non-template) facts
-    real_items = [
-        e for e in evidence_table if not e.fact.startswith("Information about")
-    ]
+    real_items = [e for e in evidence_table if not e.fact.startswith("Information about")]
     has_real_evidence = bool(real_items)
 
     lines.append("## Quick Picks")
@@ -479,19 +471,14 @@ def _mock_revision(draft: str, fact_check_report: FactCheckReport) -> RevisionOu
 # ---------------------------------------------------------------------------
 
 
-def _format_evidence(
-    evidence_table: list[EvidenceItem], source_scores: list[SourceScore]
-) -> str:
+def _format_evidence(evidence_table: list[EvidenceItem], source_scores: list[SourceScore]) -> str:
     if not evidence_table:
         return "No evidence items available."
     score_map = {s.url: s.overall_score for s in source_scores}
     rows = []
     for item in evidence_table[:10]:  # cap at 10 to keep prompt size reasonable
         score = score_map.get(item.source_url, item.confidence)
-        rows.append(
-            f"- [{item.source_title}]({item.source_url}) "
-            f"(score={score:.2f}): {item.fact}"
-        )
+        rows.append(f"- [{item.source_title}]({item.source_url}) (score={score:.2f}): {item.fact}")
     return "\n".join(rows)
 
 

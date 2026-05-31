@@ -15,6 +15,7 @@ from blogagent.workflow.nodes import (
     _propagate_llm_warnings,
     build_evidence_table,
     check_external_effects,
+    check_publish_contract_node,
     compute_publish_ready_status,
     evaluate_evidence_sufficiency_node,
     evaluate_publishability_node,
@@ -83,22 +84,22 @@ def _compute_execution_mode(state: BlogRunState) -> str:
 # that tests can monkeypatch blogagent.workflow.graph.run_fact_check cleanly.
 _PRE_FACTCHECK = [
     intake_topic,
-    check_external_effects,              # guardrail — sets state.blocked; short-circuits if True
-    select_skills,                       # deterministic skill selection based on intent
+    check_external_effects,  # guardrail — sets state.blocked; short-circuits if True
+    select_skills,  # deterministic skill selection based on intent
     generate_research_questions,
     run_web_search,
     extract_webpages,
     score_sources,
-    score_source_quality,                # classify sources as high/medium/low
+    score_source_quality,  # classify sources as high/medium/low
     build_evidence_table,
     evaluate_evidence_sufficiency_node,  # pre-draft evidence gate
-    run_enrichment_search,               # optional second Tavily pass for recommendation topics
+    run_enrichment_search,  # optional second Tavily pass for recommendation topics
     generate_outline,
     write_draft,
-    evaluate_quality,                    # deterministic quality checks on draft
-    revise_if_needed,                    # quality-driven revision (at most once)
-    final_validate_quality,              # post-revision quality gate
-    revise_if_final_validation_failed,   # safety net: final validator can trigger one revision
+    evaluate_quality,  # deterministic quality checks on draft
+    revise_if_needed,  # quality-driven revision (at most once)
+    final_validate_quality,  # post-revision quality gate
+    revise_if_final_validation_failed,  # safety net: final validator can trigger one revision
     extract_claims,
     match_citations,
 ]
@@ -141,6 +142,7 @@ def run_pipeline(topic: str) -> BlogRunState:
         state.revision_summary = llm_result.data.revision_summary
         state.revision_count += 1
         from blogagent.workflow.nodes import _llm_event  # noqa: PLC0415
+
         _event(state, _llm_event("editor.revision", llm_result))
         _propagate_llm_warnings(state, "editor.revision", llm_result)
 
@@ -154,16 +156,26 @@ def run_pipeline(topic: str) -> BlogRunState:
     state = evaluate_publishability_node(state)
     state.stage_timings["evaluate_publishability"] = round(time.monotonic() - t0, 3)
 
-    # Editorial polish — runs at most once, only when publishability requires it.
+    # Publish contract — deterministic final truth check before polish.
+    t0 = time.monotonic()
+    state = check_publish_contract_node(state)
+    state.stage_timings["check_publish_contract"] = round(time.monotonic() - t0, 3)
+
+    # Editorial polish — runs at most once, when publishability or contract requires it.
     t0 = time.monotonic()
     state = run_editorial_polish(state)
     state.stage_timings["run_editorial_polish"] = round(time.monotonic() - t0, 3)
+
+    # Re-run contract after polish to reflect any improvements.
+    t0 = time.monotonic()
+    state = check_publish_contract_node(state)
+    state.stage_timings["check_publish_contract_post_polish"] = round(time.monotonic() - t0, 3)
 
     t0 = time.monotonic()
     state = package_article(state)
     state.stage_timings["package_article"] = round(time.monotonic() - t0, 3)
 
-    # Compute publish readiness status.
+    # Compute publish readiness status (uses publish contract as final authority).
     state = compute_publish_ready_status(state)
 
     # Compute execution_mode from what actually ran.
@@ -188,30 +200,28 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         intent = "factual"
     trace.append(f"✓ Intent: {intent}")
 
+    # Requested count
+    if state.requested_count is not None:
+        trace.append(f"✓ Requested count: {state.requested_count}")
+
     # Skills
     if state.selected_skills:
         trace.append(f"✓ Skills: {', '.join(state.selected_skills)}")
 
     # Search
-    search_event = next(
-        (e for e in state.provider_events if e.startswith("search:")), None
-    )
+    search_event = next((e for e in state.provider_events if e.startswith("search:")), None)
     if search_event:
         trace.append(f"✓ {search_event}")
 
     # Source quality
     if state.source_quality_scores:
         high = sum(1 for s in state.source_quality_scores if s.get("quality") == "high")
-        medium = sum(
-            1 for s in state.source_quality_scores if s.get("quality") == "medium"
-        )
+        medium = sum(1 for s in state.source_quality_scores if s.get("quality") == "medium")
         low = sum(1 for s in state.source_quality_scores if s.get("quality") == "low")
         trace.append(f"✓ Source quality: {high} high, {medium} medium, {low} low")
 
     # Draft provider
-    draft_event = next(
-        (e for e in state.provider_events if "editor.draft" in e), None
-    )
+    draft_event = next((e for e in state.provider_events if "editor.draft" in e), None)
     if draft_event:
         m = re.search(r"actual_provider=(\S+)", draft_event)
         provider_name = m.group(1) if m else "unknown"
@@ -236,7 +246,8 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     # Revision — match only actual revision event prefixes, not quality_eval events
     # that happen to contain "revision" (e.g. "revision_required=False").
     revision_events = [
-        e for e in state.provider_events
+        e
+        for e in state.provider_events
         if (
             "editor.quality_revision:" in e
             or "editor.revision:" in e
@@ -260,10 +271,7 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             trace.append(
                 f"✓ Revision: completed — reduced count due to evidence limits ({rev_trigger})"
             )
-        elif any(
-            kw in summary
-            for kw in ("top_n", "top-n", "count", "recommendation")
-        ):
+        elif any(kw in summary for kw in ("top_n", "top-n", "count", "recommendation")):
             trace.append(f"✓ Revision: completed — fixed top-N mismatch ({rev_trigger})")
         else:
             trace.append(f"✓ Revision: completed ({rev_provider}, {rev_trigger})")
@@ -297,6 +305,17 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     else:
         trace.append("✓ Final validation: passed")
 
+    # Recommendation candidates (pre-enrichment)
+    if state.is_recommendation and state.recommendation_candidates_summary:
+        cs = state.recommendation_candidates_summary
+        usable = cs.get("usable_count", 0)
+        requested = state.requested_count
+        if requested is not None:
+            symbol = "✓" if usable >= requested else "⚠"
+            trace.append(f"{symbol} Usable recommendations: {usable}/{requested}")
+        else:
+            trace.append(f"✓ Usable recommendations: {usable}")
+
     # Evidence sufficiency
     if state.evidence_sufficiency:
         es = state.evidence_sufficiency
@@ -307,13 +326,13 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             trace.append(
                 f"⚠ Evidence sufficiency: limited, {supported}"
                 + (f"/{requested}" if requested else "")
-                + " supported"
+                + " usable recommendations"
             )
         elif action == "search_more" or state.search_pass_count > 1:
             trace.append(
                 f"✓ Evidence sufficiency: enriched — {supported}"
                 + (f"/{requested}" if requested else "")
-                + " supported"
+                + " usable recommendations"
             )
         else:
             trace.append(f"✓ Evidence sufficiency: {es.get('score', 0)}/100")
@@ -325,11 +344,11 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         )
         if enrichment_event:
             import re as _re  # noqa: PLC0415
+
             m = _re.search(r"new_sources=(\d+)", enrichment_event)
             new_srcs = m.group(1) if m else "?"
             trace.append(
-                f"✓ Enrichment search: {len(state.enrichment_queries)} queries, "
-                f"+{new_srcs} sources"
+                f"✓ Enrichment search: {len(state.enrichment_queries)} queries, +{new_srcs} sources"
             )
 
     # Publishability evaluation
@@ -339,13 +358,32 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         polish = pe.get("polish_required", False)
         symbol = "✓" if pe.get("publish_ready") else "⚠"
         trace.append(
-            f"{symbol} Publishability: {score}/100"
-            + (", polish needed" if polish else "")
+            f"{symbol} Publishability: {score}/100" + (", polish needed" if polish else "")
         )
+
+    # Publish contract
+    if state.publish_contract:
+        pc = state.publish_contract
+        contract_status = pc.get("status", "")
+        n_defects = len(pc.get("defects", []))
+        score_cap = pc.get("score_cap")
+        cap_note = f" (score capped at {score_cap})" if score_cap else ""
+        if contract_status == "publish_ready":
+            trace.append(f"✓ Publish contract: passed{cap_note}")
+        elif contract_status == "publish_ready_with_warnings":
+            trace.append(
+                f"⚠ Publish contract: publish_ready_with_warnings — {n_defects} issue(s){cap_note}"
+            )
+        else:
+            trace.append(
+                f"⚠ Publish contract: draft_only_not_publish_ready — {n_defects} issue(s){cap_note}"
+            )
 
     # Editorial polish
     if state.polish_summary:
         trace.append("✓ Editorial polish: completed")
+    elif state.publishability_evaluation and state.publishability_evaluation.get("polish_required"):
+        trace.append("⚠ Editorial polish: skipped (mock mode — no LLM configured)")
 
     # Final publish status
     pub_status = state.publish_ready_status

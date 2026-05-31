@@ -95,8 +95,7 @@ class TestPublishabilityEvaluator:
         assert result.score >= 65  # Should score reasonably well
         # Should not have high-severity generic_voice defect
         high_generic = [
-            d for d in result.defects
-            if d.type == "generic_voice" and d.severity == "high"
+            d for d in result.defects if d.type == "generic_voice" and d.severity == "high"
         ]
         assert len(high_generic) == 0
 
@@ -241,3 +240,235 @@ Worth studying — understanding photosynthesis reveals how ecosystems are power
         )
         sensory_defects = [d for d in result.defects if d.type == "weak_sensory_detail"]
         assert len(sensory_defects) == 0
+
+
+class TestPublishabilityEvaluatorStrict:
+    """Tests for the recalibrated, stricter publishability evaluator."""
+
+    _FRAGRANCE_ARTICLE_NO_SENSORY = """# Best Summer Perfumes
+
+## Quick Picks
+
+- Chanel Chance — a great choice for summer
+- Dior Sauvage — popular and long-lasting
+- YSL Libre — nice option for evenings
+
+## How We Chose
+
+Based on editorial recommendations from beauty publications.
+
+## Final Takeaway
+
+These are all solid choices for the summer season. Each one works well
+in warm weather and has earned positive editorial coverage.
+"""
+
+    _FRAGRANCE_ARTICLE_RICH_SENSORY = """# 5 Best Perfumes for Summer That Actually Smell Like Summer
+
+Fresh, citrus, and aquatic notes define a good summer fragrance. Longevity matters
+when you're sweating through the afternoon. These five have the projection and sillage
+to survive heat — and the editorial backing to prove it.
+
+## Quick Picks
+
+- Chanel Chance Eau Tendre — fresh citrus, white musk; best for casual dates
+- Dior Sauvage — bergamot and woody amber; best for confident wearers
+- YSL Libre — lavender and orange blossom with a warm vanilla base
+- Gucci Bloom — floral heart, powdery dry down, long longevity
+- Burberry Her — fruity-floral, light citrus opening, great for summer days
+
+## The Picks
+
+**Chanel Chance Eau Tendre** opens with fresh citrus and settles into white musk.
+Best for: summer dates, daytime. Sillage: gentle. Worth it for everyday wear.
+
+**Dior Sauvage** has bergamot at the top, settling into a woody, amber base.
+Best for: evening wear. Projection: moderate. Don't wear in a closed space.
+
+## Final Takeaway
+
+For summer, choose fresh, citrus-forward or light floral fragrances.
+The standout: Chanel Chance Eau Tendre — never wrong.
+"""
+
+    def test_fragrance_weak_sensory_triggers_polish(self):
+        """Fragrance article with < 3 sensory terms must trigger polish_required."""
+        result = evaluate_publishability(
+            article_markdown=self._FRAGRANCE_ARTICLE_NO_SENSORY,
+            topic="best summer perfumes",
+            is_recommendation=True,
+            selected_skills=["beauty-fragrance-writing"],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        sensory_defects = [d for d in result.defects if d.type == "weak_sensory_detail"]
+        assert len(sensory_defects) >= 1
+        assert result.polish_required is True
+
+    def test_fragrance_strong_sensory_no_high_sensory_defect(self):
+        """Fragrance article with rich sensory detail should not get a HIGH sensory defect."""
+        result = evaluate_publishability(
+            article_markdown=self._FRAGRANCE_ARTICLE_RICH_SENSORY,
+            topic="5 best perfumes for summer",
+            is_recommendation=True,
+            selected_skills=["beauty-fragrance-writing"],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 3,
+            evidence_sufficiency=None,
+        )
+        high_sensory_defects = [
+            d for d in result.defects if d.type == "weak_sensory_detail" and d.severity == "high"
+        ]
+        assert len(high_sensory_defects) == 0, (
+            f"Should not have HIGH sensory defect with rich sensory content; defects: {result.defects}"
+        )
+
+    def test_unmet_count_adds_defect(self):
+        """Article with fewer picks than requested triggers unmet_requested_count defect."""
+        # Only 3 picks, but 7 requested, with no explanation
+        article_3_of_7 = """# 7 Best Summer Perfumes
+
+## Quick Picks
+
+- Chanel Chance — best for summer
+- Dior Sauvage — great for evenings
+- YSL Libre — bold and lasting
+
+## Final Takeaway
+
+These are good choices for the summer.
+"""
+        result = evaluate_publishability(
+            article_markdown=article_3_of_7,
+            topic="7 best summer perfumes",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+            requested_count=7,
+        )
+        unmet_defects = [d for d in result.defects if d.type == "unmet_requested_count"]
+        assert len(unmet_defects) >= 1
+        assert unmet_defects[0].severity == "high"
+
+    def test_evidence_limited_framing_lowers_unmet_count_severity(self):
+        """Article that explains evidence limitation gets medium (not high) unmet defect."""
+        article_5_of_7_explained = """# 5 Best Summer Perfumes With Editorial Backing
+
+We aimed for 7 but the available sources did not provide enough coverage for more.
+These 5 have strong editorial support and documented scent profiles.
+
+## Quick Picks
+
+- Chanel Chance Eau Tendre — fresh citrus and musk; best for casual summer
+- Dior Miss Dior — rose and peony; best for evenings
+- YSL Libre — lavender-warm; bold evening energy
+- Gucci Bloom — floral, long-lasting sillage
+- Burberry Her — fruity summer vibes, citrus opening
+
+## How We Chose
+
+Reviewed [Allure](https://allure.com) and [Byrdie](https://byrdie.com).
+
+## Final Takeaway
+
+These five offer the best editorial support available. Check for updates as more
+fragrance reviews are published. Fresh and floral notes dominate — worth it.
+"""
+        result = evaluate_publishability(
+            article_markdown=article_5_of_7_explained,
+            topic="7 best summer perfumes",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 3,
+            evidence_sufficiency=None,
+            requested_count=7,
+        )
+        high_unmet = [
+            d for d in result.defects if d.type == "unmet_requested_count" and d.severity == "high"
+        ]
+        # With valid evidence-limited framing, the defect should not be HIGH
+        assert len(high_unmet) == 0, (
+            f"Should not have HIGH unmet_requested_count with valid explanation; defects: {result.defects}"
+        )
+
+    def test_core_medium_defect_triggers_polish(self):
+        """Any medium defect in a core domain (weak_pov, weak_sensory_detail) triggers polish."""
+        # Article with ~4 sensory terms (medium sensory defect)
+        article_medium_sensory = """# Best Summer Perfumes
+
+If you want to smell great this summer, these fragrances are worth considering.
+Fresh citrus and floral notes are your best bet for the season.
+
+## Quick Picks
+
+- Chanel Chance — fresh opening, floral heart, long-lasting
+- Dior Sauvage — citrus and woody notes, popular choice
+- YSL Libre — warm and bold, good for evenings
+
+## How We Chose
+
+We reviewed editorial picks from [Allure](https://allure.com).
+
+## Final Takeaway
+
+Worth it for the summer — these are reliable, editorial-backed picks.
+"""
+        result = evaluate_publishability(
+            article_markdown=article_medium_sensory,
+            topic="best summer perfumes",
+            is_recommendation=True,
+            selected_skills=["beauty-fragrance-writing"],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        # If there's a medium weak_sensory_detail defect, polish_required must be True
+        medium_sensory = [
+            d for d in result.defects if d.type == "weak_sensory_detail" and d.severity == "medium"
+        ]
+        if medium_sensory:
+            assert result.polish_required is True, (
+                "Medium weak_sensory_detail should trigger polish_required"
+            )
+
+    def test_generic_intro_triggers_polish(self):
+        """Generic intro (2+ generic phrases) triggers polish_required=True."""
+        generic_intro_article = """# Best Perfumes for Summer
+
+In today's world, finding the right perfume can be challenging. Are you looking for the
+perfect summer scent? Look no further! This article will cover everything you need.
+
+## Quick Picks
+
+- Chanel Chance — great citrus fragrance
+- Dior Sauvage — woody, fresh notes
+- YSL Libre — floral and warm
+
+## Final Takeaway
+
+Worth the investment for the summer season.
+"""
+        result = evaluate_publishability(
+            article_markdown=generic_intro_article,
+            topic="best perfumes for summer",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        assert result.polish_required is True
+
+    def test_publish_ready_threshold_is_75(self):
+        """Advisory publish_ready should require score >= 75 with no high defects."""
+        # Strong article should score well
+        result = evaluate_publishability(
+            article_markdown=_STRONG_ARTICLE,
+            topic="top 5 best perfumes for a date",
+            is_recommendation=True,
+            selected_skills=["beauty-fragrance-writing"],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        high_defects = [d for d in result.defects if d.severity == "high"]
+        if result.publish_ready:
+            assert result.score >= 75
+            assert len(high_defects) == 0

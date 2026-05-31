@@ -36,9 +36,7 @@ def _mock_llm_result(data: object, configured_provider: str = "mock") -> LLMResu
 
 
 def _fallback_llm_result(data: object, base: LLMResult) -> LLMResult:
-    fallback_warning = base.warning or (
-        f"LLM call failed: {base.error}" if base.error else None
-    )
+    fallback_warning = base.warning or (f"LLM call failed: {base.error}" if base.error else None)
     return LLMResult(
         data=data,
         provider=_MOCK_PROVIDER,
@@ -109,15 +107,16 @@ def revise_with_quality_context(
     otherwise unchanged with an explanatory summary.
     """
     if not _use_llm():
-        return _mock_llm_result(
-            _mock_quality_revision(draft, quality_evaluation, is_financial)
-        )
+        return _mock_llm_result(_mock_quality_revision(draft, quality_evaluation, is_financial))
 
     defects = quality_evaluation.get("defects", [])
-    defect_lines = "\n".join(
-        f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
-        for d in defects
-    ) or "No specific defects listed."
+    defect_lines = (
+        "\n".join(
+            f"- [{d.get('type', 'unknown')}] ({d.get('severity', 'medium')}): {d.get('message', '')}"
+            for d in defects
+        )
+        or "No specific defects listed."
+    )
 
     skill_briefs = get_skill_briefs(selected_skills) or "(none)"
 
@@ -131,17 +130,14 @@ def revise_with_quality_context(
         skill_briefs=skill_briefs,
         source_quality_summary=source_quality_summary,
         is_recommendation=str(is_recommendation),
-        requested_count=(
-            str(requested_count) if requested_count is not None else "not specified"
-        ),
+        requested_count=(str(requested_count) if requested_count is not None else "not specified"),
         draft=draft[:4000],
     )
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
         user_prompt=(
-            "Revise the article. Return a JSON object with "
-            "revised_markdown and revision_summary."
+            "Revise the article. Return a JSON object with revised_markdown and revision_summary."
         ),
         output_model=RevisionOutput,
     )
