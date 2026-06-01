@@ -199,6 +199,11 @@ def write_article_draft(
     is_recommendation: bool = False,
     is_financial: bool = False,
     skill_briefs: str = "",
+    query_contract: dict | None = None,
+    allowed_recommendations: list[dict] | None = None,
+    rejected_candidates: list[dict] | None = None,
+    evidence_limited_mode: bool = False,
+    source_quality_scores: list[dict] | None = None,
 ) -> LLMResult:
     """Write a full article draft grounded in the evidence table.
 
@@ -208,7 +213,16 @@ def write_article_draft(
     """
     if not _use_llm():
         return _mock_llm_result(
-            _mock_draft(topic, outline, evidence_table, is_recommendation, is_financial)
+            _mock_draft(
+                topic,
+                outline,
+                evidence_table,
+                is_recommendation,
+                is_financial,
+                allowed_recommendations=allowed_recommendations or [],
+                query_contract=query_contract or {},
+                evidence_limited_mode=evidence_limited_mode,
+            )
         )
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
@@ -217,6 +231,13 @@ def write_article_draft(
             topic=topic,
             outline=_format_outline(outline),
             evidence_table=evidence_summary,
+        )
+        system_prompt += _format_query_contract_prompt(
+            query_contract or {},
+            allowed_recommendations or [],
+            rejected_candidates or [],
+            evidence_limited_mode,
+            source_quality_scores or [],
         )
         if is_financial:
             system_prompt += prompts.FINANCIAL_DRAFT_ADDENDUM
@@ -242,7 +263,16 @@ def write_article_draft(
     )
     if result.is_mock:
         return _fallback_llm_result(
-            _mock_draft(topic, outline, evidence_table, is_recommendation, is_financial),
+            _mock_draft(
+                topic,
+                outline,
+                evidence_table,
+                is_recommendation,
+                is_financial,
+                allowed_recommendations=allowed_recommendations or [],
+                query_contract=query_contract or {},
+                evidence_limited_mode=evidence_limited_mode,
+            ),
             result,
         )
     return result
@@ -254,10 +284,21 @@ def _mock_draft(
     evidence_table: list[EvidenceItem],
     is_recommendation: bool = False,
     is_financial: bool = False,
+    allowed_recommendations: list[dict] | None = None,
+    query_contract: dict | None = None,
+    evidence_limited_mode: bool = False,
 ) -> DraftOutput:
     """Generate substantive mock prose using the outline and evidence."""
     if is_recommendation:
-        return _mock_recommendation_draft(topic, outline, evidence_table, is_financial)
+        return _mock_recommendation_draft(
+            topic,
+            outline,
+            evidence_table,
+            is_financial,
+            allowed_recommendations=allowed_recommendations or [],
+            query_contract=query_contract or {},
+            evidence_limited_mode=evidence_limited_mode,
+        )
 
     lines: list[str] = [f"# {outline.title}", ""]
 
@@ -326,13 +367,24 @@ def _mock_recommendation_draft(
     outline: OutlineOutput,
     evidence_table: list[EvidenceItem],
     is_financial: bool = False,
+    allowed_recommendations: list[dict] | None = None,
+    query_contract: dict | None = None,
+    evidence_limited_mode: bool = False,
 ) -> DraftOutput:
     """Mock draft for recommendation-style topics.
 
     Does NOT invent product names. If real source facts are available they are
     referenced; otherwise the article states that real search is needed.
     """
-    lines: list[str] = [f"# {outline.title}", ""]
+    allowed_recommendations = allowed_recommendations or []
+    query_contract = query_contract or {}
+    requested_count = query_contract.get("requested_count")
+    has_allowed = bool(allowed_recommendations)
+    if evidence_limited_mode and requested_count and has_allowed:
+        title = f"{len(allowed_recommendations)} Source-Backed Picks for {topic}"
+    else:
+        title = outline.title
+    lines: list[str] = [f"# {title}", ""]
 
     if is_financial:
         lines.append(
@@ -348,7 +400,23 @@ def _mock_recommendation_draft(
 
     lines.append("## Quick Picks")
     lines.append("")
-    if has_real_evidence:
+    if has_allowed:
+        if requested_count and len(allowed_recommendations) < requested_count:
+            lines.append(
+                f"We set out to find {requested_count} recommendations, but the available "
+                f"sources only supported {len(allowed_recommendations)} specific products "
+                "with confidence. This draft lists only validated candidates."
+            )
+            lines.append("")
+        lines.append("Based on the validated candidate table, the source-backed picks are:")
+        for cand in allowed_recommendations:
+            context = cand.get("supported_context") or cand.get("evidence_terms") or []
+            context_text = f" — best for {context[0]}" if context else ""
+            urls = cand.get("source_urls") or []
+            title_ref = (cand.get("source_titles") or ["source evidence"])[0]
+            citation = f" ([{title_ref}]({urls[0]}))" if urls else ""
+            lines.append(f"- {cand.get('name', '').strip()}{context_text}{citation}")
+    elif has_real_evidence:
         lines.append("Based on available sources, the following were identified:")
         for item in real_items[:5]:
             lines.append(
@@ -385,7 +453,30 @@ def _mock_recommendation_draft(
             continue
         lines.append(f"## {section}")
         lines.append("")
-        if section == "Final Takeaway":
+        if has_allowed and section.lower().startswith("best"):
+            for cand in allowed_recommendations:
+                name = cand.get("name", "")
+                terms = cand.get("evidence_terms") or cand.get("supported_context") or []
+                best_for = (
+                    ", ".join(terms[:2]) if terms else "source-backed consideration"
+                )
+                urls = cand.get("source_urls") or []
+                title_ref = (cand.get("source_titles") or ["source evidence"])[0]
+                citation = f" [{title_ref}]({urls[0]})" if urls else ""
+                lines.append(f"### {name}")
+                lines.append("")
+                lines.append(f"- **Name**: {name}")
+                lines.append(f"- **Best for**: {best_for}")
+                lines.append(
+                    "- **Why it works**: The validated sources mention this product "
+                    f"in the context of {topic}.{citation}"
+                )
+                if cand.get("confidence") != "high":
+                    lines.append(
+                        "- **Caveat**: Source support is limited; review before publishing."
+                    )
+                lines.append("")
+        elif section == "Final Takeaway":
             lines.append(
                 f"For a complete, source-grounded list of specific recommendations on {topic}, "
                 "connect a real search provider and a real LLM provider. "
@@ -421,6 +512,61 @@ def _mock_recommendation_draft(
         article_markdown=article_md,
         meta_description=meta,
         seo_keywords=keywords,
+    )
+
+
+def _format_query_contract_prompt(
+    query_contract: dict,
+    allowed_recommendations: list[dict],
+    rejected_candidates: list[dict],
+    evidence_limited_mode: bool,
+    source_quality_scores: list[dict],
+) -> str:
+    """Append contract-aware drafting instructions to the recommendation prompt."""
+    allowed_lines = []
+    for c in allowed_recommendations[:20]:
+        terms = c.get("evidence_terms") or c.get("supported_context") or []
+        urls = c.get("source_urls") or []
+        allowed_lines.append(
+            f"- {c.get('name')} | quality={c.get('source_quality')} | "
+            f"terms={', '.join(terms[:6]) or 'none'} | sources={', '.join(urls[:2])}"
+        )
+    rejected_lines = []
+    for c in rejected_candidates[:20]:
+        reason = c.get("rejection_reason") or c.get("reason")
+        rejected_lines.append(
+            f"- {c.get('name')} | type={c.get('entity_type')} | reason={reason}"
+        )
+    quality_counts = {
+        "high": sum(1 for s in source_quality_scores if s.get("quality") == "high"),
+        "medium": sum(1 for s in source_quality_scores if s.get("quality") == "medium"),
+        "low": sum(1 for s in source_quality_scores if s.get("quality") == "low"),
+    }
+    return (
+        "\n\nQUERY CONTRACT — MANDATORY:\n"
+        f"- task_type: {query_contract.get('task_type')}\n"
+        f"- domain: {query_contract.get('domain')}\n"
+        f"- requested_count: {query_contract.get('requested_count')}\n"
+        f"- answer_entity_type: {query_contract.get('answer_entity_type')}\n"
+        f"- minimum_publishable_items: {query_contract.get('minimum_publishable_items')}\n"
+        f"- evidence_limited_mode: {evidence_limited_mode}\n"
+        f"- source_quality: {quality_counts['high']} high, "
+        f"{quality_counts['medium']} medium, {quality_counts['low']} low\n\n"
+        "ALLOWED RECOMMENDATIONS — you may only recommend these items:\n"
+        + ("\n".join(allowed_lines) if allowed_lines else "- none\n")
+        + "\n\nREJECTED CANDIDATES — do not recommend or count these:\n"
+        + ("\n".join(rejected_lines) if rejected_lines else "- none\n")
+        + "\n\nContract-aware drafting rules:\n"
+        "- You may only recommend items from ALLOWED RECOMMENDATIONS.\n"
+        "- Do not introduce products not in the allowed list.\n"
+        "- Do not recommend brand-only names.\n"
+        "- Do not turn section headings or source titles into recommendations.\n"
+        "- If allowed count is below requested_count, write an evidence-limited title and body.\n"
+        "- If allowed count is below minimum_publishable_items, write draft-only framing "
+        "and state evidence was insufficient.\n"
+        "- For each recommendation include name, best for, why it works, "
+        "source-backed context, and caveat if evidence is thin.\n"
+        "- For fragrance posts include notes/mood/occasion only if present in the terms above.\n"
     )
 
 

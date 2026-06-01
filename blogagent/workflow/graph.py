@@ -14,6 +14,7 @@ from blogagent.workflow.nodes import (
     _event,
     _propagate_llm_warnings,
     build_evidence_table,
+    build_query_contract_node,
     check_external_effects,
     check_publish_contract_node,
     compute_publish_ready_status,
@@ -86,6 +87,7 @@ def _compute_execution_mode(state: BlogRunState) -> str:
 _PRE_FACTCHECK = [
     intake_topic,
     check_external_effects,  # guardrail — sets state.blocked; short-circuits if True
+    build_query_contract_node,  # precise answer contract
     select_skills,  # deterministic skill selection based on intent
     generate_research_questions,
     run_web_search,
@@ -139,18 +141,26 @@ def run_pipeline(topic: str) -> BlogRunState:
             citation_matches=state.citation_matches,
         )
         state.stage_timings["revise_article"] = round(time.monotonic() - t0, 3)
-        state.draft = llm_result.data.revised_markdown
-        state.revision_summary = llm_result.data.revision_summary
-        state.revision_count += 1
         from blogagent.workflow.nodes import _llm_event  # noqa: PLC0415
 
-        _event(state, _llm_event("editor.revision", llm_result))
-        _propagate_llm_warnings(state, "editor.revision", llm_result)
+        if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
+            state.revision_status = "failed_structured_output"
+            state.revision_summary = "Revision failed structured output; using original draft."
+            _event(state, _llm_event("editor.revision", llm_result))
+            _propagate_llm_warnings(state, "editor.revision", llm_result)
+        else:
+            state.draft = llm_result.data.revised_markdown
+            state.revision_summary = llm_result.data.revision_summary
+            state.revision_count += 1
+            state.revision_status = "completed"
 
-        # Re-run claim extraction, citation matching, and fact-check post-revision.
-        state = extract_claims(state)
-        state = match_citations(state)
-        state = run_fact_check(state)
+            _event(state, _llm_event("editor.revision", llm_result))
+            _propagate_llm_warnings(state, "editor.revision", llm_result)
+
+            # Re-run claim extraction, citation matching, and fact-check post-revision.
+            state = extract_claims(state)
+            state = match_citations(state)
+            state = run_fact_check(state)
 
     # Publishability evaluation — runs after fact-check cycle.
     t0 = time.monotonic()
@@ -211,6 +221,13 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     # Requested count
     if state.requested_count is not None:
         trace.append(f"✓ Requested count: {state.requested_count}")
+
+    if state.query_contract:
+        qc = state.query_contract
+        trace.append(
+            "✓ Query contract: "
+            f"{qc.get('task_type')} / {qc.get('domain')} / {qc.get('answer_entity_type')}"
+        )
 
     # Skills
     if state.selected_skills:
@@ -274,24 +291,38 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         m_rev = re.search(r"actual_provider=(\S+)", last_rev)
         rev_provider = m_rev.group(1) if m_rev else "mock"
         summary = (state.revision_summary or "").lower()
-
-        if "editor.final_validation_revision:" in last_rev:
-            rev_trigger = "triggered by final validator"
+        if "fallback=true" in last_rev and (
+            "json parse failed" in last_rev.lower()
+            or "structured output" in summary
+            or state.revision_status == "failed_structured_output"
+        ):
+            trace.append("⚠ Revision: failed structured output — using original draft")
+        elif "fallback=true" in last_rev and rev_provider == "mock":
+            trace.append("⚠ Revision: fallback to mock — unresolved defects may remain")
         else:
-            rev_trigger = "triggered by quality evaluator"
 
-        evidence_keywords = ("limit", "support", "count")
-        if "evidence" in summary and any(k in summary for k in evidence_keywords):
-            trace.append(
-                f"✓ Revision: completed — reduced count due to evidence limits ({rev_trigger})"
-            )
-        elif any(kw in summary for kw in ("top_n", "top-n", "count", "recommendation")):
-            trace.append(f"✓ Revision: completed — fixed top-N mismatch ({rev_trigger})")
-        else:
-            trace.append(f"✓ Revision: completed ({rev_provider}, {rev_trigger})")
+            if "editor.final_validation_revision:" in last_rev:
+                rev_trigger = "triggered by final validator"
+            else:
+                rev_trigger = "triggered by quality evaluator"
+
+            evidence_keywords = ("limit", "support", "count")
+            if "evidence" in summary and any(k in summary for k in evidence_keywords):
+                trace.append(
+                    "✓ Revision: completed — reduced count due to evidence limits "
+                    f"({rev_trigger})"
+                )
+            elif any(kw in summary for kw in ("top_n", "top-n", "count", "recommendation")):
+                trace.append(
+                    f"✓ Revision: completed — fixed top-N mismatch ({rev_trigger})"
+                )
+            else:
+                trace.append(f"✓ Revision: completed — {rev_provider} ({rev_trigger})")
 
         if state.final_validation_status == "failed":
-            trace.append("⚠ Revision: completed but final validation still found unresolved issues")
+            trace.append(
+                "⚠ Revision: completed but final validation still found unresolved issues"
+            )
     elif state.revision_count == 0:
         qe = state.quality_evaluation or {}
         if qe.get("revision_required"):
@@ -307,9 +338,13 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     # Final validation
     fv_status = state.final_validation_status or "passed"
     if fv_status == "failed":
-        high_defects = [d for d in state.final_validation_defects if d.get("severity") == "high"]
+        high_defects = [
+            d for d in state.final_validation_defects if d.get("severity") == "high"
+        ]
         defect_msgs = "; ".join(d.get("type", "?") for d in high_defects[:2])
-        trace.append(f"⚠ Final validation: failed — {defect_msgs or 'high-severity issues remain'}")
+        trace.append(
+            f"⚠ Final validation: failed — {defect_msgs or 'high-severity issues remain'}"
+        )
         trace.append("⚠ Generated with unresolved quality issues.")
     elif fv_status == "passed_with_warnings":
         if state.evidence_limited_count_accepted:
@@ -328,6 +363,16 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         unmatched = cs.get("unmatched_names", [])
         requested = state.requested_count
 
+        validated_count = len(state.validated_candidates)
+        if requested is not None:
+            if validated_count >= requested:
+                trace.append(f"✓ Validated candidates: {validated_count} usable")
+            else:
+                trace.append(
+                    f"⚠ Validated candidates: {validated_count}/{requested} usable"
+                    + (" — evidence-limited" if state.evidence_limited_mode else "")
+                )
+
         if article_count is not None:
             # Post-article grounding data is available
             if grounded_count == article_count and article_count > 0:
@@ -341,7 +386,9 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
                     f"{grounded_count} grounded, {len(unmatched)} unsupported"
                 )
                 if unmatched:
-                    trace.append(f"⚠ Unsupported recommendations: {', '.join(unmatched[:3])}")
+                    trace.append(
+                        f"⚠ Unsupported recommendations: {', '.join(unmatched[:3])}"
+                    )
             else:
                 trace.append("⚠ Article recommendations: none detected in final article")
 
@@ -352,9 +399,33 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             # Only pre-draft evidence candidates available
             if requested is not None:
                 symbol = "✓" if usable >= requested else "⚠"
-                trace.append(f"{symbol} Usable recommendations (evidence): {usable}/{requested}")
+                trace.append(
+                    f"{symbol} Usable recommendations (evidence): {usable}/{requested}"
+                )
             else:
                 trace.append(f"✓ Usable recommendations (evidence): {usable}")
+
+    if state.recommendation_audit:
+        audit = state.recommendation_audit
+        article = audit.get("article_recommendations_count", 0)
+        grounded = audit.get("grounded_recommendations_count", 0)
+        unsupported = audit.get("unsupported_recommendations", [])
+        section_false = audit.get("section_heading_false_positives", [])
+        if audit.get("passes"):
+            trace.append(
+                f"✓ Article audit: {article} article recommendations, "
+                f"{grounded} allowed, 0 unsupported"
+            )
+        else:
+            trace.append(
+                f"⚠ Article audit: {article} article recommendations, "
+                f"{grounded} allowed, {len(unsupported)} unsupported"
+            )
+            if section_false:
+                trace.append(
+                    "⚠ Article audit: rejected section heading false positive: "
+                    f"{section_false[0]}"
+                )
 
     # Evidence sufficiency
     if state.evidence_sufficiency:
@@ -388,7 +459,8 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             m = _re.search(r"new_sources=(\d+)", enrichment_event)
             new_srcs = m.group(1) if m else "?"
             trace.append(
-                f"✓ Enrichment search: {len(state.enrichment_queries)} queries, +{new_srcs} sources"
+                f"✓ Enrichment search: {len(state.enrichment_queries)} queries, "
+                f"+{new_srcs} sources"
             )
 
     # Publishability evaluation
@@ -412,11 +484,13 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             trace.append(f"✓ Publish contract: passed{cap_note}")
         elif contract_status == "publish_ready_with_warnings":
             trace.append(
-                f"⚠ Publish contract: publish_ready_with_warnings — {n_defects} issue(s){cap_note}"
+                "⚠ Publish contract: publish_ready_with_warnings — "
+                f"{n_defects} issue(s){cap_note}"
             )
         else:
             trace.append(
-                f"⚠ Publish contract: draft_only_not_publish_ready — {n_defects} issue(s){cap_note}"
+                "⚠ Publish contract: draft_only_not_publish_ready — "
+                f"{n_defects} issue(s){cap_note}"
             )
 
     # Editorial polish

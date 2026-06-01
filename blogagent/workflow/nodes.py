@@ -27,6 +27,7 @@ from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
+from blogagent.workflow.query_contract import QueryContract, build_query_contract
 from blogagent.workflow.recommendation import (
     FINANCIAL_DISCLAIMER_WARNING,
     MOCK_RECOMMENDATION_WARNING,
@@ -158,6 +159,23 @@ def check_external_effects(state: BlogRunState) -> BlogRunState:
     return state
 
 
+def build_query_contract_node(state: BlogRunState) -> BlogRunState:
+    """Build the query contract after deterministic intent detection."""
+    contract = build_query_contract(
+        state.topic,
+        is_recommendation=state.is_recommendation,
+        is_financial=state.is_financial,
+        requested_count=state.requested_count,
+    )
+    state.query_contract = contract.model_dump()
+    _event(
+        state,
+        "query_contract: "
+        f"{contract.task_type}/{contract.domain}/{contract.answer_entity_type}",
+    )
+    return state
+
+
 # ---------------------------------------------------------------------------
 # Intake
 # ---------------------------------------------------------------------------
@@ -224,7 +242,7 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
     """
     from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
         build_candidates_summary,
-        extract_recommendations_from_evidence,
+        extract_candidates_from_sources,
     )
 
     # Build lookup maps so we can attach real content to each scored source.
@@ -259,12 +277,15 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
 
     # Extract recommendation candidates when this is a recommendation topic.
     if state.is_recommendation:
-        candidates = extract_recommendations_from_evidence(
-            evidence_items=evidence_items,
+        contract = QueryContract.model_validate(state.query_contract or {})
+        candidates = extract_candidates_from_sources(
+            sources=state.selected_sources,
+            evidence_table=evidence_items,
+            query_contract=contract,
             source_quality_scores=state.source_quality_scores,
-            topic=state.topic,
         )
         state.recommendation_candidates = [c.model_dump() for c in candidates]
+        state.validated_candidates = [c.model_dump() for c in candidates if c.usable]
         state.recommendation_candidates_summary = build_candidates_summary(candidates)
 
     return state
@@ -320,6 +341,11 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         is_recommendation=state.is_recommendation,
         is_financial=state.is_financial,
         skill_briefs=get_skill_briefs(state.selected_skills),
+        query_contract=state.query_contract,
+        allowed_recommendations=state.validated_candidates,
+        rejected_candidates=[c for c in state.recommendation_candidates if not c.get("usable")],
+        evidence_limited_mode=state.evidence_limited_mode,
+        source_quality_scores=state.source_quality_scores,
     )
     state.draft = result.data.article_markdown
     state.draft_meta_description = result.data.meta_description
@@ -512,8 +538,16 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
     )
 
+    if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
+        state.revision_status = "failed_structured_output"
+        state.revision_summary = "Revision failed structured output; using original draft."
+        _event(state, _llm_event("editor.quality_revision", llm_result))
+        _propagate_llm_warnings(state, "editor.quality_revision", llm_result)
+        return state
+
     state.draft = llm_result.data.revised_markdown
     state.revision_summary = llm_result.data.revision_summary
+    state.revision_status = "completed"
     state.revision_count += 1
     _event(state, _llm_event("editor.quality_revision", llm_result))
     _propagate_llm_warnings(state, "editor.quality_revision", llm_result)
@@ -667,8 +701,16 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
     )
 
+    if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
+        state.revision_status = "failed_structured_output"
+        state.revision_summary = "Revision failed structured output; using original draft."
+        _event(state, _llm_event("editor.final_validation_revision", llm_result))
+        _propagate_llm_warnings(state, "editor.final_validation_revision", llm_result)
+        return state
+
     state.draft = llm_result.data.revised_markdown
     state.revision_summary = llm_result.data.revision_summary
+    state.revision_status = "completed"
     state.revision_count += 1
     _event(state, _llm_event("editor.final_validation_revision", llm_result))
     _propagate_llm_warnings(state, "editor.final_validation_revision", llm_result)
@@ -692,6 +734,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         return state
 
     from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
+        audit_article_recommendations,
         build_grounded_candidates_summary,
         extract_recommendations_from_article,
         match_article_recommendations_to_evidence,
@@ -701,7 +744,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
     article_count = len(article_recs)
 
     # Re-hydrate evidence candidates from stored dicts
-    evidence_candidates = list(state.recommendation_candidates)
+    evidence_candidates = list(state.validated_candidates or state.recommendation_candidates)
 
     groundings = match_article_recommendations_to_evidence(
         article_recs=article_recs,
@@ -728,6 +771,16 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         candidates=cand_objs,
         groundings=groundings,
     )
+    contract = QueryContract.model_validate(state.query_contract or {})
+    audit = audit_article_recommendations(
+        markdown=state.draft,
+        allowed_candidates=list(state.validated_candidates),
+        query_contract=contract,
+        evidence_table=state.evidence_table,
+        source_quality_scores=state.source_quality_scores,
+        source_scores=state.source_scores,
+    )
+    state.recommendation_audit = audit.model_dump()
 
     grounded_count = state.recommendation_candidates_summary.get(
         "grounded_recommendations_count", 0
@@ -747,6 +800,21 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         )
     else:
         _event(state, "article_grounding: no recommendations detected in article")
+
+    if audit.passes:
+        _event(
+            state,
+            f"recommendation_audit: article={audit.article_recommendations_count} "
+            f"grounded={audit.grounded_recommendations_count} unsupported=0",
+        )
+    else:
+        _event(
+            state,
+            f"recommendation_audit: article={audit.article_recommendations_count} "
+            f"unsupported={len(audit.unsupported_recommendations)} "
+            f"brand_only={len(audit.brand_only_recommendations)} "
+            f"section_false={len(audit.section_heading_false_positives)}",
+        )
 
     return state
 
@@ -796,11 +864,12 @@ def evaluate_evidence_sufficiency_node(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
         evidence_table=state.evidence_table,
         enrichment_already_ran=enrichment_ran,
-        recommendation_candidates=state.recommendation_candidates
+        recommendation_candidates=state.validated_candidates
         if state.is_recommendation
         else None,
     )
     state.evidence_sufficiency = result.model_dump()
+    state.evidence_limited_mode = result.recommended_action == "evidence_limited"
     _event(
         state,
         f"evidence_sufficiency: sufficient={result.sufficient} score={result.score} "
@@ -872,8 +941,9 @@ def run_enrichment_search(state: BlogRunState) -> BlogRunState:
             f"total_sources={len(state.search_results)}",
         )
 
-        # Re-extract, re-score, rebuild evidence
+        # Re-extract, re-score, rebuild evidence, and re-evaluate sufficiency
         state = _rebuild_sources_and_evidence(state, existing_result_urls=existing_urls)
+        state = evaluate_evidence_sufficiency_node(state)
     else:
         _event(state, "enrichment_search: no new sources found")
 
@@ -980,6 +1050,12 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
         evidence_sufficiency=state.evidence_sufficiency,
     )
 
+    if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
+        _event(state, _llm_event("editor.polish", llm_result))
+        _propagate_llm_warnings(state, "editor.polish", llm_result)
+        _warn(state, "Editorial polish failed structured output; using original draft.")
+        return state
+
     polish_out: EditorialPolishOutput = llm_result.data
     state.draft = polish_out.polished_markdown
     state.polish_summary = list(polish_out.polish_summary)
@@ -1009,6 +1085,9 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         evidence_sufficiency=state.evidence_sufficiency,
         source_quality_scores=state.source_quality_scores,
         recommendation_grounding=rec_grounding if rec_grounding else None,
+        query_contract=state.query_contract or None,
+        validated_candidates=state.validated_candidates,
+        recommendation_audit=state.recommendation_audit or None,
     )
     state.publish_contract = result.model_dump()
     _event(

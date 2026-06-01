@@ -5,13 +5,17 @@ from __future__ import annotations
 from blogagent.tools.recommendation_extractor import (
     ArticleRecommendation,
     RecommendationCandidate,
+    audit_article_recommendations,
     build_candidates_summary,
     build_grounded_candidates_summary,
+    classify_candidate_entity,
+    extract_candidates_from_sources,
     extract_recommendations_from_article,
     extract_recommendations_from_evidence,
     match_article_recommendations_to_evidence,
     normalize_recommendation_name,
 )
+from blogagent.workflow.query_contract import build_query_contract
 from blogagent.workflow.state import EvidenceItem
 
 
@@ -54,7 +58,10 @@ class TestExtractProductNames:
         )
 
     def test_extracts_bullet_list_item(self):
-        snippet = "- YSL Libre — best for evening wear\n- Tom Ford Black Orchid — bold and smoky"
+        snippet = (
+            "- YSL Libre — best for evening wear\n"
+            "- Tom Ford Black Orchid — bold and smoky"
+        )
         evidence = [_make_evidence(snippet)]
         quality = [_make_quality("https://example.com", "medium")]
         candidates = extract_recommendations_from_evidence(evidence, quality)
@@ -159,6 +166,124 @@ class TestExtractProductNames:
         assert len(dior_candidates) <= 4, (
             f"Too many Dior variants: {[c.name for c in dior_candidates]}"
         )
+
+
+class TestContractAwareClassification:
+    def _contract(self):
+        return build_query_contract(
+            "7 best parfums for summer",
+            is_recommendation=True,
+            is_financial=False,
+            requested_count=7,
+        )
+
+    def test_specific_products_are_usable(self):
+        contract = self._contract()
+        for name in (
+            "Tom Ford Soleil Blanc",
+            "Dolce & Gabbana Light Blue",
+            "Jo Malone London Wood Sage & Sea Salt",
+        ):
+            entity_type, is_product, rejection = classify_candidate_entity(name, contract)
+            assert entity_type == "specific_product"
+            assert is_product is True
+            assert rejection is None
+
+    def test_brand_only_names_are_rejected_for_product_query(self):
+        contract = self._contract()
+        for name in ("Kilian", "Glossier", "Sol de Janeiro"):
+            entity_type, is_product, rejection = classify_candidate_entity(name, contract)
+            assert entity_type == "brand"
+            assert is_product is False
+            assert "brand-only" in (rejection or "")
+
+    def test_section_and_source_title_phrases_are_rejected(self):
+        contract = self._contract()
+        for name in (
+            "How We Chose Our Top Summer Parfums",
+            "Choosing Your Signature Summer Scent",
+            "Best Summer Perfumes, Vetted by Editors",
+        ):
+            entity_type, is_product, rejection = classify_candidate_entity(name, contract)
+            assert entity_type in ("section_heading", "category", "source_title")
+            assert is_product is False
+            assert rejection
+
+
+class TestContractAwareCandidateExtraction:
+    def test_extracts_products_and_rejects_noise(self):
+        contract = build_query_contract(
+            "7 best parfums for summer",
+            is_recommendation=True,
+            is_financial=False,
+            requested_count=7,
+        )
+        snippet = """
+1. Tom Ford Soleil Blanc — coconut, amber and summer beach warmth.
+2. Dolce & Gabbana Light Blue — citrus, fresh, warm weather classic.
+3. Kilian — chic but listed here only as a brand.
+## How We Chose Our Top Summer Parfums
+"""
+        evidence = [
+            _make_evidence(
+                snippet,
+                url="https://allure.com/summer-perfumes",
+                title="Best Summer Perfumes, Vetted by Editors",
+            )
+        ]
+        quality = [_make_quality("https://allure.com/summer-perfumes", "high")]
+        candidates = extract_candidates_from_sources([], evidence, contract, quality)
+        usable_names = [c.name for c in candidates if c.usable]
+        rejected_names = [c.name for c in candidates if not c.usable]
+        assert "Tom Ford Soleil Blanc" in usable_names
+        assert "Dolce & Gabbana Light Blue" in usable_names
+        assert any("Kilian" in n for n in rejected_names)
+        assert all("How We Chose" not in n for n in usable_names)
+
+    def test_post_draft_audit_flags_brand_and_unknown_product(self):
+        contract = build_query_contract(
+            "7 best parfums for summer",
+            is_recommendation=True,
+            is_financial=False,
+            requested_count=7,
+        )
+        allowed = [
+            RecommendationCandidate(
+                name="Tom Ford Soleil Blanc",
+                normalized_name="tom ford soleil blanc",
+                entity_type="specific_product",
+                domain="beauty_fragrance",
+                is_specific_product=True,
+                source_urls=["https://allure.com"],
+                source_titles=["Allure"],
+                source_quality="high",
+                evidence_terms=["coconut"],
+                supported_context=["summer"],
+                sensory_terms=["coconut"],
+                usable=True,
+                confidence="high",
+                reason="test",
+            ).model_dump()
+        ]
+        article = """# Summer Picks
+
+## Quick Picks
+
+- Tom Ford Soleil Blanc — source-backed
+- Kilian — brand-only
+- Unknown Dream Cologne — unsupported
+"""
+        audit = audit_article_recommendations(
+            markdown=article,
+            allowed_candidates=allowed,
+            query_contract=contract,
+            evidence_table=[],
+            source_quality_scores=[_make_quality("https://allure.com", "high")],
+        )
+        assert audit.article_recommendations_count == 3
+        assert "Kilian" in audit.brand_only_recommendations
+        assert "Unknown Dream Cologne" in audit.unsupported_recommendations
+        assert audit.passes is False
 
 
 class TestBuildCandidatesSummary:

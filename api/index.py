@@ -86,6 +86,8 @@ class RunResponse(BaseModel):
     enrichment_queries: list[str] = []
     # Recommendation candidates + post-article grounding
     recommendation_candidates_summary: dict[str, Any] = {}
+    query_contract: dict[str, Any] = {}
+    recommendation_audit: dict[str, Any] = {}
     article_recommendations_count: int | None = None
     grounded_recommendations_count: int | None = None
     unmatched_recommendations: list[str] = []
@@ -285,6 +287,8 @@ def _run_topic(topic: str) -> RunResponse:
         search_pass_count=state.search_pass_count,
         enrichment_queries=list(state.enrichment_queries),
         recommendation_candidates_summary=dict(state.recommendation_candidates_summary),
+        query_contract=dict(state.query_contract),
+        recommendation_audit=dict(state.recommendation_audit),
         article_recommendations_count=state.recommendation_candidates_summary.get(
             "article_recommendations_count"
         ),
@@ -1175,21 +1179,25 @@ def _build_app_html() -> str:
     // Publishability score
     const publishabilityEval = data.publishability_evaluation || {};
     const publishScore = data.publishability_score || publishabilityEval.score;
-    if (publishScore !== undefined && publishScore > 0) {
-      const pubReady = publishabilityEval.publish_ready;
-      addStat(statsRow, 'publish score ' + publishScore + '/100', pubReady ? 'ok' : 'warn');
-    }
-
-    // Publish ready status — only show green if contract is truly publish_ready
     const pubStatus = data.publish_ready_status || '';
     const pubContract = data.publish_contract || {};
     const contractStatus = pubContract.status || pubStatus;
+    if (publishScore !== undefined && publishScore > 0) {
+      const pubReady = publishabilityEval.publish_ready;
+      const scoreType = contractStatus === 'draft_only_not_publish_ready' ? 'warn' : (pubReady ? 'ok' : 'warn');
+      addStat(statsRow, 'editorial score ' + publishScore + '/100', scoreType);
+    }
+
+    // Publish ready status — only show green if contract is truly publish_ready
     if (contractStatus === 'publish_ready') {
       addStat(statsRow, '✓ publish ready', 'ok');
     } else if (contractStatus === 'publish_ready_with_warnings') {
       addStat(statsRow, '⚠ publish ready with warnings', 'warn');
     } else if (contractStatus === 'draft_only_not_publish_ready' || pubStatus === 'draft_only_not_publish_ready') {
       addStat(statsRow, '✗ draft only', 'danger');
+    }
+    if (pubContract.status) {
+      addStat(statsRow, 'final contract: ' + (pubContract.passes ? 'passed' : 'failed'), pubContract.passes ? 'ok' : 'danger');
     }
 
     // Research depth badge
@@ -1238,6 +1246,22 @@ def _build_app_html() -> str:
     }
 
     // Recommendation candidates summary
+    const queryContract = data.query_contract || {};
+    if (queryContract.task_type) {
+      const qcDiv = document.createElement('div');
+      qcDiv.style.marginBottom = '0.8rem';
+      const qcLabel = document.createElement('div');
+      qcLabel.className = 'meta-label';
+      qcLabel.textContent = 'Query Contract';
+      qcDiv.appendChild(qcLabel);
+      const qcText = document.createElement('p');
+      qcText.style.cssText = 'font-size:0.85rem;color:#444;margin:0.2rem 0;';
+      qcText.textContent = `${queryContract.task_type} / ${queryContract.domain} / ${queryContract.answer_entity_type}` +
+        (queryContract.requested_count ? ` / ${queryContract.requested_count} requested` : '');
+      qcDiv.appendChild(qcText);
+      document.getElementById('title-display').closest('.form-card').appendChild(qcDiv);
+    }
+
     const recCandidates = data.recommendation_candidates_summary || {};
     if (recCandidates.usable_count !== undefined) {
       const reqCount = data.requested_count;
@@ -1293,7 +1317,7 @@ def _build_app_html() -> str:
       const contractDefects = pubContract.defects || [];
       const highContractDefects = contractDefects.filter(d => d.severity === 'high');
       const contractMsg = highContractDefects.length > 0 ? highContractDefects.map(d => d.message).slice(0, 2).join(' | ') : 'Article needs additional evidence or editorial review before publishing.';
-      draftBanner.textContent = '✗ Draft only: ' + contractMsg;
+      draftBanner.textContent = 'Draft only: this article does not satisfy the query contract. Reason: ' + contractMsg;
       document.getElementById('output-section').insertBefore(draftBanner, document.getElementById('output-section').firstChild);
     } else if (effectiveStatus === 'publish_ready_with_warnings') {
       const warnBanner = document.createElement('div');
@@ -1431,9 +1455,10 @@ def _build_app_html() -> str:
     document.getElementById('trace-list').innerHTML = '';
     document.getElementById('sources-list').innerHTML = '';
     _hideWorkflowPanel();
-    // Remove any dynamically injected skills rows from prior runs
+    // Remove dynamically injected rows from prior runs
     const skillDivs = document.querySelectorAll('.form-card .meta-label');
-    skillDivs.forEach(el => { if (el.textContent === 'Editorial Skills') el.closest('div').remove(); });
+    const dynamicLabels = ['Editorial Skills', 'Editorial Polish', 'Query Contract', 'Recommendation Candidates', 'Enrichment Queries'];
+    skillDivs.forEach(el => { if (dynamicLabels.includes(el.textContent)) el.closest('div').remove(); });
   }
 
   document.addEventListener('DOMContentLoaded', init);

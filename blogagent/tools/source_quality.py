@@ -125,11 +125,15 @@ _HIGH_QUALITY_DOMAINS: frozenset[str] = frozenset(
 )
 
 
+SourceType = Literal["editorial", "retailer_editorial", "forum", "social", "video", "unknown"]
+
+
 class SourceQuality(BaseModel):
     url: str
     title: str
     quality: Literal["high", "medium", "low"]
     reason: str
+    source_type: SourceType = "unknown"
 
 
 def classify_source_quality(source: SourceScore) -> SourceQuality:
@@ -143,10 +147,14 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
             title=source.title,
             quality="low",
             reason="Mock placeholder source — not a real publication",
+            source_type="unknown",
         )
 
     for low_domain in _LOW_QUALITY_DOMAINS:
         if low_domain in domain:
+            source_type: Literal["social", "video"] = (
+                "video" if "youtube.com" in domain else "social"
+            )
             return SourceQuality(
                 url=source.url,
                 title=source.title,
@@ -154,6 +162,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                 reason=(
                     f"{domain} is a user-generated or social platform with low editorial authority"
                 ),
+                source_type=source_type,
             )
 
     # Fragrantica forum/community pages: community content, not editorial — medium quality.
@@ -166,7 +175,13 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
             if is_forum
             else "fragrantica.com is a fragrance database with mixed editorial/community content"
         )
-        return SourceQuality(url=source.url, title=source.title, quality=quality, reason=reason)  # type: ignore[arg-type]
+        return SourceQuality(
+            url=source.url,
+            title=source.title,
+            quality=quality,  # type: ignore[arg-type]
+            reason=reason,
+            source_type="forum" if is_forum else "retailer_editorial",
+        )
 
     for high_domain in _HIGH_QUALITY_DOMAINS:
         if high_domain in domain:
@@ -175,6 +190,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                 title=source.title,
                 quality="high",
                 reason=f"{domain} is a recognised editorial or expert publication",
+                source_type="editorial",
             )
 
     for med_domain in _MEDIUM_QUALITY_DOMAINS:
@@ -184,6 +200,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
                 title=source.title,
                 quality="medium",
                 reason=f"{domain} is a retailer/editorial hybrid with moderate authority",
+                source_type="retailer_editorial",
             )
 
     if domain.endswith(".edu"):
@@ -192,6 +209,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
             title=source.title,
             quality="high",
             reason=f"{domain} is an accredited educational institution",
+            source_type="editorial",
         )
     if domain.endswith(".gov"):
         return SourceQuality(
@@ -199,6 +217,7 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
             title=source.title,
             quality="high",
             reason=f"{domain} is a government domain",
+            source_type="editorial",
         )
 
     return SourceQuality(
@@ -206,4 +225,5 @@ def classify_source_quality(source: SourceScore) -> SourceQuality:
         title=source.title,
         quality="medium",
         reason=f"{domain} is an unclassified source — quality not confirmed",
+        source_type="unknown",
     )

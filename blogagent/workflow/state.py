@@ -173,7 +173,17 @@ class BlogRunState(BaseModel):
     publish_ready_status: str = ""
     # Extracted recommendation candidates (list of RecommendationCandidate dicts)
     recommendation_candidates: list[dict] = Field(default_factory=list)
+    # Candidate table entries approved by the query contract for drafting.
+    validated_candidates: list[dict] = Field(default_factory=list)
     # Compact summary for API responses
     recommendation_candidates_summary: dict = Field(default_factory=dict)
+    # Query contract (dict-serialized QueryContract)
+    query_contract: dict = Field(default_factory=dict)
+    # Post-draft recommendation audit (dict-serialized RecommendationAudit)
+    recommendation_audit: dict = Field(default_factory=dict)
+    # True when the pipeline could not validate the requested count after bounded search.
+    evidence_limited_mode: bool = False
+    # Revision outcome used by trace/UI to distinguish real completion from fallback.
+    revision_status: str = ""
     # Publish contract result (dict-serialized PublishContractResult)
     publish_contract: Optional[dict] = None

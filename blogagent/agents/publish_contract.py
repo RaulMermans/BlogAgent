@@ -55,6 +55,8 @@ _SCORE_CAPS: dict[str, int] = {
     "insufficient_recommendations": 65,  # fewer than 3 total recommendations
     "missing_quick_picks": 65,  # no Quick Picks section
     "unsupported_recommendations": 69,  # recommendations without source grounding
+    "invalid_recommendations": 59,  # brand-only/headings/outside contract candidates
+    "insufficient_validated_candidates": 65,
     "weak_source_dominance": 74,  # low-quality sources dominate core picks
     "weak_sensory_detail": 79,  # fragrance article with thin scent detail
     "generic_seo_voice": 79,  # generic intro / no editorial thesis
@@ -85,6 +87,9 @@ def check_publish_contract(
     evidence_sufficiency: Optional[dict],
     source_quality_scores: list[dict],
     recommendation_grounding: Optional[dict] = None,
+    query_contract: Optional[dict] = None,
+    validated_candidates: Optional[list[dict]] = None,
+    recommendation_audit: Optional[dict] = None,
 ) -> PublishContractResult:
     """Run hard-fail publish contract checks.
 
@@ -117,6 +122,11 @@ def check_publish_contract(
         grounding_article_count = recommendation_grounding.get("article_recommendations_count")
         grounding_grounded_count = recommendation_grounding.get("grounded_recommendations_count")
         grounding_unmatched = recommendation_grounding.get("unmatched_names", [])
+    contract = query_contract or {}
+    min_publishable = int(contract.get("minimum_publishable_items") or 3)
+    answer_entity_type = contract.get("answer_entity_type", "")
+    validated_candidates = validated_candidates or []
+    usable_candidate_count = len([c for c in validated_candidates if c.get("usable", True)])
 
     actual_count: Optional[int]
     if is_recommendation:
@@ -142,14 +152,33 @@ def check_publish_contract(
         )
 
     # --- 3. Fewer than 3 recommendations ---
-    if is_recommendation and actual_count is not None and actual_count < 3:
+    if is_recommendation and actual_count is not None and actual_count < min_publishable:
         defects.append(
             ContractDefect(
                 type="insufficient_recommendations",
                 severity="high",
                 message=(
                     f"Article has only {actual_count} recommendation(s). "
-                    "A minimum of 3 is required for a publishable recommendation list."
+                    f"A minimum of {min_publishable} is required for a publishable "
+                    "recommendation list."
+                ),
+                fixable=False,
+            )
+        )
+
+    if (
+        is_recommendation
+        and validated_candidates is not None
+        and query_contract
+        and usable_candidate_count < min_publishable
+    ):
+        defects.append(
+            ContractDefect(
+                type="insufficient_validated_candidates",
+                severity="high",
+                message=(
+                    f"Only {usable_candidate_count} validated candidate(s) satisfy the query "
+                    f"contract; minimum publishable count is {min_publishable}."
                 ),
                 fixable=False,
             )
@@ -161,7 +190,7 @@ def check_publish_contract(
         if actual_count < requested_count:
             has_explanation = _has_evidence_limited_explanation(article_markdown)
             title_falsely_claims = _title_falsely_claims_count(article_markdown, requested_count)
-            if has_explanation and not title_falsely_claims and actual_count >= 3:
+            if has_explanation and not title_falsely_claims and actual_count >= min_publishable:
                 # Evidence-limited framing is acceptable
                 evidence_limited_accepted = True
                 defects.append(
@@ -189,6 +218,74 @@ def check_publish_contract(
                 )
 
     # --- 4b. Unsupported recommendations (grounding failed) ---
+    if is_recommendation and recommendation_audit:
+        invalid_names = recommendation_audit.get("invalid_recommendations", [])
+        unsupported_names = recommendation_audit.get("unsupported_recommendations", [])
+        brand_only_names = recommendation_audit.get("brand_only_recommendations", [])
+        section_false = recommendation_audit.get("section_heading_false_positives", [])
+        grounded_allowed = int(recommendation_audit.get("grounded_recommendations_count") or 0)
+
+        if answer_entity_type == "specific_fragrance_product" and brand_only_names:
+            defects.append(
+                ContractDefect(
+                    type="invalid_recommendations",
+                    severity="high",
+                    message=(
+                        "Article includes brand-only recommendations where specific fragrance "
+                        f"products are required: {', '.join(brand_only_names[:3])}."
+                    ),
+                    fixable=True,
+                )
+            )
+        if section_false:
+            defects.append(
+                ContractDefect(
+                    type="invalid_recommendations",
+                    severity="high",
+                    message=(
+                        "Article counted section/source/category text as recommendations: "
+                        f"{', '.join(section_false[:3])}."
+                    ),
+                    fixable=True,
+                )
+            )
+        if unsupported_names:
+            defects.append(
+                ContractDefect(
+                    type="unsupported_recommendations",
+                    severity="high" if grounded_allowed < min_publishable else "medium",
+                    message=(
+                        "Article includes recommendations outside the allowed candidate table: "
+                        f"{', '.join(unsupported_names[:3])}."
+                    ),
+                    fixable=True,
+                )
+            )
+        elif invalid_names and not (brand_only_names or section_false):
+            defects.append(
+                ContractDefect(
+                    type="invalid_recommendations",
+                    severity="high",
+                    message=(
+                        "Article includes recommendations that do not satisfy the query contract: "
+                        f"{', '.join(invalid_names[:3])}."
+                    ),
+                    fixable=True,
+                )
+            )
+        if grounded_allowed < min_publishable:
+            defects.append(
+                ContractDefect(
+                    type="insufficient_recommendations",
+                    severity="high",
+                    message=(
+                        f"Only {grounded_allowed} article recommendation(s) are grounded in the "
+                        f"allowed candidate table; minimum is {min_publishable}."
+                    ),
+                    fixable=False,
+                )
+            )
+
     if (
         is_recommendation
         and grounding_grounded_count is not None
@@ -196,7 +293,7 @@ def check_publish_contract(
         and grounding_article_count > 0
     ):
         unmatched_count = grounding_article_count - grounding_grounded_count
-        if unmatched_count > 0 and grounding_grounded_count < 3:
+        if unmatched_count > 0 and grounding_grounded_count < min_publishable:
             # Too few grounded recommendations to be publishable
             names_str = ", ".join(grounding_unmatched[:3])
             defects.append(

@@ -140,8 +140,26 @@ def test_run_normal_topic_response_has_compact_fields(monkeypatch):
         "revision_count",
         "warnings",
         "provider_events",
+        "query_contract",
+        "recommendation_audit",
     ):
         assert field in body, f"Missing field: {field}"
+
+
+def test_run_recommendation_response_includes_query_contract(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post("/run", json={"topic": "7 best parfums for summer"})
+    body = response.json()
+    contract = body["query_contract"]
+    assert contract["task_type"] == "recommendation"
+    assert contract["domain"] == "beauty_fragrance"
+    assert contract["answer_entity_type"] == "specific_fragrance_product"
+    assert contract["requested_count"] == 7
+    assert "recommendation_audit" in body
 
 
 def test_run_response_does_not_include_raw_source_text(monkeypatch):

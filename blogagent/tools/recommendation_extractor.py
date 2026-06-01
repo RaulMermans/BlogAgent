@@ -16,10 +16,11 @@ Low-quality-only single-source mentions are marked low_confidence and not usable
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from blogagent.workflow.query_contract import QueryContract
 from blogagent.workflow.state import EvidenceItem
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,9 @@ _SCENT_TERMS: frozenset[str] = frozenset(
         "fruity",
         "musky",
         "smoky",
+        "sea salt",
+        "tiare",
+        "ylang-ylang",
     }
 )
 
@@ -265,6 +269,69 @@ _BRAND_PREFIXES: tuple[str, ...] = (
     "tatcha",
     "drunk elephant",
     "paula's choice",
+    "kilian",
+    "by kilian",
+    "glossier",
+    "sol de janeiro",
+    "guerlain",
+    "maison francis kurkdjian",
+    "giorgio armani",
+)
+
+_BRAND_ONLY_NAMES: frozenset[str] = frozenset(
+    {
+        "kilian",
+        "by kilian",
+        "glossier",
+        "sol de janeiro",
+        "tom ford",
+        "chanel",
+        "dior",
+        "gucci",
+        "guerlain",
+        "byredo",
+        "jo malone",
+        "jo malone london",
+        "armani",
+        "giorgio armani",
+        "ysl",
+        "yves saint laurent",
+        "maison francis kurkdjian",
+        "dolce & gabbana",
+        "ouai",
+        "prada",
+        "versace",
+    }
+)
+
+_PRODUCT_SIGNAL_TERMS: frozenset[str] = frozenset(
+    {
+        "eau",
+        "parfum",
+        "perfume",
+        "cologne",
+        "fragrance",
+        "toilette",
+        "edp",
+        "edt",
+        "absolute",
+        "absolu",
+        "intense",
+        "elixir",
+        "no.",
+        "no",
+        "light blue",
+        "soleil",
+        "blanc",
+        "terracotta",
+        "aqua",
+        "universalis",
+        "melrose",
+        "ocean",
+        "gioia",
+        "wood sage",
+        "sea salt",
+    }
 )
 
 # Generic headings that are NOT product recommendation names
@@ -274,6 +341,7 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
         "how we chose",
         "how we tested",
         "buying tips",
+        "buying or choosing tips",
         "buying guide",
         "final takeaway",
         "conclusion",
@@ -292,7 +360,45 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
         "faq",
         "frequently asked questions",
         "the bottom line",
+        "our top",
+        "choosing your",
+        "summer parfums",
+        "summer perfumes",
+        "signature scent",
+        "editor-vetted",
+        "best summer",
+        "best options",
+        "top summer",
+        "scent categories",
+        "fragrance wardrobe",
+        "recommendations",
+        "guide",
     }
+)
+
+_NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
+    "how we chose",
+    "our top",
+    "quick picks",
+    "choosing your",
+    "final takeaway",
+    "buying tips",
+    "buying or choosing tips",
+    "conclusion",
+    "introduction",
+    "sources",
+    "source",
+    "recommendations",
+    "guide",
+    "summer parfums",
+    "summer perfumes",
+    "signature scent",
+    "editor-vetted",
+    "best summer",
+    "best options",
+    "top summer",
+    "scent categories",
+    "fragrance wardrobe",
 )
 
 # ---------------------------------------------------------------------------
@@ -302,13 +408,34 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
 
 class RecommendationCandidate(BaseModel):
     name: str
+    normalized_name: str = ""
+    entity_type: Literal[
+        "specific_product", "brand", "section_heading", "category", "source_title", "unknown"
+    ] = "unknown"
+    domain: str = "general"
+    is_specific_product: bool = False
     source_urls: list[str]
+    source_titles: list[str] = []
     source_quality: Literal["high", "medium", "low"]
+    evidence_terms: list[str] = []
     supported_context: list[str]
     sensory_terms: list[str]
     usable: bool
+    confidence: Literal["high", "medium", "low"] = "medium"
     reason: str
+    rejection_reason: Optional[str] = None
     low_confidence: bool = False
+
+
+class RecommendationAudit(BaseModel):
+    article_recommendations_count: int
+    grounded_recommendations_count: int
+    invalid_recommendations: list[str] = []
+    unsupported_recommendations: list[str] = []
+    brand_only_recommendations: list[str] = []
+    section_heading_false_positives: list[str] = []
+    model_introduced_source_grounded: list[str] = []
+    passes: bool
 
 
 class ArticleRecommendation(BaseModel):
@@ -339,6 +466,187 @@ class RecommendationGrounding(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def classify_candidate_entity(
+    name: str,
+    query_contract: QueryContract,
+    *,
+    source_title: str = "",
+) -> tuple[str, bool, Optional[str]]:
+    """Classify a candidate name against the query contract."""
+    raw = _clean_rec_name(name)
+    norm = normalize_recommendation_name(raw)
+    if not norm:
+        return "unknown", False, "empty candidate"
+
+    if _looks_like_url_or_citation(raw):
+        return "unknown", False, "URL/domain/citation artifact"
+
+    if source_title and norm == normalize_recommendation_name(source_title):
+        return "source_title", False, "source titles do not count"
+
+    if _is_generic_heading(raw):
+        entity = "section_heading" if _looks_like_heading(raw) else "category"
+        return entity, False, "section headings/category phrases do not count"
+
+    if query_contract.domain == "beauty_fragrance":
+        asks_for_brand = query_contract.answer_entity_type == "fragrance_brand"
+        if norm in _BRAND_ONLY_NAMES:
+            if asks_for_brand:
+                return "brand", True, None
+            return "brand", False, "brand-only names do not count as product recommendations"
+
+        if _is_source_title_phrase(raw):
+            return "source_title", False, "source titles do not count"
+
+        if _is_category_phrase(raw):
+            return "category", False, "category phrases do not count"
+
+        if _looks_like_specific_fragrance_product(raw):
+            return "specific_product", True, None
+
+        return "unknown", False, "not a specific fragrance product"
+
+    # Non-fragrance recommendation topics keep the legacy permissive behavior.
+    if query_contract.task_type == "recommendation" and _looks_like_product_name(raw):
+        return "specific_product", True, None
+
+    return "unknown", False, "not a valid recommendation item for this contract"
+
+
+def extract_candidates_from_sources(
+    sources: list,
+    evidence_table: list[EvidenceItem],
+    query_contract: QueryContract,
+    source_quality_scores: list[dict],
+) -> list[RecommendationCandidate]:
+    """Extract contract-classified recommendation candidates before drafting."""
+    quality_map: dict[str, str] = {
+        sq.get("url", ""): sq.get("quality", "medium")
+        for sq in source_quality_scores
+        if sq.get("url")
+    }
+    title_map: dict[str, str] = {}
+    text_packets: list[tuple[str, str, str]] = []
+
+    for item in evidence_table:
+        if _is_placeholder(item.fact):
+            continue
+        title_map[item.source_url] = item.source_title
+        text_packets.append((item.source_url, item.source_title, item.fact))
+
+    for source in sources or []:
+        url = getattr(source, "url", "") if not isinstance(source, dict) else source.get("url", "")
+        title = getattr(source, "title", "") if not isinstance(source, dict) else source.get(
+            "title", ""
+        )
+        text = (
+            getattr(source, "extracted_text", "")
+            if not isinstance(source, dict)
+            else source.get("extracted_text", "")
+        )
+        if url and title:
+            title_map[url] = title
+            text_packets.append((url, title, title))
+        if text and not _is_placeholder(text):
+            text_packets.append((url, title, text[:2000]))
+
+    name_data: dict[str, dict] = {}
+    for url, title, text in text_packets:
+        quality = quality_map.get(url, "medium")
+        names = _extract_names_from_text(text)
+        sensory = _extract_scent_terms(text)
+        context = _extract_context_terms(text)
+        for name in names:
+            name_norm = normalize_recommendation_name(name)
+            title_norm = normalize_recommendation_name(title)
+            entity_type, is_specific, rejection = classify_candidate_entity(
+                name,
+                query_contract,
+                source_title=title if name_norm == title_norm else "",
+            )
+            norm = name_norm
+            if not norm:
+                continue
+            if norm not in name_data:
+                name_data[norm] = {
+                    "name": name,
+                    "source_urls": [],
+                    "source_titles": [],
+                    "source_quality": quality,
+                    "sensory_terms": set(),
+                    "supported_context": set(),
+                    "entity_type": entity_type,
+                    "is_specific_product": is_specific,
+                    "rejection_reason": rejection,
+                }
+            entry = name_data[norm]
+            if len(name) > len(entry["name"]):
+                entry["name"] = name
+            if url and url not in entry["source_urls"]:
+                entry["source_urls"].append(url)
+            if title and title not in entry["source_titles"]:
+                entry["source_titles"].append(title)
+            if quality == "high":
+                entry["source_quality"] = "high"
+            elif quality == "medium" and entry["source_quality"] == "low":
+                entry["source_quality"] = "medium"
+            entry["sensory_terms"].update(sensory)
+            entry["supported_context"].update(context)
+            if is_specific:
+                entry["entity_type"] = entity_type
+                entry["is_specific_product"] = True
+                entry["rejection_reason"] = None
+
+    candidates: list[RecommendationCandidate] = []
+    for norm, data in name_data.items():
+        source_quality: Literal["high", "medium", "low"] = data["source_quality"]
+        is_low_confidence = source_quality == "low" and len(data["source_urls"]) < 2
+        evidence_terms = sorted(data["sensory_terms"])
+        supported_context = sorted(data["supported_context"])
+        contract_valid = bool(data["is_specific_product"])
+        usable, reason = _decide_usable(
+            source_quality=source_quality,
+            supported_context=supported_context,
+            sensory_terms=evidence_terms,
+            is_low_confidence=is_low_confidence,
+        )
+        usable = bool(usable and contract_valid)
+        rejection = data["rejection_reason"] if not usable else None
+        if contract_valid and is_low_confidence:
+            rejection = "low-confidence source support"
+        if not contract_valid and not rejection:
+            rejection = "candidate does not satisfy query contract"
+        confidence: Literal["high", "medium", "low"]
+        if source_quality == "high" and usable:
+            confidence = "high"
+        elif usable:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        candidates.append(
+            RecommendationCandidate(
+                name=data["name"],
+                normalized_name=norm,
+                entity_type=data["entity_type"],
+                domain=query_contract.domain,
+                is_specific_product=bool(data["is_specific_product"]),
+                source_urls=data["source_urls"],
+                source_titles=data["source_titles"],
+                source_quality=source_quality,
+                evidence_terms=evidence_terms,
+                supported_context=supported_context,
+                sensory_terms=evidence_terms,
+                usable=usable,
+                confidence=confidence,
+                reason=reason if usable else (rejection or reason),
+                rejection_reason=rejection,
+                low_confidence=is_low_confidence,
+            )
+        )
+
+    return sorted(candidates, key=lambda c: (not c.usable, c.name.lower()))
+
+
 def extract_recommendations_from_evidence(
     evidence_items: list[EvidenceItem],
     source_quality_scores: list[dict],
@@ -349,6 +657,17 @@ def extract_recommendations_from_evidence(
     Returns candidates with source quality, context, and usability data.
     Mock/placeholder evidence yields no candidates — correct for mock mode.
     """
+    from blogagent.workflow.query_contract import build_query_contract  # noqa: PLC0415
+
+    contract = build_query_contract(
+        topic or "recommendations",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=None,
+    )
+    if topic:
+        return extract_candidates_from_sources([], evidence_items, contract, source_quality_scores)
+
     quality_map: dict[str, str] = {
         sq.get("url", ""): sq.get("quality", "medium")
         for sq in source_quality_scores
@@ -399,12 +718,20 @@ def extract_recommendations_from_evidence(
         candidates.append(
             RecommendationCandidate(
                 name=name,
+                normalized_name=normalize_recommendation_name(name),
+                entity_type="specific_product",
+                domain="general",
+                is_specific_product=True,
                 source_urls=data["source_urls"],
+                source_titles=[],
                 source_quality=source_quality,
+                evidence_terms=sorted(data["sensory_terms"]),
                 supported_context=sorted(data["supported_context"]),
                 sensory_terms=sorted(data["sensory_terms"]),
                 usable=usable,
+                confidence="low" if is_low_confidence else source_quality,
                 reason=reason,
+                rejection_reason=None if usable else reason,
                 low_confidence=is_low_confidence,
             )
         )
@@ -416,11 +743,14 @@ def build_candidates_summary(candidates: list[RecommendationCandidate]) -> dict:
     """Build a compact summary dict safe for API responses."""
     usable = [c for c in candidates if c.usable]
     low_conf = [c for c in candidates if c.low_confidence]
+    rejected = [c for c in candidates if not c.usable]
     return {
         "evidence_candidates_count": len(candidates),
         "usable_count": len(usable),
         "low_confidence_count": len(low_conf),
         "names": [c.name for c in usable],
+        "rejected_count": len(rejected),
+        "rejected_names": [c.name for c in rejected[:10]],
     }
 
 
@@ -440,13 +770,8 @@ def build_grounded_candidates_summary(
     grounded = [g for g in groundings if g.matched]
     unmatched = [g.name for g in groundings if not g.matched]
 
-    # usable_count is from article grounding when available, else from evidence candidates
-    if article_count > 0:
-        usable_count = len(grounded)
-        names = [g.name for g in grounded]
-    else:
-        usable_count = len(evidence_usable)
-        names = [c.name for c in evidence_usable]
+    usable_count = len(evidence_usable) if candidates else len(grounded)
+    names = [c.name for c in evidence_usable] if candidates else [g.name for g in grounded]
 
     return {
         "evidence_candidates_count": len(candidates),
@@ -814,6 +1139,85 @@ def match_article_recommendations_to_evidence(
     return groundings
 
 
+def audit_article_recommendations(
+    markdown: str,
+    allowed_candidates: list[dict],
+    query_contract: QueryContract,
+    evidence_table: list[EvidenceItem],
+    source_quality_scores: list[dict],
+    source_scores: list | None = None,
+) -> RecommendationAudit:
+    """Audit final article recommendations against the validated candidate table."""
+    article_recs = extract_recommendations_from_article(markdown)
+    allowed_norms = {
+        c.get("normalized_name") or normalize_recommendation_name(c.get("name", ""))
+        for c in allowed_candidates
+        if c.get("usable", True) and c.get("name")
+    }
+    allowed_norms.discard("")
+
+    groundings = match_article_recommendations_to_evidence(
+        article_recs=article_recs,
+        evidence_candidates=allowed_candidates,
+        source_quality_scores=source_quality_scores,
+        evidence_table=evidence_table,
+        source_scores=source_scores,
+    )
+    grounded_by_name = {normalize_recommendation_name(g.name): g for g in groundings}
+
+    invalid: list[str] = []
+    unsupported: list[str] = []
+    brand_only: list[str] = []
+    section_false: list[str] = []
+    introduced_grounded: list[str] = []
+    grounded_count = 0
+
+    for rec in article_recs:
+        norm = normalize_recommendation_name(rec.name)
+        entity_type, is_specific, rejection = classify_candidate_entity(rec.name, query_contract)
+        grounding = grounded_by_name.get(norm)
+        is_allowed = norm in allowed_norms
+        is_grounded = bool(grounding and grounding.matched)
+
+        if entity_type == "brand" and not is_specific:
+            brand_only.append(rec.name)
+            invalid.append(rec.name)
+            continue
+        if entity_type in ("section_heading", "category", "source_title"):
+            section_false.append(rec.name)
+            invalid.append(rec.name)
+            continue
+        if rejection and not is_specific:
+            invalid.append(rec.name)
+            continue
+        if not is_allowed:
+            if is_grounded and is_specific:
+                introduced_grounded.append(rec.name)
+            else:
+                unsupported.append(rec.name)
+                continue
+        if is_grounded or is_allowed:
+            grounded_count += 1
+
+    passes = (
+        bool(article_recs)
+        and not invalid
+        and not unsupported
+        and not brand_only
+        and not section_false
+    )
+    return RecommendationAudit(
+        article_recommendations_count=len(article_recs),
+        grounded_recommendations_count=grounded_count,
+        invalid_recommendations=list(dict.fromkeys(invalid)),
+        unsupported_recommendations=list(dict.fromkeys(unsupported)),
+        brand_only_recommendations=list(dict.fromkeys(brand_only)),
+        section_heading_false_positives=list(dict.fromkeys(section_false)),
+        model_introduced_source_grounded=list(dict.fromkeys(introduced_grounded)),
+        passes=passes,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -833,7 +1237,74 @@ def _is_placeholder(text: str) -> bool:
 
 def _is_generic_heading(name: str) -> bool:
     """Return True if the name is a generic section heading, not a product name."""
-    return name.strip().lower() in _NON_RECOMMENDATION_HEADINGS
+    lower = normalize_recommendation_name(name)
+    return lower in _NON_RECOMMENDATION_HEADINGS or any(
+        part in lower for part in _NON_RECOMMENDATION_SUBSTRINGS
+    )
+
+
+def _looks_like_heading(name: str) -> bool:
+    lower = normalize_recommendation_name(name)
+    return any(
+        part in lower
+        for part in (
+            "how ",
+            "why ",
+            "what ",
+            "choosing",
+            "guide",
+            "tips",
+            "introduction",
+            "conclusion",
+        )
+    )
+
+
+def _looks_like_url_or_citation(name: str) -> bool:
+    lower = name.lower()
+    return (
+        "http://" in lower
+        or "https://" in lower
+        or ".com" in lower
+        or ".org" in lower
+        or re.fullmatch(r"\[\d+\]|\(\d+\)", lower.strip()) is not None
+    )
+
+
+def _is_source_title_phrase(name: str) -> bool:
+    lower = normalize_recommendation_name(name)
+    return (
+        ("best" in lower or "top" in lower or "vetted" in lower or "editor" in lower)
+        and any(t in lower for t in ("perfume", "parfum", "fragrance", "cologne", "scent"))
+    )
+
+
+def _is_category_phrase(name: str) -> bool:
+    lower = normalize_recommendation_name(name)
+    if lower.startswith(("best options", "best perfumes", "best parfums", "best fragrances")):
+        return True
+    if lower in {"summer parfums", "summer perfumes", "signature scent", "fragrance wardrobe"}:
+        return True
+    if len(lower.split()) <= 4 and any(
+        lower.endswith(t) for t in ("perfumes", "parfums", "fragrances", "scents")
+    ):
+        return True
+    return False
+
+
+def _looks_like_specific_fragrance_product(name: str) -> bool:
+    lower = normalize_recommendation_name(name)
+    words = lower.split()
+    if len(words) < 2 or len(words) > 8:
+        return False
+    if lower in _BRAND_ONLY_NAMES:
+        return False
+    if any(signal in lower for signal in _PRODUCT_SIGNAL_TERMS):
+        return True
+    for brand in _BRAND_ONLY_NAMES:
+        if lower.startswith(brand + " ") and len(words) > len(brand.split()):
+            return True
+    return False
 
 
 def _is_source_link_text(name: str) -> bool:
@@ -882,7 +1353,8 @@ def _parse_heading_as_recommendation(heading_line: str) -> tuple[str | None, str
 
     Handles patterns:
     - ``## 1. Tom Ford Soleil Blanc``  → ("Tom Ford Soleil Blanc", None)
-    - ``### Best Solar Floral: Guerlain Terracotta``  → ("Guerlain Terracotta", "Best Solar Floral")
+    - ``### Best Solar Floral: Guerlain Terracotta`` →
+      ("Guerlain Terracotta", "Best Solar Floral")
     - ``## Best Overall: Ouai Melrose Place``  → ("Ouai Melrose Place", "Best Overall")
     - ``## Tom Ford Soleil Blanc``  → ("Tom Ford Soleil Blanc", None)
     """

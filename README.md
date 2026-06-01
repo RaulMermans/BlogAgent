@@ -43,6 +43,8 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Agent Run Trace UI panel | **Done** — includes evidence sufficiency + publishability |
 | Source quality badges in UI | **Done** |
 | Staged workflow animation (16 steps, self-annotating) | **Done** |
+| Query Contract + validated recommendation table | **Done** |
+| Contract-aware drafting + post-draft recommendation audit | **Done** |
 | Persistence / database | Not yet |
 
 ---
@@ -75,9 +77,19 @@ BlogAgent v2 adds a full publish-readiness layer on top of the existing research
 
 #### Evidence Sufficiency Evaluation
 Before drafting, a deterministic evaluator checks whether the retrieved evidence is sufficient:
-- For recommendation topics: counts named-item-supporting sources vs requested count
+- For recommendation topics: counts validated recommendation candidates vs requested count
 - If insufficient and Tavily is configured: triggers one targeted **enrichment search** pass
 - Output: `evidence_sufficiency` with `sufficient`, `score`, `supported_count`, `recommended_action`
+
+#### Query Contract
+After intent detection, BlogAgent builds a deterministic `QueryContract` that defines the exact answer shape: `task_type`, `domain`, `requested_count`, `answer_entity_type`, valid/invalid item rules, required evidence fields, `minimum_publishable_items`, `evidence_limited_allowed`, and `exact_count_required`.
+
+For `7 best parfums for summer`, the contract is `recommendation / beauty_fragrance / specific_fragrance_product`. Brand-only names, section headings, source titles, category phrases, SEO keywords, and citation-only text are rejected as valid product recommendations.
+
+#### Unified Recommendation Candidate Table
+Before drafting, BlogAgent extracts and classifies candidates from source titles, snippets, extracted source text, and evidence facts. Each `RecommendationCandidate` records name, normalized name, entity type, usable status, confidence, rejection reason, source URLs/titles, source quality, evidence terms, and supported context.
+
+`state.validated_candidates` is the single allowed recommendation table used by evidence sufficiency, drafting, post-draft audit, article grounding, publish contract, and API/UI responses.
 
 #### Enrichment Search
 When evidence is insufficient for a recommendation topic (and Tavily is active):
@@ -110,6 +122,11 @@ After editorial polish, for recommendation topics, the pipeline extracts named p
 - `recommendation_candidates_summary` is updated with: `article_recommendations_count`, `grounded_recommendations_count`, `usable_count`, `unmatched_names`
 - The publish contract uses this grounding to verify source backing — a recommendation present in the article but unmatched to evidence does not count as usable
 
+#### Post-Draft Recommendation Audit
+After draft/revision/polish, BlogAgent audits article recommendations against `state.validated_candidates`. It flags recommendations outside the allowed list, brand-only recommendations for product-level fragrance contracts, section heading/source/category false positives, unsupported recommendations, and model-introduced source-grounded candidates.
+
+The API exposes `recommendation_audit`, and the run trace includes validated candidate and audit results.
+
 #### DraftOutput Missing-Field Completion
 When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omits `meta_description` or `seo_keywords`:
 - The client synthesises missing fields deterministically from the article body (first prose paragraph → meta_description; headings → seo_keywords)
@@ -123,12 +140,15 @@ The final `publish_ready_status` field indicates:
 - `publish_ready_with_warnings` — minor issues (evidence limits, low sources) but usable
 - `draft_only_not_publish_ready` — significant quality gap; human editing required
 
+The final publish contract is the authority. A high publishability/editorial score never overrides a failed query contract; the UI shows draft-only status prominently when the contract fails.
+
 ### Workflow
 
 ```text
 User Topic
 → Intake Parser
 → check_external_effects   (guardrail — blocks publishing requests; extracts requested_count)
+→ build_query_contract     (precise answer contract)
 → select_skills            (deterministic: fragrance/lifestyle/recommendation/financial/factual)
 → Editor Agent research plan  (skill briefs injected)
 → web_search (pass 1)
@@ -136,6 +156,7 @@ User Topic
 → source_score
 → score_source_quality     (high/medium/low per domain)
 → Evidence Table Builder
+→ Candidate Table Builder  (validated recommendations before drafting)
 → Evidence Sufficiency Evaluator (deterministic pre-draft gate)
 → [if insufficient + is_recommendation + tavily active + pass_count < 2]
     → Enrichment Search    (3 targeted queries; max 10 sources total)
@@ -158,6 +179,7 @@ User Topic
 → [if polish_required=True]
     → Editorial Polish Agent (LLM; runs at most once; skill briefs injected)
 → ground_article_recommendations  (post-article grounding: extract recs from final article; match to evidence)
+→ recommendation_audit     (article recommendations vs validated candidate table)
 → Publish Contract (post-polish + grounding check — final truth layer)
 → blog_package_validator
 → compute_publish_ready_status

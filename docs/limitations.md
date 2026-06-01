@@ -131,6 +131,7 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 - Publish-ready status does not guarantee the article is good enough to publish — it means it passed structured automated checks.
 - Human editorial review is always recommended before publishing any AI-generated content.
 - The publish contract uses word-count patterns, term lists, and phrase matching. It can be fooled by content that matches surface patterns without genuine quality.
+- Query-contract enforcement and product/entity classification are heuristic. They improve obvious failures but can miss aliases, flankers, niche brands, or unusually named products.
 - `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
 - For `publish_ready_with_warnings`: evidence-limited articles are accepted when the framing is detected as valid, but the framing detection is pattern-matching, not semantic judgment.
 
@@ -138,9 +139,11 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 
 The recommendation extractor runs in two phases:
 
-**Pre-draft evidence extraction** (`extract_recommendations_from_evidence`): Extracts named product candidates from evidence snippets using bold/list/brand-prefix patterns. Limitations:
+**Pre-draft evidence extraction** (`extract_candidates_from_sources` / `extract_recommendations_from_evidence`): Extracts named product candidates from source titles, snippets/extracted text, and evidence snippets using bold/list/brand-prefix patterns. Limitations:
 - Products mentioned only in body prose (no list or bold formatting) may be missed.
 - Brand names with unusual capitalization or abbreviations may not be detected.
+- Brand-vs-product detection is deterministic and can miss edge cases, especially product lines that share a brand name.
+- Section/source/category rejection is heuristic and may over-reject unusual product names that look like headings.
 - In mock mode, all evidence is placeholder text — the extractor correctly returns 0 usable candidates, which correctly flags evidence as insufficient.
 
 **Post-article grounding** (`extract_recommendations_from_article` + `match_article_recommendations_to_evidence`): After editorial polish, the pipeline re-extracts named products from the **final article** and matches them to source evidence. This is the primary proof layer.
@@ -149,7 +152,11 @@ The recommendation extractor runs in two phases:
 - Matching uses exact name, containment, brand-word overlap, evidence table text, and source title matching.
 - Matching is heuristic — product aliases, transliterations, and ambiguous short names may not match correctly.
 - Human review is still recommended for final source verification.
-- In mock mode, both evidence candidates and article grounding data are present; usable_count reflects what the mock draft contains, which is limited by design.
+- In mock mode, validated evidence candidates are normally empty; article grounding may still detect structure, but the publish contract remains the final authority.
+
+**Post-draft audit** (`recommendation_audit`): Compares final article recommendations to the validated candidate table.
+- Model-introduced candidates are not automatically made usable; they must still match source evidence and pass candidate validation.
+- Human review is still recommended before publishing recommendation content, especially for commercial products.
 
 ## Enrichment Search
 
@@ -164,6 +171,7 @@ Source quality classification is a **domain heuristic**, not a live quality asse
 - Unknown domains that are not in the explicit lists are classified as `medium` regardless of their actual editorial quality.
 - The classifier does not evaluate content — a high-domain source can still have a low-quality article for a given topic.
 - Domain lists are static and may become outdated as new authoritative sources emerge.
+- Source type (`editorial`, `retailer_editorial`, `forum`, `social`, `video`, `unknown`) is inferred from domains/paths, not from full content analysis.
 
 The classifier is intentionally simple. It provides a usable editorial signal without LLM calls.
 

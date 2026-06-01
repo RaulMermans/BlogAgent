@@ -82,6 +82,7 @@ Mock fallback only happens when `article_markdown` itself is absent, empty, or i
 ```text
 intake_topic                     → normalize topic; detect recommendation/financial intent
 check_external_effects           → guardrail: block publishing requests; extract requested_count
+build_query_contract             → define exact answer contract and valid entity type
 select_skills                    → deterministic skill selection (fragrance/lifestyle/rec/financial/factual)
 generate_research_qs             → Editor Agent: research plan (mock or LLM); skill briefs injected
 run_web_search [pass 1]          → call web_search tool (mock default; Tavily optional)
@@ -89,6 +90,7 @@ extract_webpages                 → call webpage_extract tool
 score_sources                    → call source_score tool (deterministic)
 score_source_quality             → classify each source as high/medium/low (domain heuristic)
 build_evidence_table             → assemble EvidenceItem list from scored sources
+build_candidate_table            → extract and validate recommendation candidates before drafting
 evaluate_evidence_sufficiency    → deterministic pre-draft gate; sets recommended_action
 [if recommended_action=search_more + tavily + pass < 2]
   run_enrichment_search          → 3 targeted queries; re-extract + re-score + rebuild evidence
@@ -107,6 +109,7 @@ check_publish_contract           → deterministic final truth layer; hard-fail 
 [if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
 ground_article_recommendations   → extract recs from final article; match to evidence; update summary
+recommendation_audit             → compare article recs to validated candidate table
 check_publish_contract           → re-run after polish + grounding to reflect improvements
 package_article                  → assemble ArticlePackage (with SEO fields)
 compute_publish_ready_status     → uses publish_contract as final authority
@@ -131,25 +134,68 @@ False-positive guards: years (1900–2099), price contexts (`under $50`), quanti
 
 `requested_count` is stored in state and used by evidence sufficiency, quality evaluator, publishability evaluator, publish contract, revision agent, and the final run trace.
 
+### Query Contract
+
+`blogagent/workflow/query_contract.py` — deterministic, no LLM.
+
+After `check_external_effects`, the pipeline builds `state.query_contract`. The contract records:
+- `task_type`
+- `domain`
+- `requested_count`
+- `answer_entity_type`
+- valid and invalid item rules
+- required evidence fields
+- `minimum_publishable_items`
+- `evidence_limited_allowed`
+- `exact_count_required`
+
+For `7 best parfums for summer`, the contract is:
+
+```text
+recommendation / beauty_fragrance / specific_fragrance_product
+```
+
+That means a valid item must be a specific fragrance product with source evidence. Brand-only names (`Kilian`, `Glossier`), section headings (`How We Chose`), source titles, category phrases, SEO keywords, and citation-only text do not count.
+
 ### Recommendation Candidate Extraction
 
 `blogagent/tools/recommendation_extractor.py` — deterministic, no LLM.
 
-Runs during `build_evidence_table` for recommendation topics. Extracts named product/entity candidates from evidence text:
+Runs during `build_evidence_table` for recommendation topics. Extracts named product/entity candidates from source titles, snippets/extracted text, and evidence text:
 - Bold markdown names: `**Brand Name**`
 - Numbered list items: `1. Brand Name`
 - Bullet list items: `- Brand Name`
 - Known brand prefix scan (fragrance/beauty brands)
 
 Each candidate tracks:
+- `normalized_name`
+- `entity_type` (`specific_product`, `brand`, `section_heading`, `category`, `source_title`, `unknown`)
+- `domain`
+- `is_specific_product`
 - `source_urls` — which sources mention it
+- `source_titles` — source titles that mention it
 - `source_quality` — best quality of its sources (high/medium/low)
+- `evidence_terms` — source-backed scent/suitability terms
 - `sensory_terms` — scent/sensory words found nearby (fragrance posts)
 - `supported_context` — suitability terms (summer, tested, best for, etc.)
-- `usable` — True if named in high/medium quality source with some context
+- `usable` — True only when the item satisfies the `QueryContract`
+- `confidence` — high/medium/low
+- `rejection_reason` — why the candidate cannot be used
 - `low_confidence` — True if only in a single low-quality source
 
-`state.recommendation_candidates_summary` exposes `evidence_candidates_count`, `usable_count`, `low_confidence_count`, and `names` for the API response and UI.
+`state.validated_candidates` is the single allowed recommendation table used by evidence sufficiency, drafting, article audit, article grounding, publish contract, API, and UI.
+
+### Contract-Aware Draft Generation
+
+Recommendation draft prompts receive:
+- `query_contract`
+- `allowed_recommendations` (`state.validated_candidates`)
+- rejected candidates and rejection reasons
+- `evidence_limited_mode`
+- source quality summary
+- selected skills
+
+The drafter may only recommend allowed candidates. It may not introduce products, recommend brand-only names for product-level contracts, or turn headings/source titles into recommendations. When the allowed count is below the requested count, the draft must use evidence-limited title/body framing.
 
 ### Post-Article Recommendation Grounding
 
@@ -172,10 +218,26 @@ Each candidate tracks:
 3. `build_grounded_candidates_summary(candidates, groundings)` — updates `recommendation_candidates_summary`:
    - `article_recommendations_count` — how many named products were detected
    - `grounded_recommendations_count` — how many were matched to evidence
-   - `usable_count` — grounded count (replaces pre-draft evidence count as primary signal)
+   - `usable_count` — validated pre-draft candidate count when available
    - `unmatched_names` — names that could not be matched
 
 The publish contract uses this grounding data to verify that article recommendations have source backing.
+
+### Post-Draft Recommendation Audit
+
+`state.recommendation_audit` compares final article recommendations to `state.validated_candidates`.
+
+It reports:
+- article recommendation count
+- grounded/allowed recommendation count
+- invalid recommendations
+- unsupported recommendations
+- brand-only recommendations
+- section-heading false positives
+- model-introduced but source-grounded candidates
+- pass/fail
+
+The audit prevents contradictions where evidence sufficiency says one usable count while article grounding counts headings or brands as valid recommendations.
 
 ### Evidence Sufficiency Evaluator
 
@@ -227,6 +289,8 @@ Hard-fail conditions that override everything else:
 | Missing Quick Picks section | HIGH | 65 |
 | Fewer than 3 recommendations | HIGH | 65 |
 | Unmet requested count without valid evidence-limited explanation | HIGH | 59 |
+| Invalid recommendations outside query contract | HIGH | 59 |
+| Insufficient validated candidates | HIGH | 65 |
 | Weak source dominance (>60% low-quality) | MEDIUM | 74 |
 | Weak sensory detail in fragrance post | HIGH (<3 terms) / MEDIUM (3–5) | 79 |
 | Insufficient recommendation depth | MEDIUM | 74 |

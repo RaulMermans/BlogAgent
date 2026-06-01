@@ -258,6 +258,68 @@ class TestPublishContractRecommendationPosts:
         if result.score_cap is not None:
             assert result.score_cap <= 74
 
+    def test_brand_only_recommendation_fails_product_contract(self):
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best parfums for summer",
+            publishability_score=95,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency={"recommended_action": "proceed", "supported_count": 7},
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            query_contract={
+                "task_type": "recommendation",
+                "domain": "beauty_fragrance",
+                "requested_count": 7,
+                "answer_entity_type": "specific_fragrance_product",
+                "minimum_publishable_items": 3,
+            },
+            validated_candidates=[{"name": f"Product {i}", "usable": True} for i in range(7)],
+            recommendation_audit={
+                "article_recommendations_count": 7,
+                "grounded_recommendations_count": 6,
+                "invalid_recommendations": ["Kilian"],
+                "unsupported_recommendations": [],
+                "brand_only_recommendations": ["Kilian"],
+                "section_heading_false_positives": [],
+                "passes": False,
+            },
+        )
+        assert result.status == "draft_only_not_publish_ready"
+        assert any(d.type == "invalid_recommendations" for d in result.defects)
+
+    def test_section_heading_false_positive_fails_contract(self):
+        result = check_publish_contract(
+            article_markdown=_STRONG_7_PICK_ARTICLE,
+            topic="7 best parfums for summer",
+            publishability_score=95,
+            publishability_defects=[],
+            is_recommendation=True,
+            requested_count=7,
+            evidence_sufficiency={"recommended_action": "proceed", "supported_count": 7},
+            source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
+            query_contract={
+                "task_type": "recommendation",
+                "domain": "beauty_fragrance",
+                "requested_count": 7,
+                "answer_entity_type": "specific_fragrance_product",
+                "minimum_publishable_items": 3,
+            },
+            validated_candidates=[{"name": f"Product {i}", "usable": True} for i in range(7)],
+            recommendation_audit={
+                "article_recommendations_count": 7,
+                "grounded_recommendations_count": 6,
+                "invalid_recommendations": ["How We Chose"],
+                "unsupported_recommendations": [],
+                "brand_only_recommendations": [],
+                "section_heading_false_positives": ["How We Chose"],
+                "passes": False,
+            },
+        )
+        assert result.status == "draft_only_not_publish_ready"
+        assert any("section" in d.message.lower() for d in result.defects)
+
     def test_unmet_count_without_explanation_caps_score_at_59(self):
         # Article with 3 picks but no evidence-limited explanation, requested 7
         article_no_explanation = """# 7 Best Perfumes for Summer
