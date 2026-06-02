@@ -41,6 +41,7 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | GitHub Actions CI | **Done** — mock mode, no API keys required |
 | Vercel API scaffold | **Done** — mock-safe by default |
 | Agent Run Trace UI panel | **Done** — includes evidence sufficiency + publishability |
+| AgentPulse runtime traces | **Done** — best-effort, opt-in via env vars |
 | Source quality badges in UI | **Done** |
 | Staged workflow animation (16 steps, self-annotating) | **Done** |
 | Query Contract + validated recommendation table | **Done** |
@@ -250,6 +251,21 @@ The warning appears in `state.warnings` and in `provider_events` (visible via `-
 | `TAVILY_API_KEY` | _(empty)_ | Required when provider is `tavily` |
 | `BLOGAGENT_HTTP_TIMEOUT_SECONDS` | `15` | Timeout for web requests |
 | `BLOGAGENT_MAX_SEARCH_RESULTS` | `5` | Max results per query |
+
+### AgentPulse telemetry variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENTPULSE_ENABLED` | `false` | Set to `true` to enable AgentPulse trace events |
+| `AGENTPULSE_URL` | _(empty)_ | Base URL for AgentPulse, e.g. `http://localhost:3000` |
+| `AGENTPULSE_INGEST_KEY` | _(empty)_ | AgentPulse ingest key; never printed or included in payload metadata |
+| `AGENTPULSE_PROJECT_ID` | `blog-agent` | AgentPulse project identifier |
+| `AGENTPULSE_PROJECT_NAME` | `Blog Agent` | Display name in AgentPulse |
+| `AGENTPULSE_WORKFLOW_ID` | `blog-agent-v1` | Workflow identifier for BlogAgent runs |
+| `AGENTPULSE_DEBUG` | `false` | Print telemetry send failures without exposing secrets |
+
+See [docs/agentpulse-integration.md](docs/agentpulse-integration.md) for the smoke
+test command, real run command, and troubleshooting checklist.
 
 ---
 

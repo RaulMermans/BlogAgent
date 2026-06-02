@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 from blogagent.agents import editor_agent, fact_check_evaluator
@@ -22,6 +23,7 @@ from blogagent.agents.publishability_evaluator import (
 )
 from blogagent.llm.client import detect_repeated_excerpts
 from blogagent.llm.schemas import LLMResult
+from blogagent.observability.agentpulse_client import current_client, current_node_id, safe_summary
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.source_score import ScoreInput, source_score
@@ -66,6 +68,28 @@ def _llm_event(stage: str, result: LLMResult) -> str:
 
     Format: <stage>: configured_provider=X actual_provider=Y model=Z fallback=bool [warning="..."]
     """
+    client = current_client()
+    if client and result.is_mock:
+        metadata = {
+            "model_provider": result.provider,
+            "model_name": result.model,
+            "configured_provider": result.configured_provider or "mock",
+            "agent": stage,
+            "input_tokens": None,
+            "output_tokens": None,
+            "cost_usd": None,
+            "latency_ms": None,
+            "is_mock": True,
+            "fallback": result.configured_provider != "mock",
+            "warning": result.warning,
+            "error": result.error,
+        }
+        client.model_call_started(current_node_id(), metadata)
+        if result.error:
+            client.model_call_failed(current_node_id(), metadata)
+        else:
+            client.model_call_completed(current_node_id(), metadata)
+
     configured = result.configured_provider or "mock"
     actual = result.provider
     model = result.model
@@ -208,7 +232,40 @@ def generate_research_questions(state: BlogRunState) -> BlogRunState:
 
 def run_web_search(state: BlogRunState) -> BlogRunState:
     max_results = int(os.getenv("BLOGAGENT_MAX_SEARCH_RESULTS", str(_DEFAULT_MAX_RESULTS)))
-    output = web_search(SearchInput(query=state.topic, max_results=max_results))
+    client = current_client()
+    t0 = time.monotonic()
+    if client:
+        client.tool_call_started(
+            "web_search",
+            {
+                "permission_class": "read_only",
+                "input_summary": safe_summary(state.topic),
+                "max_results": max_results,
+            },
+        )
+    try:
+        output = web_search(SearchInput(query=state.topic, max_results=max_results))
+    except Exception as exc:  # noqa: BLE001
+        if client:
+            client.tool_call_failed(
+                "web_search",
+                {
+                    "permission_class": "read_only",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "latency_ms": int((time.monotonic() - t0) * 1000),
+                },
+            )
+        raise
+    if client:
+        client.tool_call_completed(
+            "web_search",
+            {
+                "permission_class": "read_only",
+                "output_summary": f"{len(output.results)} results from {output.provider}",
+                "provider": output.provider,
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
     state.search_results = output.results
     _event(state, f"search: provider={output.provider}, results={len(output.results)}")
     if output.warning:
@@ -218,20 +275,58 @@ def run_web_search(state: BlogRunState) -> BlogRunState:
 
 def extract_webpages(state: BlogRunState) -> BlogRunState:
     packets = []
+    client = current_client()
+    t0 = time.monotonic()
+    if client:
+        client.tool_call_started(
+            "webpage_extract",
+            {
+                "permission_class": "read_only",
+                "input_summary": f"{len(state.search_results)} URLs",
+            },
+        )
     for result in state.search_results:
         out = webpage_extract(
             ExtractInput(url=result.url, title=result.title, domain=result.domain)
         )
         if out.packet is not None:
             packets.append(out.packet)
+    if client:
+        client.tool_call_completed(
+            "webpage_extract",
+            {
+                "permission_class": "read_only",
+                "output_summary": f"{len(packets)} source packets",
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
     state.selected_sources = packets
     return state
 
 
 def score_sources(state: BlogRunState) -> BlogRunState:
+    client = current_client()
+    t0 = time.monotonic()
+    if client:
+        client.tool_call_started(
+            "source_score",
+            {
+                "permission_class": "read_only",
+                "input_summary": f"{len(state.selected_sources)} source packets",
+            },
+        )
     state.source_scores = [
         source_score(ScoreInput(packet=p, topic=state.topic)) for p in state.selected_sources
     ]
+    if client:
+        client.tool_call_completed(
+            "source_score",
+            {
+                "permission_class": "read_only",
+                "output_summary": f"{len(state.source_scores)} source scores",
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
     return state
 
 
@@ -366,12 +461,41 @@ def write_draft(state: BlogRunState) -> BlogRunState:
 
 
 def extract_claims(state: BlogRunState) -> BlogRunState:
+    client = current_client()
+    t0 = time.monotonic()
+    if client:
+        client.tool_call_started(
+            "claim_extractor",
+            {
+                "permission_class": "read_only",
+                "input_summary": f"draft_chars={len(state.draft)}",
+            },
+        )
     output = claim_extractor(ClaimExtractInput(draft=state.draft, topic=state.topic))
+    if client:
+        client.tool_call_completed(
+            "claim_extractor",
+            {
+                "permission_class": "read_only",
+                "output_summary": f"{len(output.claims)} claims",
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
     state.claims = output.claims
     return state
 
 
 def match_citations(state: BlogRunState) -> BlogRunState:
+    client = current_client()
+    t0 = time.monotonic()
+    if client:
+        client.tool_call_started(
+            "citation_matcher",
+            {
+                "permission_class": "read_only",
+                "input_summary": f"{len(state.claims)} claims; {len(state.source_scores)} sources",
+            },
+        )
     output = citation_matcher(
         CitationMatchInput(
             claims=state.claims,
@@ -379,6 +503,15 @@ def match_citations(state: BlogRunState) -> BlogRunState:
             source_packets=state.selected_sources,
         )
     )
+    if client:
+        client.tool_call_completed(
+            "citation_matcher",
+            {
+                "permission_class": "read_only",
+                "output_summary": f"{len(output.matches)} citation matches",
+                "latency_ms": int((time.monotonic() - t0) * 1000),
+            },
+        )
     state.citation_matches = output.matches
     return state
 

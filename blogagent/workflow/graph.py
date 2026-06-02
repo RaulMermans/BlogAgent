@@ -5,6 +5,12 @@ import time
 import uuid
 
 from blogagent.agents import editor_agent
+from blogagent.observability.agentpulse_client import (
+    AgentPulseClient,
+    current_client,
+    use_client,
+    use_node,
+)
 from blogagent.tools.validators import (
     validate_article_package,
     validate_minimum_sources,
@@ -110,99 +116,261 @@ _PRE_FACTCHECK = [
 
 def run_pipeline(topic: str) -> BlogRunState:
     state = BlogRunState(topic=topic, run_id=str(uuid.uuid4()))
+    telemetry = AgentPulseClient.from_env(run_id=state.run_id)
     # execution_mode starts as "mock" and is updated after the pipeline finishes.
 
-    for step in _PRE_FACTCHECK:
-        t0 = time.monotonic()
-        state = step(state)
-        state.stage_timings[step.__name__] = round(time.monotonic() - t0, 3)
-        if state.blocked:
-            state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
-            state.run_trace = [f"✗ Blocked: {state.block_reason[:120]}"]
-            return state
-
-    # Initial fact-check.
-    t0 = time.monotonic()
-    state = run_fact_check(state)
-    state.stage_timings["run_fact_check"] = round(time.monotonic() - t0, 3)
-
-    # Revision loop — runs at most _MAX_REVISIONS times.
-    if (
-        state.fact_check_report is not None
-        and not state.fact_check_report.passed
-        and state.revision_count < _MAX_REVISIONS
-    ):
-        assert state.outline is not None
-        t0 = time.monotonic()
-        llm_result = editor_agent.revise_article(
-            topic=state.topic,
-            draft=state.draft,
-            fact_check_report=state.fact_check_report,
-            citation_matches=state.citation_matches,
+    with use_client(telemetry):
+        telemetry.start_run(
+            input_summary=topic,
+            metadata={"topic_length": len(topic), "execution_mode": "pending"},
         )
-        state.stage_timings["revise_article"] = round(time.monotonic() - t0, 3)
-        from blogagent.workflow.nodes import _llm_event  # noqa: PLC0415
+        try:
+            for step in _PRE_FACTCHECK:
+                state = _execute_step(state, step)
+                if state.blocked:
+                    state.execution_mode = _compute_execution_mode(
+                        state
+                    )  # type: ignore[assignment]
+                    state.run_trace = [f"✗ Blocked: {state.block_reason[:120]}"]
+                    telemetry.fail_run(
+                        error=state.block_reason,
+                        metadata={"blocked": True, "step": step.__name__},
+                    )
+                    return state
 
-        if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
-            state.revision_status = "failed_structured_output"
-            state.revision_summary = "Revision failed structured output; using original draft."
-            _event(state, _llm_event("editor.revision", llm_result))
-            _propagate_llm_warnings(state, "editor.revision", llm_result)
-        else:
-            state.draft = llm_result.data.revised_markdown
-            state.revision_summary = llm_result.data.revision_summary
-            state.revision_count += 1
-            state.revision_status = "completed"
+            # Initial fact-check.
+            state = _execute_step(state, run_fact_check)
 
-            _event(state, _llm_event("editor.revision", llm_result))
-            _propagate_llm_warnings(state, "editor.revision", llm_result)
+            # Revision loop — runs at most _MAX_REVISIONS times.
+            if (
+                state.fact_check_report is not None
+                and not state.fact_check_report.passed
+                and state.revision_count < _MAX_REVISIONS
+            ):
+                assert state.outline is not None
+                node_id = "revise_article"
+                client = current_client()
+                if client:
+                    client.node_started(node_id)
+                t0 = time.monotonic()
+                try:
+                    with use_node(node_id):
+                        llm_result = editor_agent.revise_article(
+                            topic=state.topic,
+                            draft=state.draft,
+                            fact_check_report=state.fact_check_report,
+                            citation_matches=state.citation_matches,
+                        )
+                    state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+                    if client:
+                        client.node_completed(
+                            node_id,
+                            latency_ms=_elapsed_ms(t0),
+                            metadata={"blocked": state.blocked},
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+                    if client:
+                        client.emit_event(
+                            "node_failed",
+                            node_id=node_id,
+                            status="failed",
+                            metadata={"error": f"{type(exc).__name__}: {exc}"},
+                        )
+                    raise
+                from blogagent.workflow.nodes import _llm_event  # noqa: PLC0415
 
-            # Re-run claim extraction, citation matching, and fact-check post-revision.
-            state = extract_claims(state)
-            state = match_citations(state)
-            state = run_fact_check(state)
+                if (
+                    llm_result.is_mock
+                    and llm_result.configured_provider != "mock"
+                    and llm_result.error
+                ):
+                    state.revision_status = "failed_structured_output"
+                    state.revision_summary = (
+                        "Revision failed structured output; using original draft."
+                    )
+                    _event(state, _llm_event("editor.revision", llm_result))
+                    _propagate_llm_warnings(state, "editor.revision", llm_result)
+                else:
+                    state.draft = llm_result.data.revised_markdown
+                    state.revision_summary = llm_result.data.revision_summary
+                    state.revision_count += 1
+                    state.revision_status = "completed"
 
-    # Publishability evaluation — runs after fact-check cycle.
+                    _event(state, _llm_event("editor.revision", llm_result))
+                    _propagate_llm_warnings(state, "editor.revision", llm_result)
+
+                    # Re-run claim extraction, citation matching, and fact-check post-revision.
+                    state = _execute_step(state, extract_claims)
+                    state = _execute_step(state, match_citations)
+                    state = _execute_step(state, run_fact_check)
+
+            # Publishability evaluation — runs after fact-check cycle.
+            state = _execute_step(
+                state,
+                evaluate_publishability_node,
+                timing_name="evaluate_publishability",
+            )
+
+            # Publish contract — deterministic final truth check before polish.
+            state = _execute_step(
+                state,
+                check_publish_contract_node,
+                timing_name="check_publish_contract",
+            )
+
+            # Editorial polish — runs at most once, when publishability or contract requires it.
+            state = _execute_step(state, run_editorial_polish)
+
+            # Post-article recommendation grounding — extracts and matches recommendations from
+            # the final (polished) article text to source evidence.  Runs after polish so the
+            # grounding proof reflects the final published text, not an intermediate draft.
+            state = _execute_step(state, ground_article_recommendations)
+
+            # Re-run contract after polish + grounding to reflect any improvements.
+            state = _execute_step(
+                state,
+                check_publish_contract_node,
+                timing_name="check_publish_contract_post_polish",
+            )
+
+            state = _execute_step(state, package_article)
+
+            # Compute publish readiness status (uses publish contract as final authority).
+            state = _execute_step(state, compute_publish_ready_status)
+
+            # Compute execution_mode from what actually ran.
+            state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
+
+            # Build agent run trace for UI display.
+            state.run_trace = _build_run_trace(state)
+
+            _emit_final_observability(state)
+            telemetry.complete_run(
+                output_summary=state.publish_ready_status or "completed",
+                metadata={
+                    "execution_mode": state.execution_mode,
+                    "blocked": state.blocked,
+                    "revision_count": state.revision_count,
+                    "source_count": len(state.source_scores),
+                },
+            )
+            return state
+        except Exception as exc:
+            telemetry.fail_run(error=f"{type(exc).__name__}: {exc}")
+            raise
+
+
+def _execute_step(
+    state: BlogRunState,
+    step,
+    *,
+    timing_name: str | None = None,
+) -> BlogRunState:
+    node_id = timing_name or step.__name__
+    client = current_client()
+    if client:
+        client.node_started(node_id, metadata={"step": step.__name__})
     t0 = time.monotonic()
-    state = evaluate_publishability_node(state)
-    state.stage_timings["evaluate_publishability"] = round(time.monotonic() - t0, 3)
+    try:
+        with use_node(node_id):
+            new_state = step(state)
+        new_state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+        if client:
+            client.node_completed(
+                node_id,
+                latency_ms=_elapsed_ms(t0),
+                metadata={"blocked": new_state.blocked},
+            )
+        return new_state
+    except Exception as exc:  # noqa: BLE001
+        state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+        if client:
+            client.emit_event(
+                "node_failed",
+                node_id=node_id,
+                status="failed",
+                metadata={"step": step.__name__, "error": f"{type(exc).__name__}: {exc}"},
+            )
+        raise
 
-    # Publish contract — deterministic final truth check before polish.
-    t0 = time.monotonic()
-    state = check_publish_contract_node(state)
-    state.stage_timings["check_publish_contract"] = round(time.monotonic() - t0, 3)
 
-    # Editorial polish — runs at most once, when publishability or contract requires it.
-    t0 = time.monotonic()
-    state = run_editorial_polish(state)
-    state.stage_timings["run_editorial_polish"] = round(time.monotonic() - t0, 3)
+def _elapsed_ms(start: float) -> int:
+    return int((time.monotonic() - start) * 1000)
 
-    # Post-article recommendation grounding — extracts and matches recommendations from
-    # the final (polished) article text to source evidence.  Runs after polish so the
-    # grounding proof reflects the final published text, not an intermediate draft.
-    t0 = time.monotonic()
-    state = ground_article_recommendations(state)
-    state.stage_timings["ground_article_recommendations"] = round(time.monotonic() - t0, 3)
 
-    # Re-run contract after polish + grounding to reflect any improvements.
-    t0 = time.monotonic()
-    state = check_publish_contract_node(state)
-    state.stage_timings["check_publish_contract_post_polish"] = round(time.monotonic() - t0, 3)
+def _emit_final_observability(state: BlogRunState) -> None:
+    client = current_client()
+    if client is None:
+        return
 
-    t0 = time.monotonic()
-    state = package_article(state)
-    state.stage_timings["package_article"] = round(time.monotonic() - t0, 3)
-
-    # Compute publish readiness status (uses publish contract as final authority).
-    state = compute_publish_ready_status(state)
-
-    # Compute execution_mode from what actually ran.
-    state.execution_mode = _compute_execution_mode(state)  # type: ignore[assignment]
-
-    # Build agent run trace for UI display.
-    state.run_trace = _build_run_trace(state)
-
-    return state
+    if state.evidence_sufficiency:
+        client.eval_completed(
+            "evidence_sufficiency",
+            {
+                "eval_name": "Evidence Sufficiency",
+                "eval_type": "factuality",
+                "passed": state.evidence_sufficiency.get("sufficient"),
+                "score": state.evidence_sufficiency.get("score"),
+                "findings": state.evidence_sufficiency.get("missing", []),
+            },
+        )
+    if state.quality_evaluation:
+        client.eval_completed(
+            "quality_evaluation",
+            {
+                "eval_name": "Quality Evaluation",
+                "eval_type": "quality",
+                "passed": state.quality_evaluation.get("passes"),
+                "score": state.quality_evaluation.get("score"),
+                "findings": state.quality_evaluation.get("defects", []),
+            },
+        )
+    if state.fact_check_report:
+        client.eval_completed(
+            "fact_check",
+            {
+                "eval_name": "Fact Check",
+                "eval_type": "factuality",
+                "passed": state.fact_check_report.passed,
+                "score": None,
+                "findings": state.fact_check_report.blocking_issues,
+                "total_claims": state.fact_check_report.total_claims,
+                "unsupported_count": state.fact_check_report.unsupported_count,
+            },
+        )
+    if state.publishability_evaluation:
+        client.eval_completed(
+            "publishability",
+            {
+                "eval_name": "Publishability",
+                "eval_type": "quality",
+                "passed": state.publishability_evaluation.get("publish_ready"),
+                "score": state.publishability_evaluation.get("score"),
+                "findings": state.publishability_evaluation.get("defects", []),
+            },
+        )
+    if state.publish_contract:
+        client.eval_completed(
+            "publish_contract",
+            {
+                "eval_name": "Publish Contract",
+                "eval_type": "schema",
+                "passed": state.publish_contract.get("passes"),
+                "score": state.publish_contract.get("score_cap"),
+                "findings": state.publish_contract.get("defects", []),
+            },
+        )
+    if state.final_article_package:
+        size = len(state.final_article_package.article_markdown.encode("utf-8"))
+        client.artifact_created(
+            {
+                "artifact_type": "article_markdown",
+                "artifact_ref": f"run:{state.run_id}:final_article",
+                "artifact_size_bytes": size,
+                "title": state.final_article_package.title,
+            }
+        )
 
 
 def _build_run_trace(state: BlogRunState) -> list[str]:

@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any
 
 from pydantic import BaseModel
@@ -48,6 +49,7 @@ from blogagent.llm.schemas import (
     ResearchPlanOutput,
     RevisionOutput,
 )
+from blogagent.observability.agentpulse_client import current_client, current_node_id
 
 _DEFAULT_TIMEOUT = 60
 _MOCK_MODEL = "mock-1.0"
@@ -285,14 +287,40 @@ def generate_structured(
     BLOGAGENT_LLM_PROVIDER so callers can distinguish configured vs actual.
     """
     provider_name = os.getenv("BLOGAGENT_LLM_PROVIDER", "mock").strip().lower()
+    telemetry = current_client()
+    node_id = current_node_id()
+    t0 = time.monotonic()
+    if telemetry:
+        telemetry.model_call_started(
+            node_id,
+            {
+                "model_provider": provider_name,
+                "model_name": os.getenv("BLOGAGENT_LLM_MODEL", "").strip() or None,
+                "agent": node_id or "unknown",
+                "output_schema": output_model.__name__,
+                "input_summary": (
+                    f"system={len(system_prompt)} chars; user={len(user_prompt)} chars"
+                ),
+            },
+        )
 
     if provider_name == "mock":
-        return _mock_result(output_model, configured_provider="mock")
+        return _record_model_result(
+            _mock_result(output_model, configured_provider="mock"),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
+        )
 
     try:
         provider = _build_provider(provider_name)
     except (MissingAPIKeyError, ValueError) as exc:
-        return _mock_fallback(output_model, configured_provider=provider_name, warning=str(exc))
+        return _record_model_result(
+            _mock_fallback(output_model, configured_provider=provider_name, warning=str(exc)),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
+        )
 
     # Augment system prompt with JSON schema so the model knows the output shape.
     schema_str = json.dumps(output_model.model_json_schema(), indent=2)
@@ -306,16 +334,26 @@ def generate_structured(
     try:
         response: ProviderResponse = provider.generate(augmented_system, user_prompt, temperature)
     except ImportError as exc:
-        return _mock_fallback(
-            output_model,
-            configured_provider=provider_name,
-            warning=f"{provider_name} package not installed: {exc}",
+        return _record_model_result(
+            _mock_fallback(
+                output_model,
+                configured_provider=provider_name,
+                warning=f"{provider_name} package not installed: {exc}",
+            ),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
         )
     except Exception as exc:  # noqa: BLE001
-        return _mock_fallback(
-            output_model,
-            configured_provider=provider_name,
-            error=f"LLM call failed ({type(exc).__name__}: {exc}); using mock fallback.",
+        return _record_model_result(
+            _mock_fallback(
+                output_model,
+                configured_provider=provider_name,
+                error=f"LLM call failed ({type(exc).__name__}: {exc}); using mock fallback.",
+            ),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
         )
 
     # --- JSON parse ---
@@ -330,13 +368,18 @@ def generate_structured(
                     meta_description=parsed.meta_description,
                     seo_keywords=parsed.seo_keywords,
                 )
-        return LLMResult(
-            data=parsed,
-            provider=provider_name,
-            model=response.model,
-            is_mock=False,
-            configured_provider=provider_name,
-            raw_text=response.text,
+        return _record_model_result(
+            LLMResult(
+                data=parsed,
+                provider=provider_name,
+                model=response.model,
+                is_mock=False,
+                configured_provider=provider_name,
+                raw_text=response.text,
+            ),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
         )
     except Exception as parse_exc:  # noqa: BLE001
         # For DraftOutput: try deterministic field completion before repair/mock.
@@ -345,35 +388,50 @@ def generate_structured(
         if output_model.__name__ == "DraftOutput":
             completed, ok = _try_complete_draft_output(response.text, output_model)
             if ok:
-                return LLMResult(
-                    data=completed,
-                    provider=provider_name,
-                    model=response.model,
-                    is_mock=False,
-                    configured_provider=provider_name,
-                    raw_text=response.text,
-                    warning="structured_output_completed_missing_fields=true",
+                return _record_model_result(
+                    LLMResult(
+                        data=completed,
+                        provider=provider_name,
+                        model=response.model,
+                        is_mock=False,
+                        configured_provider=provider_name,
+                        raw_text=response.text,
+                        warning="structured_output_completed_missing_fields=true",
+                    ),
+                    start=t0,
+                    output_model=output_model,
+                    node_id=node_id,
                 )
 
         # One repair retry before falling back to mock.
         repaired, ok = _try_repair(provider, response.text, output_model, temperature)
         if ok:
-            return LLMResult(
-                data=repaired,
-                provider=provider_name,
-                model=response.model,
-                is_mock=False,
-                configured_provider=provider_name,
-                raw_text=response.text,
-                warning="structured_output_repaired=true",
+            return _record_model_result(
+                LLMResult(
+                    data=repaired,
+                    provider=provider_name,
+                    model=response.model,
+                    is_mock=False,
+                    configured_provider=provider_name,
+                    raw_text=response.text,
+                    warning="structured_output_repaired=true",
+                ),
+                start=t0,
+                output_model=output_model,
+                node_id=node_id,
             )
-        return _mock_fallback(
-            output_model,
-            configured_provider=provider_name,
-            error=(
-                f"JSON parse failed ({type(parse_exc).__name__}: {parse_exc}); "
-                "repair also failed; using mock fallback."
+        return _record_model_result(
+            _mock_fallback(
+                output_model,
+                configured_provider=provider_name,
+                error=(
+                    f"JSON parse failed ({type(parse_exc).__name__}: {parse_exc}); "
+                    "repair also failed; using mock fallback."
+                ),
             ),
+            start=t0,
+            output_model=output_model,
+            node_id=node_id,
         )
 
 
@@ -415,6 +473,39 @@ def _build_provider(
         return GoogleProvider(api_key=api_key, model=model, timeout=timeout)
 
     raise ValueError(f"Unknown LLM provider '{name}'. Supported: mock, anthropic, openai, google.")
+
+
+def _record_model_result(
+    result: LLMResult,
+    *,
+    start: float,
+    output_model: type[BaseModel],
+    node_id: str | None,
+) -> LLMResult:
+    telemetry = current_client()
+    if telemetry is None:
+        return result
+
+    metadata = {
+        "model_provider": result.provider,
+        "model_name": result.model,
+        "configured_provider": result.configured_provider,
+        "agent": node_id or "unknown",
+        "output_schema": output_model.__name__,
+        "is_mock": result.is_mock,
+        "fallback": result.is_mock and result.configured_provider != "mock",
+        "input_tokens": None,
+        "output_tokens": None,
+        "cost_usd": None,
+        "latency_ms": int((time.monotonic() - start) * 1000),
+        "warning": result.warning,
+        "error": result.error,
+    }
+    if result.error:
+        telemetry.model_call_failed(node_id, metadata)
+    else:
+        telemetry.model_call_completed(node_id, metadata)
+    return result
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> Any:
