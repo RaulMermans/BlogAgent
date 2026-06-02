@@ -48,13 +48,13 @@ def test_agentpulse_redacts_sensitive_metadata():
         {
             "api_key": "abc",
             "nested": {"Authorization": "Bearer secret", "safe": "ok"},
-            "tokens": [{"refresh_token": "secret"}],
+            "items": [{"refresh_token": "secret"}],
         }
     )
     assert redacted["api_key"] == "[REDACTED]"
     assert redacted["nested"]["Authorization"] == "[REDACTED]"
     assert redacted["nested"]["safe"] == "ok"
-    assert redacted["tokens"][0]["refresh_token"] == "[REDACTED]"
+    assert redacted["items"][0]["refresh_token"] == "[REDACTED]"
 
 
 def test_agentpulse_event_payload_includes_required_fields(monkeypatch):
