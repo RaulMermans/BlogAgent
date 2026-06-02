@@ -23,6 +23,22 @@ def _enable_agentpulse(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENTPULSE_WORKFLOW_ID", "blog-agent-v1")
 
 
+def test_both_auth_headers_are_sent(monkeypatch):
+    _enable_agentpulse(monkeypatch)
+    captured_headers = {}
+
+    def capture_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return _OKResponse()
+
+    monkeypatch.setattr("httpx.post", capture_post)
+    client = AgentPulseClient.from_env(run_id="run_headers")
+    assert client.start_run(input_summary="header check")
+    assert captured_headers.get("Authorization") == "Bearer test-ingest-key"
+    assert captured_headers.get("x-agentpulse-key") == "test-ingest-key"
+    assert captured_headers.get("Content-Type") == "application/json"
+
+
 def test_agentpulse_disables_when_env_missing(monkeypatch):
     monkeypatch.delenv("AGENTPULSE_URL", raising=False)
     monkeypatch.delenv("AGENTPULSE_INGEST_KEY", raising=False)

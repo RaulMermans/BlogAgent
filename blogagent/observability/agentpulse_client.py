@@ -269,6 +269,7 @@ class AgentPulseClient:
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self.ingest_key}",
+                    "x-agentpulse-key": self.ingest_key,
                     "Content-Type": "application/json",
                 },
                 timeout=self.timeout_seconds,
