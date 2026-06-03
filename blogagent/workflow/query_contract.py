@@ -15,6 +15,7 @@ Domain = Literal[
     "beauty_fragrance",
     "beauty_makeup",
     "fashion_lifestyle",
+    "software_tools",
     "finance",
     "general",
 ]
@@ -25,12 +26,14 @@ class QueryContract(BaseModel):
     domain: Domain = "general"
     requested_count: Optional[int] = None
     answer_entity_type: str = "unknown"
+    entity_subtype: Optional[str] = None
     valid_item_rules: list[str] = Field(default_factory=list)
     invalid_item_rules: list[str] = Field(default_factory=list)
     required_evidence_fields: list[str] = Field(default_factory=list)
     minimum_publishable_items: int = 1
     evidence_limited_allowed: bool = False
     exact_count_required: bool = False
+    safety_constraints: list[str] = Field(default_factory=list)
 
 
 _FRAGRANCE_TERMS = (
@@ -44,8 +47,9 @@ _FRAGRANCE_TERMS = (
     "scent",
     "eau de",
 )
-_MAKEUP_TERMS = ("makeup", "mascara", "foundation", "lipstick", "concealer", "blush")
-_FASHION_TERMS = ("fashion", "outfit", "style", "shoes", "bags", "wardrobe")
+_MAKEUP_TERMS = ("makeup", "mascara", "foundation", "lipstick", "concealer", "blush", "eyeshadow")
+_FASHION_TERMS = ("fashion", "outfit", "style", "shoes", "bags", "wardrobe", "capsule", "clothes")
+_SOFTWARE_TERMS = ("tools", "apps", "software", "platform", "plugin", "extension", "ai tools")
 _HOW_TO_TERMS = ("how to", "how do", "steps to", "guide to")
 _COMPARISON_TERMS = (" vs ", " versus ", "compare", "comparison")
 _ANALYSIS_TERMS = ("analysis", "what caused", "trend", "forecast")
@@ -83,6 +87,8 @@ def build_query_contract(
         domain = "beauty_makeup"
     elif any(t in lower for t in _FASHION_TERMS):
         domain = "fashion_lifestyle"
+    elif any(t in lower for t in _SOFTWARE_TERMS):
+        domain = "software_tools"
     else:
         domain = "general"
 
@@ -92,9 +98,8 @@ def build_query_contract(
             task_type=task_type,
             domain=domain,
             requested_count=requested_count,
-            answer_entity_type=(
-                "fragrance_brand" if asks_for_brands else "specific_fragrance_product"
-            ),
+            answer_entity_type="fragrance_brand" if asks_for_brands else "specific_product",
+            entity_subtype=None if asks_for_brands else "fragrance_product",
             valid_item_rules=[
                 "must be a specific perfume/fragrance/parfum/cologne product",
                 "must not be a brand-only name unless prompt explicitly asks for brands",
@@ -108,6 +113,7 @@ def build_query_contract(
                 "brand-only names do not count as product recommendations",
                 "SEO keywords do not count",
                 "citations alone do not count",
+                "brand clusters (multiple brand names in one string) do not count",
             ],
             required_evidence_fields=[
                 "name",
@@ -122,12 +128,89 @@ def build_query_contract(
             exact_count_required=requested_count is not None,
         )
 
+    if domain == "beauty_makeup" and task_type == "recommendation":
+        asks_for_essentials = any(
+            t in lower for t in ("essentials", "basics", "kit", "routine", "bag")
+        )
+        return QueryContract(
+            task_type=task_type,
+            domain=domain,
+            requested_count=requested_count,
+            answer_entity_type=(
+                "specific_product_or_product_category"
+                if asks_for_essentials
+                else "specific_product"
+            ),
+            entity_subtype="makeup_product",
+            valid_item_rules=[
+                "must be a specific makeup product or named product line",
+                "product category allowed if prompt asks for essentials/basics/kit",
+                "must have source evidence",
+            ],
+            invalid_item_rules=[
+                "brand-only names do not count unless prompt asks for brands",
+                "section headings do not count",
+                "source titles do not count",
+                "vague generic terms like 'festival makeup' do not count",
+            ],
+            required_evidence_fields=["name", "source_urls", "source_quality", "evidence_terms"],
+            minimum_publishable_items=3,
+            evidence_limited_allowed=True,
+            exact_count_required=requested_count is not None,
+        )
+
+    if domain == "fashion_lifestyle" and task_type == "recommendation":
+        return QueryContract(
+            task_type=task_type,
+            domain=domain,
+            requested_count=requested_count,
+            answer_entity_type="specific_product_or_style_category",
+            entity_subtype="fashion_item",
+            valid_item_rules=[
+                "must be a specific clothing/accessory item or actionable style category",
+                "must have source evidence or styling rationale",
+            ],
+            invalid_item_rules=[
+                "generic headings do not count",
+                "vague 'summer style' phrases do not count",
+                "source titles do not count",
+            ],
+            required_evidence_fields=["name", "source_urls", "source_quality"],
+            minimum_publishable_items=3,
+            evidence_limited_allowed=True,
+            exact_count_required=requested_count is not None,
+        )
+
+    if domain == "software_tools" and task_type == "recommendation":
+        return QueryContract(
+            task_type=task_type,
+            domain=domain,
+            requested_count=requested_count,
+            answer_entity_type="software_product",
+            entity_subtype="software_tool",
+            valid_item_rules=[
+                "must be a named software product, app, platform, or tool",
+                "must have source evidence",
+                "company product acceptable if source supports",
+            ],
+            invalid_item_rules=[
+                "generic 'productivity tools' category phrases do not count",
+                "section headings do not count",
+                "source titles do not count",
+            ],
+            required_evidence_fields=["name", "source_urls", "source_quality"],
+            minimum_publishable_items=3,
+            evidence_limited_allowed=True,
+            exact_count_required=requested_count is not None,
+        )
+
     if domain == "finance" and task_type == "recommendation":
         return QueryContract(
             task_type=task_type,
             domain=domain,
             requested_count=requested_count,
-            answer_entity_type="financial_security_watchlist",
+            answer_entity_type="public_company_or_security",
+            entity_subtype="public_company",
             valid_item_rules=[
                 "must be framed as educational watchlist material, not buy advice",
                 "must include risk and uncertainty context",
@@ -137,11 +220,18 @@ def build_query_contract(
                 "do not use buy/guaranteed-return language",
                 "do not present unsupported price targets",
                 "do not omit financial disclaimer",
+                "direct buy/sell recommendations do not count",
             ],
             required_evidence_fields=["name", "source_urls", "source_quality", "risk_context"],
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            safety_constraints=[
+                "educational only",
+                "not financial advice",
+                "no direct buy/sell recommendation",
+                "no performance prediction without sourced attribution",
+            ],
         )
 
     return QueryContract(
@@ -155,4 +245,12 @@ def build_query_contract(
         minimum_publishable_items=1,
         evidence_limited_allowed=False,
         exact_count_required=False,
+    )
+
+
+def requires_candidate_ledger(contract: QueryContract) -> bool:
+    """Return True when the query contract requires a candidate ledger."""
+    return contract.task_type == "recommendation" and contract.answer_entity_type not in (
+        "general_answer",
+        "unknown",
     )

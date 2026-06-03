@@ -90,6 +90,7 @@ def check_publish_contract(
     query_contract: Optional[dict] = None,
     validated_candidates: Optional[list[dict]] = None,
     recommendation_audit: Optional[dict] = None,
+    answer_count_snapshot: Optional[dict] = None,
 ) -> PublishContractResult:
     """Run hard-fail publish contract checks.
 
@@ -125,13 +126,28 @@ def check_publish_contract(
     contract = query_contract or {}
     min_publishable = int(contract.get("minimum_publishable_items") or 3)
     answer_entity_type = contract.get("answer_entity_type", "")
+    entity_subtype = contract.get("entity_subtype", "")
     validated_candidates = validated_candidates or []
     usable_candidate_count = len([c for c in validated_candidates if c.get("usable", True)])
+
+    # Use AnswerCountSnapshot when available — it's the canonical count
+    snapshot_article_count: Optional[int] = None
+    snapshot_count_status: str = ""
+    snapshot_evidence_limited: bool = False
+    if answer_count_snapshot:
+        snapshot_article_count = answer_count_snapshot.get("article_entities_count")
+        snapshot_count_status = answer_count_snapshot.get("count_status", "")
+        snapshot_evidence_limited = bool(answer_count_snapshot.get("evidence_limited", False))
+        grounding_article_count = snapshot_article_count or grounding_article_count
+        # Sync grounding_grounded_count from snapshot
+        snapshot_grounded = answer_count_snapshot.get("grounded_entities_count")
+        if snapshot_grounded is not None:
+            grounding_grounded_count = snapshot_grounded
 
     actual_count: Optional[int]
     if is_recommendation:
         if grounding_article_count is not None and grounding_article_count > 0:
-            # Use grounding count when available — it's derived from the final article
+            # Use grounding/snapshot count when available — derived from the final article
             actual_count = grounding_article_count
         else:
             actual_count = _count_recs(article_markdown)
@@ -185,13 +201,12 @@ def check_publish_contract(
         )
 
     # --- 4. Unmet requested count ---
+    # Use snapshot count_status when available for coherent reporting
     evidence_limited_accepted = False
     if is_recommendation and requested_count is not None and actual_count is not None:
         if actual_count < requested_count:
-            has_explanation = _has_evidence_limited_explanation(article_markdown)
-            title_falsely_claims = _title_falsely_claims_count(article_markdown, requested_count)
-            if has_explanation and not title_falsely_claims and actual_count >= min_publishable:
-                # Evidence-limited framing is acceptable
+            # When snapshot says "evidence_limited", treat as acceptable framing
+            if snapshot_count_status == "evidence_limited" or snapshot_evidence_limited:
                 evidence_limited_accepted = True
                 defects.append(
                     ContractDefect(
@@ -205,17 +220,36 @@ def check_publish_contract(
                     )
                 )
             else:
-                defects.append(
-                    ContractDefect(
-                        type="unmet_requested_count",
-                        severity="high",
-                        message=(
-                            f"Article has {actual_count} of {requested_count} requested items "
-                            "without a clear evidence-limited explanation in the title and body."
-                        ),
-                        fixable=True,
-                    )
+                has_explanation = _has_evidence_limited_explanation(article_markdown)
+                title_falsely_claims = _title_falsely_claims_count(
+                    article_markdown, requested_count
                 )
+                if has_explanation and not title_falsely_claims and actual_count >= min_publishable:
+                    # Evidence-limited framing is acceptable
+                    evidence_limited_accepted = True
+                    defects.append(
+                        ContractDefect(
+                            type="unmet_requested_count",
+                            severity="medium",
+                            message=(
+                                f"Article has {actual_count} of {requested_count} requested items. "
+                                "Evidence-limited framing accepted."
+                            ),
+                            fixable=False,
+                        )
+                    )
+                else:
+                    defects.append(
+                        ContractDefect(
+                            type="unmet_requested_count",
+                            severity="high",
+                            message=(
+                                f"Article has {actual_count} of {requested_count} requested items "
+                                "without a clear evidence-limited explanation."
+                            ),
+                            fixable=True,
+                        )
+                    )
 
     # --- 4b. Unsupported recommendations (grounding failed) ---
     if is_recommendation and recommendation_audit:
@@ -225,7 +259,11 @@ def check_publish_contract(
         section_false = recommendation_audit.get("section_heading_false_positives", [])
         grounded_allowed = int(recommendation_audit.get("grounded_recommendations_count") or 0)
 
-        if answer_entity_type == "specific_fragrance_product" and brand_only_names:
+        is_fragrance_product = (
+            entity_subtype == "fragrance_product"
+            or answer_entity_type == "specific_fragrance_product"
+        )
+        if is_fragrance_product and brand_only_names:
             defects.append(
                 ContractDefect(
                     type="invalid_recommendations",

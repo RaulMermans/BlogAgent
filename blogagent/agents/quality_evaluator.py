@@ -72,8 +72,13 @@ def evaluate_quality(
     score = 100
 
     # --- 1. Top-N count mismatch (recommendation only) ---
+    # Use the rich extractor to avoid false "0 vs N" mismatches for unusual article formats.
     if is_recommendation and requested_count is not None:
-        actual_count = count_recommendations(draft)
+        from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
+            extract_recommendations_from_article,
+        )
+        rich_recs = extract_recommendations_from_article(draft)
+        actual_count = len(rich_recs) if rich_recs else count_recommendations(draft)
         quick_picks_in_draft = "Quick Picks" in draft
         if actual_count != requested_count:
             if actual_count == 0 and not quick_picks_in_draft:

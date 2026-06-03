@@ -187,3 +187,15 @@ class BlogRunState(BaseModel):
     revision_status: str = ""
     # Publish contract result (dict-serialized PublishContractResult)
     publish_contract: Optional[dict] = None
+    # Entity candidate ledger (dict-serialized CandidateLedger)
+    entity_candidate_ledger: Optional[dict] = None
+    # Allowed candidates from ledger (usable entity candidates for drafting)
+    allowed_candidates: list[dict] = Field(default_factory=list)
+    # Rejected candidates from ledger (for draft prompt context)
+    rejected_candidates: list[dict] = Field(default_factory=list)
+    # Compact ledger summary for API responses
+    candidate_ledger_summary: dict = Field(default_factory=dict)
+    # Entity audit result (dict-serialized EntityAudit — built after grounding)
+    entity_audit: Optional[dict] = None
+    # Unified answer count snapshot (dict-serialized AnswerCountSnapshot)
+    answer_count_snapshot: Optional[dict] = None

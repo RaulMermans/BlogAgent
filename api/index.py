@@ -93,6 +93,15 @@ class RunResponse(BaseModel):
     unmatched_recommendations: list[str] = []
     # Publish contract (final truth layer)
     publish_contract: dict[str, Any] = {}
+    # Entity candidate ledger (domain-aware candidate quality analysis)
+    entity_candidate_ledger: dict[str, Any] = {}
+    candidate_ledger_summary: dict[str, Any] = {}
+    allowed_candidates: list[dict[str, Any]] = []
+    rejected_candidates: list[dict[str, Any]] = []
+    # Entity audit (post-draft entity grounding)
+    entity_audit: dict[str, Any] = {}
+    # Answer count snapshot (unified count — canonical source of truth)
+    answer_count_snapshot: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +308,16 @@ def _run_topic(topic: str) -> RunResponse:
             "unmatched_names", []
         ),
         publish_contract=dict(state.publish_contract) if state.publish_contract else {},
+        entity_candidate_ledger=dict(state.entity_candidate_ledger)
+        if state.entity_candidate_ledger
+        else {},
+        candidate_ledger_summary=dict(state.candidate_ledger_summary),
+        allowed_candidates=list(state.allowed_candidates),
+        rejected_candidates=list(state.rejected_candidates),
+        entity_audit=dict(state.entity_audit) if state.entity_audit else {},
+        answer_count_snapshot=dict(state.answer_count_snapshot)
+        if state.answer_count_snapshot
+        else {},
     )
 
 
