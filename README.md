@@ -85,7 +85,7 @@ Before drafting, a deterministic evaluator checks whether the retrieved evidence
 #### Query Contract
 After intent detection, BlogAgent builds a deterministic `QueryContract` that defines the exact answer shape: `task_type`, `domain`, `requested_count`, `answer_entity_type`, valid/invalid item rules, required evidence fields, `minimum_publishable_items`, `evidence_limited_allowed`, and `exact_count_required`.
 
-For `7 best parfums for summer`, the contract is `recommendation / beauty_fragrance / specific_product` with `entity_subtype=fragrance_product`. Brand-only names, section headings, source titles, category phrases, SEO keywords, and citation-only text are rejected as valid product recommendations.
+For `7 best parfums for summer`, the contract is `recommendation / beauty_fragrance / specific_fragrance_product`. Brand-only names, section headings, source titles, category phrases, SEO keywords, and citation-only text are rejected as valid product recommendations.
 
 #### Unified Recommendation Candidate Table
 Before drafting, BlogAgent extracts and classifies candidates from source titles, snippets, extracted source text, and evidence facts. Each `RecommendationCandidate` records name, normalized name, entity type, usable status, confidence, rejection reason, source URLs/titles, source quality, evidence terms, and supported context.

@@ -157,8 +157,7 @@ def test_run_recommendation_response_includes_query_contract(monkeypatch):
     contract = body["query_contract"]
     assert contract["task_type"] == "recommendation"
     assert contract["domain"] == "beauty_fragrance"
-    assert contract["answer_entity_type"] == "specific_product"
-    assert contract["entity_subtype"] == "fragrance_product"
+    assert contract["answer_entity_type"] == "specific_fragrance_product"
     assert contract["requested_count"] == 7
     assert "recommendation_audit" in body
 

@@ -152,7 +152,7 @@ After `check_external_effects`, the pipeline builds `state.query_contract`. The 
 For `7 best parfums for summer`, the contract is:
 
 ```text
-recommendation / beauty_fragrance / specific_product / fragrance_product
+recommendation / beauty_fragrance / specific_fragrance_product
 ```
 
 That means a valid item must be a specific fragrance product with source evidence. Brand-only names (`Kilian`, `Glossier`), section headings (`How We Chose`), source titles, category phrases, SEO keywords, and citation-only text do not count.

@@ -24,20 +24,12 @@ from blogagent.agents.publishability_evaluator import (
 from blogagent.llm.client import detect_repeated_excerpts
 from blogagent.llm.schemas import LLMResult
 from blogagent.observability.agentpulse_client import current_client, current_node_id, safe_summary
-from blogagent.tools.article_entity_audit import (
-    audit_article_entities,
-    build_answer_count_snapshot,
-)
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
-from blogagent.tools.entity_candidate_ledger import build_candidate_ledger
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
-from blogagent.workflow.query_contract import (
-    QueryContract,
-    build_query_contract,
-)
+from blogagent.workflow.query_contract import QueryContract, build_query_contract
 from blogagent.workflow.recommendation import (
     FINANCIAL_DISCLAIMER_WARNING,
     MOCK_RECOMMENDATION_WARNING,
@@ -391,29 +383,6 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
         state.validated_candidates = [c.model_dump() for c in candidates if c.usable]
         state.recommendation_candidates_summary = build_candidates_summary(candidates)
 
-        # Build entity candidate ledger for quality analysis
-        ledger = build_candidate_ledger(
-            sources=state.selected_sources,
-            evidence_table=evidence_items,
-            query_contract=contract,
-            source_quality_scores=state.source_quality_scores,
-        )
-        state.entity_candidate_ledger = ledger.model_dump()
-        state.allowed_candidates = [c.model_dump() for c in ledger.allowed_candidates]
-        state.rejected_candidates = [c.model_dump() for c in ledger.rejected_candidates]
-        state.candidate_ledger_summary = ledger.to_summary_dict()
-        _event(
-            state,
-            f"candidate_ledger: domain={contract.domain} "
-            f"usable={ledger.usable_count} "
-            f"rejected={ledger.rejected_count} "
-            f"quality={ledger.table_quality}",
-        )
-
-        # If the ledger reports "failed", set evidence_limited_mode early
-        if ledger.table_quality == "failed":
-            state.evidence_limited_mode = True
-
     return state
 
 
@@ -459,13 +428,6 @@ def write_draft(state: BlogRunState) -> BlogRunState:
     )
     from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
 
-    # Prefer allowed_candidates from ledger; fall back to validated_candidates
-    allowed_recs = state.allowed_candidates or state.validated_candidates
-    rejected_recs = (
-        state.rejected_candidates
-        or [c for c in state.recommendation_candidates if not c.get("usable")]
-    )
-
     result = editor_agent.write_article_draft(
         topic=state.topic,
         outline=outline_out,
@@ -475,8 +437,8 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         is_financial=state.is_financial,
         skill_briefs=get_skill_briefs(state.selected_skills),
         query_contract=state.query_contract,
-        allowed_recommendations=allowed_recs,
-        rejected_candidates=rejected_recs,
+        allowed_recommendations=state.validated_candidates,
+        rejected_candidates=[c for c in state.recommendation_candidates if not c.get("usable")],
         evidence_limited_mode=state.evidence_limited_mode,
         source_quality_scores=state.source_quality_scores,
     )
@@ -742,9 +704,6 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
         count_recommendations,
     )
     from blogagent.llm.client import detect_repeated_excerpts  # noqa: PLC0415
-    from blogagent.tools.recommendation_extractor import (  # noqa: PLC0415
-        extract_recommendations_from_article,
-    )
 
     fin_warns: list[str] = []
     defects: list[dict] = []
@@ -773,13 +732,9 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
             )
 
     # --- Top-N count re-check post-revision ---
-    # Use the rich extractor (not the simple counter) to avoid false "0 vs N" mismatches.
-    # extract_recommendations_from_article handles more article formats than count_recommendations.
     evidence_limited = False
     if state.is_recommendation and state.requested_count is not None:
-        # Try rich extractor first; fall back to simple counter
-        rich_recs = extract_recommendations_from_article(state.draft)
-        actual = len(rich_recs) if rich_recs else count_recommendations(state.draft)
+        actual = count_recommendations(state.draft)
         if actual != state.requested_count:
             evidence_limited = _is_evidence_limited_article(
                 state.draft, actual, state.requested_count
@@ -795,51 +750,14 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
                     {"type": "top_n_mismatch", "severity": "low", "message": msg, "fixable": False}
                 )
             else:
-                # Check if allowed candidates cover the article count
-                # (evidenced but not matching requested_count exactly)
-                ledger_usable = 0
-                if state.entity_candidate_ledger:
-                    ledger_usable = state.entity_candidate_ledger.get("usable_count", 0)
-                elif state.validated_candidates:
-                    ledger_usable = len(state.validated_candidates)
-
-                if (
-                    actual > 0
-                    and actual >= (state.query_contract or {}).get(
-                        "minimum_publishable_items", 3
-                    )
-                    and ledger_usable < state.requested_count
-                ):
-                    # Ledger has fewer candidates than requested — this is evidence-limited
-                    evidence_limited = True
-                    msg = (
-                        f"Final validation: evidence-limited count ({actual} article "
-                        f"recommendations vs {state.requested_count} requested; "
-                        f"{ledger_usable} usable candidates found)."
-                    )
-                    fin_warns.append(msg)
-                    defects.append(
-                        {
-                            "type": "top_n_mismatch",
-                            "severity": "low",
-                            "message": msg,
-                            "fixable": False,
-                        }
-                    )
-                else:
-                    msg = (
-                        f"Final validation: top-N count still mismatched "
-                        f"({actual} vs {state.requested_count} requested)."
-                    )
-                    fin_warns.append(msg)
-                    defects.append(
-                        {
-                            "type": "top_n_mismatch",
-                            "severity": "high",
-                            "message": msg,
-                            "fixable": True,
-                        }
-                    )
+                msg = (
+                    f"Final validation: top-N count still mismatched "
+                    f"({actual} vs {state.requested_count} requested)."
+                )
+                fin_warns.append(msg)
+                defects.append(
+                    {"type": "top_n_mismatch", "severity": "high", "message": msg, "fixable": True}
+                )
 
     # --- Repeated-text re-check ---
     for w in detect_repeated_excerpts(state.draft):
@@ -987,49 +905,15 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         groundings=groundings,
     )
     contract = QueryContract.model_validate(state.query_contract or {})
-
-    # Use allowed_candidates from ledger when available (more accurate)
-    audit_candidates = list(state.allowed_candidates or state.validated_candidates)
-
     audit = audit_article_recommendations(
         markdown=state.draft,
-        allowed_candidates=audit_candidates,
+        allowed_candidates=list(state.validated_candidates),
         query_contract=contract,
         evidence_table=state.evidence_table,
         source_quality_scores=state.source_quality_scores,
         source_scores=state.source_scores,
     )
     state.recommendation_audit = audit.model_dump()
-
-    # Build generic EntityAudit
-    entity_audit = audit_article_entities(
-        article_markdown=state.draft,
-        allowed_candidates=audit_candidates,
-        query_contract=contract,
-        evidence_table=state.evidence_table,
-        source_quality_scores=state.source_quality_scores,
-        source_scores=state.source_scores,
-    )
-    state.entity_audit = entity_audit.model_dump()
-
-    # Build unified AnswerCountSnapshot — the canonical count for the pipeline
-    snapshot = build_answer_count_snapshot(
-        requested_count=state.requested_count,
-        allowed_candidates=audit_candidates,
-        entity_audit=entity_audit,
-        query_contract=contract,
-        minimum_publishable_items=contract.minimum_publishable_items,
-    )
-    state.answer_count_snapshot = snapshot.model_dump()
-    _event(
-        state,
-        f"answer_count_snapshot: "
-        f"requested={snapshot.requested_count} "
-        f"allowed={snapshot.allowed_candidates_count} "
-        f"article={snapshot.article_entities_count} "
-        f"grounded={snapshot.grounded_entities_count} "
-        f"status={snapshot.count_status}",
-    )
 
     grounded_count = state.recommendation_candidates_summary.get(
         "grounded_recommendations_count", 0
@@ -1103,27 +987,8 @@ def package_article(state: BlogRunState) -> BlogRunState:
 
 
 def evaluate_evidence_sufficiency_node(state: BlogRunState) -> BlogRunState:
-    """Evaluate whether retrieved evidence is sufficient before drafting.
-
-    Uses the entity candidate ledger's usable_count when available,
-    which is more accurate than the heuristic proxy.
-    """
+    """Evaluate whether retrieved evidence is sufficient before drafting."""
     enrichment_ran = state.search_pass_count > 1
-
-    # Use ledger usable_count when available — it's the authoritative candidate count
-    ledger_candidates: list[dict] | None = None
-    if state.is_recommendation and state.entity_candidate_ledger:
-        # Build a minimal candidate list matching the expected shape
-        ledger_candidates = [
-            {"usable": True, "name": n}
-            for n in state.entity_candidate_ledger.get("usable_names", [])
-        ]
-        # Pad with non-usable markers if there are rejected candidates
-        rejected_count = state.entity_candidate_ledger.get("rejected_count", 0)
-        ledger_candidates.extend([{"usable": False}] * rejected_count)
-    elif state.is_recommendation and state.validated_candidates is not None:
-        ledger_candidates = state.validated_candidates
-
     result = evaluate_evidence_sufficiency(
         topic=state.topic,
         requested_count=state.requested_count,
@@ -1132,7 +997,9 @@ def evaluate_evidence_sufficiency_node(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
         evidence_table=state.evidence_table,
         enrichment_already_ran=enrichment_ran,
-        recommendation_candidates=ledger_candidates if state.is_recommendation else None,
+        recommendation_candidates=state.validated_candidates
+        if state.is_recommendation
+        else None,
     )
     state.evidence_sufficiency = result.model_dump()
     state.evidence_limited_mode = result.recommended_action == "evidence_limited"
@@ -1341,8 +1208,6 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
     pub_eval = state.publishability_evaluation or {}
     # Pass recommendation grounding data when available (after ground_article_recommendations ran)
     rec_grounding = state.recommendation_candidates_summary if state.is_recommendation else None
-    # Use allowed_candidates from ledger when available
-    candidates_for_contract = state.allowed_candidates or state.validated_candidates
     result: PublishContractResult = check_publish_contract(
         article_markdown=state.draft,
         topic=state.topic,
@@ -1354,9 +1219,8 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         source_quality_scores=state.source_quality_scores,
         recommendation_grounding=rec_grounding if rec_grounding else None,
         query_contract=state.query_contract or None,
-        validated_candidates=candidates_for_contract,
+        validated_candidates=state.validated_candidates,
         recommendation_audit=state.recommendation_audit or None,
-        answer_count_snapshot=state.answer_count_snapshot or None,
     )
     state.publish_contract = result.model_dump()
     _event(
