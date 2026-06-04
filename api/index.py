@@ -102,6 +102,9 @@ class RunResponse(BaseModel):
     entity_audit: dict[str, Any] = {}
     # Answer count snapshot (unified count — canonical source of truth)
     answer_count_snapshot: dict[str, Any] = {}
+    # Draft candidate compliance (passes + failure reason)
+    draft_candidate_compliance: dict[str, Any] = {}
+    draft_recommended_entities: list[dict[str, Any]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +321,10 @@ def _run_topic(topic: str) -> RunResponse:
         answer_count_snapshot=dict(state.answer_count_snapshot)
         if state.answer_count_snapshot
         else {},
+        draft_candidate_compliance=dict(state.draft_candidate_compliance)
+        if state.draft_candidate_compliance
+        else {},
+        draft_recommended_entities=list(state.draft_recommended_entities),
     )
 
 
@@ -1345,6 +1352,37 @@ def _build_app_html() -> str:
       document.getElementById('output-section').insertBefore(warnBanner, document.getElementById('output-section').firstChild);
     }
 
+    // Draft candidate compliance banner
+    const dcc = data.draft_candidate_compliance || {};
+    const snap = data.answer_count_snapshot || {};
+    const snapAllowed = snap.allowed_candidates_count || 0;
+    const snapRequested = snap.requested_count;
+    const snapArticle = snap.article_entities_count || 0;
+    const snapStatus = snap.count_status || '';
+
+    if (dcc.passes === false) {
+      const dccBanner = document.createElement('div');
+      const dccAllowed = dcc.allowed_count || 0;
+      const dccRecommended = dcc.recommended_count || 0;
+      const dccReason = dcc.failure_reason || '';
+      if (dccReason.includes('quick_picks') || !dcc.has_quick_picks) {
+        dccBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
+        dccBanner.textContent = 'Draft failed: Quick Picks section missing from recommendation article.';
+      } else if (dccAllowed >= (snapRequested || dccAllowed)) {
+        dccBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
+        dccBanner.textContent = 'Draft failed candidate compliance: ' + dccAllowed + ' allowed candidates were available, but the article used only ' + dccRecommended + '.';
+      } else {
+        dccBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;';
+        dccBanner.textContent = 'Draft compliance issue: ' + (dccReason || 'candidate table not followed');
+      }
+      document.getElementById('output-section').insertBefore(dccBanner, document.getElementById('output-section').firstChild);
+    } else if (snapStatus === 'evidence_limited' && snapAllowed < (snapRequested || snapAllowed)) {
+      const evBanner = document.createElement('div');
+      evBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
+      evBanner.textContent = 'Evidence-limited: only ' + snapAllowed + ' allowed candidates found for ' + (snapRequested || '?') + ' requested.';
+      document.getElementById('output-section').insertBefore(evBanner, document.getElementById('output-section').firstChild);
+    }
+
     // Final validation status — show prominently if failed or evidence-limited
     const fvStatus = data.final_validation_status || 'passed';
     const fvDefects = data.final_validation_defects || [];
@@ -1476,7 +1514,7 @@ def _build_app_html() -> str:
     _hideWorkflowPanel();
     // Remove dynamically injected rows from prior runs
     const skillDivs = document.querySelectorAll('.form-card .meta-label');
-    const dynamicLabels = ['Editorial Skills', 'Editorial Polish', 'Query Contract', 'Recommendation Candidates', 'Enrichment Queries'];
+    const dynamicLabels = ['Editorial Skills', 'Editorial Polish', 'Query Contract', 'Recommendation Candidates', 'Enrichment Queries', 'Candidate Ledger', 'Draft Compliance'];
     skillDivs.forEach(el => { if (dynamicLabels.includes(el.textContent)) el.closest('div').remove(); });
   }
 

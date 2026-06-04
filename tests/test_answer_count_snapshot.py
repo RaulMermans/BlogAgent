@@ -71,6 +71,24 @@ class TestBuildAnswerCountSnapshot:
         assert snapshot.evidence_limited is False
         assert snapshot.article_entities_count == 7
         assert snapshot.grounded_entities_count == 7
+        assert snapshot.recommended_entities_count == 7
+
+    def test_recommended_entities_count_uses_compliance(self):
+        class Compliance:
+            passes = True
+            recommended_count = 6
+
+        snapshot = build_answer_count_snapshot(
+            requested_count=7,
+            allowed_candidates=_allowed(7),
+            entity_audit=_audit(7, 7),
+            query_contract=_fragrance_contract(7),
+            draft_candidate_compliance=Compliance(),
+        )
+
+        assert snapshot.recommended_entities_count == 6
+        assert snapshot.count_status == "failed"
+        assert "recommended_entities_count" in (snapshot.failure_reason or "")
 
     def test_evidence_limited_when_fewer_than_requested(self):
         """requested=7, allowed=3, article=3, grounded=3 → evidence_limited (not 'failed')"""

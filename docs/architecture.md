@@ -109,6 +109,7 @@ check_publish_contract           → deterministic final truth layer; hard-fail 
 [if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
 ground_article_recommendations   → extract recs from final article; match to evidence; update summary
+check_draft_candidate_compliance → verify draft used allowed candidates (new — see below)
 recommendation_audit             → compare article recs to validated candidate table
 check_publish_contract           → re-run after polish + grounding to reflect improvements
 package_article                  → assemble ArticlePackage (with SEO fields)
@@ -183,19 +184,45 @@ Each candidate tracks:
 - `rejection_reason` — why the candidate cannot be used
 - `low_confidence` — True if only in a single low-quality source
 
-`state.validated_candidates` is the single allowed recommendation table used by evidence sufficiency, drafting, article audit, article grounding, publish contract, API, and UI.
+The `EntityCandidateLedger` wraps extracted candidates in a stricter entity-quality layer. Candidate Cleanliness Gate v2 requires a non-empty canonical name, matching answer entity type, high/medium source quality, known source type, compact evidence spans, supported context, `clean_name_score >= 0.75`, and `evidence_score >= 0.65`. It rejects prose fragments, truncation, source titles, section headings, brand clusters, catalog/navigation residue, and raw price artifacts that cannot be canonicalized.
+
+`state.allowed_candidates` is the locked recommendation table used by drafting, draft candidate compliance, article audit, article grounding, publish contract, API, and UI. `state.validated_candidates` remains a compatibility fallback for older recommendation extraction outputs.
 
 ### Contract-Aware Draft Generation
 
 Recommendation draft prompts receive:
 - `query_contract`
-- `allowed_recommendations` (`state.validated_candidates`)
+- `allowed_recommendations` (`state.allowed_candidates`)
 - rejected candidates and rejection reasons
 - `evidence_limited_mode`
 - source quality summary
 - selected skills
 
-The drafter may only recommend allowed candidates. It may not introduce products, recommend brand-only names for product-level contracts, or turn headings/source titles into recommendations. When the allowed count is below the requested count, the draft must use evidence-limited title/body framing.
+The drafter may only recommend allowed candidates. It may not introduce products, recommend brand-only names for product-level contracts, or turn headings/source titles into recommendations. When the allowed count is at least the requested count, the draft must use exactly the requested number of allowed candidates. When the allowed count is below the requested count, the draft must use all allowed candidates and apply evidence-limited title/body framing.
+
+### Draft Candidate Compliance
+
+`blogagent/tools/draft_candidate_compliance.py` — deterministic, no LLM.
+
+After drafting, BlogAgent checks the article against the locked candidate table. `DraftOutput.recommended_entities` is preferred because it carries `candidate_id`; if a model omits that field but the markdown uses allowed names, BlogAgent derives `recommended_entities` from the markdown.
+
+The check fails when Quick Picks is missing, a recommended entity is not in the allowed table, allowed candidates are sufficient but the draft uses fewer than requested, or an evidence-limited draft does not use all allowed candidates. These failures are recorded as `state.draft_candidate_compliance` and feed `AnswerCountSnapshot`, run trace, API/UI banners, and the publish contract.
+
+### AnswerCountSnapshot
+
+`blogagent/tools/article_entity_audit.py` builds the canonical count snapshot after audit and draft compliance:
+
+- `requested_count`
+- `allowed_candidates_count`
+- `recommended_entities_count`
+- `article_entities_count`
+- `grounded_entities_count`
+- `evidence_limited`
+- `draft_candidate_compliance_passes`
+- `count_status`
+- `failure_reason`
+
+`satisfied` requires allowed, recommended, article, and grounded counts to match the requested count. `evidence_limited` only applies when allowed candidates are fewer than requested but at least the minimum publishable count, and the article uses all allowed candidates. If enough allowed candidates exist but the draft uses too few, status is `failed` with `draft_candidate_compliance_failed`.
 
 ### Post-Article Recommendation Grounding
 
@@ -225,7 +252,7 @@ The publish contract uses this grounding data to verify that article recommendat
 
 ### Post-Draft Recommendation Audit
 
-`state.recommendation_audit` compares final article recommendations to `state.validated_candidates`.
+`state.recommendation_audit` compares final article recommendations to `state.allowed_candidates`.
 
 It reports:
 - article recommendation count
@@ -289,6 +316,8 @@ Hard-fail conditions that override everything else:
 | Missing Quick Picks section | HIGH | 65 |
 | Fewer than 3 recommendations | HIGH | 65 |
 | Unmet requested count without valid evidence-limited explanation | HIGH | 59 |
+| Draft candidate compliance failed | HIGH | 59 |
+| Candidate ledger failed | HIGH | 59 |
 | Invalid recommendations outside query contract | HIGH | 59 |
 | Insufficient validated candidates | HIGH | 65 |
 | Weak source dominance (>60% low-quality) | MEDIUM | 74 |

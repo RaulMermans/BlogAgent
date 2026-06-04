@@ -308,9 +308,49 @@ class BeautyFragranceAdapter(DomainAdapter):
             return False
         if lower in _BRAND_ONLY_NAMES:
             return False
+
+        # Reject prose fragments before further checks
+        if self._is_prose_fragment(lower, words):
+            return False
+
         if any(signal in lower for signal in _PRODUCT_SIGNAL_TERMS):
+            # "Eau de" as a trailing incomplete token is not a product
+            if lower.endswith(" eau de") or lower.endswith(" de") or lower.endswith(" with"):
+                return False
             return True
         for brand in _BRAND_ONLY_NAMES:
             if lower.startswith(brand + " ") and len(words) > len(brand.split()):
-                return True
+                # Check that what follows the brand is not prose
+                remainder = lower[len(brand):].strip()
+                if not self._is_prose_fragment(remainder, remainder.split()):
+                    return True
+        return False
+
+    # Prose verbs that should never appear after a brand prefix in a product name
+    _PROSE_VERB_SET: frozenset[str] = frozenset(
+        {
+            "will", "always", "went", "down", "rabbit", "can't", "won't", "didn't",
+            "is", "was", "are", "were", "have", "has", "had", "but", "on",
+            "never", "still", "just", "really", "i", "me", "my", "got",
+            "smells", "wore", "bought", "tried", "felt", "said", "loved",
+            "actually", "literally", "personally", "definitely", "enough",
+            "always", "usually", "sometimes", "often", "very",
+        }
+    )
+    # First-person indicators
+    _FIRST_PERSON_SET: frozenset[str] = frozenset({"i", "me", "my", "myself", "i've", "i'm"})
+
+    def _is_prose_fragment(self, lower: str, words: list[str]) -> bool:
+        """Return True if the string looks like a prose fragment rather than a product name."""
+        # First-person anywhere
+        if any(fp in words for fp in self._FIRST_PERSON_SET):
+            return True
+        # Prose verbs after position 1
+        if len(words) >= 3:
+            for w in words[2:]:
+                if w.strip(".,;:!?\"'") in self._PROSE_VERB_SET:
+                    return True
+        # Unmatched quotation marks
+        if lower.count('"') % 2 != 0:
+            return True
         return False

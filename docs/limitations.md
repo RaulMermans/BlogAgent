@@ -133,7 +133,34 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 - The publish contract uses word-count patterns, term lists, and phrase matching. It can be fooled by content that matches surface patterns without genuine quality.
 - Query-contract enforcement and product/entity classification are heuristic. They improve obvious failures but can miss aliases, flankers, niche brands, or unusually named products.
 - `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
-- For `publish_ready_with_warnings`: evidence-limited articles are accepted when the framing is detected as valid, but the framing detection is pattern-matching, not semantic judgment.
+- For `publish_ready_with_warnings`: evidence-limited articles are accepted only when the candidate ledger has fewer allowed candidates than requested and the article uses all allowed candidates. Framing detection is pattern-matching, not semantic judgment.
+
+## Candidate Cleanliness Gate v2
+
+The candidate ledger now applies a strict cleanliness gate before marking a candidate `usable`:
+
+- `clean_name_score >= 0.75` — prose fragments, emoji, social residue, truncated names, and first-person phrases are rejected
+- `evidence_score >= 0.65` — candidates with very weak source backing are rejected
+- `evidence_spans` required — at least one text span from source evidence must contain the candidate name
+- Prose fragment detection — candidates where the 3rd+ word is a prose verb (will, went, always, etc.) are rejected
+- Incomplete ending detection — names ending with "Eau de", "with", "for", "will", etc. are rejected as truncated
+
+**Known gap:** The cleanliness gate is heuristic. Edge cases exist:
+- Product names that coincidentally match prose patterns may be rejected (false negatives are rare but possible)
+- Domain adapters handle specific domains (fragrance, makeup, etc.). A new domain may need adapter updates for accurate entity classification.
+- Cleanliness scoring may need ongoing example-driven calibration as new search result shapes are encountered.
+
+## Draft Candidate Compliance
+
+For recommendation topics, the pipeline enforces candidate-bound drafting:
+
+- When `allowed_count >= requested_count`, the draft MUST use exactly `requested_count` recommendations, all from the allowed table
+- When `allowed_count < requested_count`, evidence-limited framing is accepted only if the article uses all allowed candidates
+- Missing Quick Picks section is a hard compliance failure
+- Using entities outside the allowed table is a compliance failure
+- Using fewer than the requested count when enough allowed candidates exist is `draft_candidate_compliance_failed`, not evidence-limited
+
+**Known gap:** Compliance matching is name-based (exact + containment + brand-word overlap). A live model that uses a product alias not captured in the allowed table may fail compliance even if the underlying product is the same. Human review should verify entity identity before publishing.
 
 ## Recommendation Candidate Extraction
 

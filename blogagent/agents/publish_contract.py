@@ -62,6 +62,8 @@ _SCORE_CAPS: dict[str, int] = {
     "generic_seo_voice": 79,  # generic intro / no editorial thesis
     "insufficient_recommendation_depth": 74,  # picks lack "best for" / why / context
     "thin_article": 65,  # article body is very short
+    "draft_candidate_compliance_failed": 59,  # model did not use allowed candidates
+    "candidate_ledger_failed": 59,  # candidate ledger quality gate failed
 }
 
 # ---------------------------------------------------------------------------
@@ -91,6 +93,8 @@ def check_publish_contract(
     validated_candidates: Optional[list[dict]] = None,
     recommendation_audit: Optional[dict] = None,
     answer_count_snapshot: Optional[dict] = None,
+    draft_candidate_compliance: Optional[dict] = None,
+    candidate_ledger_summary: Optional[dict] = None,
 ) -> PublishContractResult:
     """Run hard-fail publish contract checks.
 
@@ -156,6 +160,50 @@ def check_publish_contract(
 
     quick_picks_present = "Quick Picks" in article_markdown
 
+    # --- 1b. Draft candidate compliance hard fail ---
+    # If allowed >= requested but article used fewer, this is a draft compliance failure,
+    # NOT evidence-limited. Treat as high-severity defect.
+    compliance_allowed_count: Optional[int] = None
+    compliance_recommended_count: Optional[int] = None
+    if draft_candidate_compliance and is_recommendation:
+        dc_passes = bool(draft_candidate_compliance.get("passes", True))
+        compliance_allowed_count = draft_candidate_compliance.get("allowed_count")
+        compliance_recommended_count = draft_candidate_compliance.get("recommended_count")
+        if not dc_passes:
+            dc_reason = draft_candidate_compliance.get("failure_reason", "")
+            if "quick_picks" in (dc_reason or "").lower():
+                pass  # Will be caught by the Quick Picks check below
+            else:
+                defects.append(
+                    ContractDefect(
+                        type="draft_candidate_compliance_failed",
+                        severity="high",
+                        message=(
+                            dc_reason or (
+                                f"Draft did not use the required candidates: "
+                                f"{compliance_allowed_count} were available, "
+                                f"{compliance_recommended_count} used."
+                            )
+                        ),
+                        fixable=True,
+                    )
+                )
+
+    # Candidate ledger quality hard fail
+    if candidate_ledger_summary and is_recommendation:
+        ledger_quality = candidate_ledger_summary.get("table_quality", "")
+        if ledger_quality == "failed":
+            ledger_issues = candidate_ledger_summary.get("quality_issues", [])
+            issue_str = ledger_issues[0] if ledger_issues else "ledger quality failed"
+            defects.append(
+                ContractDefect(
+                    type="candidate_ledger_failed",
+                    severity="high",
+                    message=f"Candidate ledger quality=failed: {issue_str[:120]}",
+                    fixable=False,
+                )
+            )
+
     # --- 2. Missing Quick Picks section ---
     if is_recommendation and not quick_picks_present:
         defects.append(
@@ -201,12 +249,31 @@ def check_publish_contract(
         )
 
     # --- 4. Unmet requested count ---
-    # Use snapshot count_status when available for coherent reporting
+    # Use snapshot count_status when available for coherent reporting.
+    # IMPORTANT: evidence-limited is only accepted when allowed_count < requested_count.
+    # If allowed >= requested but article used fewer, that is a draft compliance failure.
     evidence_limited_accepted = False
     if is_recommendation and requested_count is not None and actual_count is not None:
         if actual_count < requested_count:
-            # When snapshot says "evidence_limited", treat as acceptable framing
-            if snapshot_count_status == "evidence_limited" or snapshot_evidence_limited:
+            # Check whether allowed candidates covered the requested count
+            snap_allowed_count = (
+                answer_count_snapshot.get("allowed_candidates_count", 0)
+                if answer_count_snapshot
+                else (compliance_allowed_count or 0)
+            )
+            enough_candidates = (
+                snap_allowed_count >= requested_count
+                if snap_allowed_count > 0
+                else False
+            )
+
+            if enough_candidates:
+                # Allowed >= requested but article used fewer → this is draft compliance,
+                # not evidence-limited. Do NOT accept evidence-limited framing.
+                # The draft_candidate_compliance_failed defect above already covers this.
+                pass  # already handled by compliance check
+            elif snapshot_count_status == "evidence_limited" or snapshot_evidence_limited:
+                # Snapshot explicitly says evidence-limited → accept framing
                 evidence_limited_accepted = True
                 defects.append(
                     ContractDefect(

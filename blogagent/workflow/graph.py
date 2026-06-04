@@ -522,6 +522,81 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     else:
         trace.append("✓ Final validation: passed")
 
+    # Candidate ledger quality
+    if state.is_recommendation and state.entity_candidate_ledger:
+        ledger = state.entity_candidate_ledger
+        ledger_quality = ledger.get("table_quality", "")
+        ledger_usable = ledger.get("usable_count", 0)
+        ledger_rejected = ledger.get("rejected_count", 0)
+        requested_c = state.requested_count
+        if ledger_quality == "strong":
+            trace.append(
+                f"✓ Candidate ledger: strong — {ledger_usable} usable"
+                + (f" / {requested_c} requested" if requested_c else "")
+            )
+        elif ledger_quality == "limited":
+            trace.append(
+                f"⚠ Candidate ledger: limited — {ledger_usable} usable"
+                + (f" / {requested_c} requested" if requested_c else "")
+                + f", {ledger_rejected} rejected"
+            )
+        elif ledger_quality == "failed":
+            issues = ledger.get("quality_issues", [])
+            issue_str = issues[0] if issues else "quality gate failed"
+            trace.append(
+                f"⚠ Candidate ledger: failed — {issue_str[:80]}"
+            )
+
+    # Draft candidate compliance
+    if state.is_recommendation and state.draft_candidate_compliance:
+        dc = state.draft_candidate_compliance
+        allowed_c = dc.get("allowed_count", 0)
+        recommended_c = dc.get("recommended_count", 0)
+        requested_c = state.requested_count
+        if dc.get("passes"):
+            trace.append(
+                f"✓ Draft compliance: {recommended_c}/{requested_c or allowed_c} "
+                "allowed candidates used"
+            )
+        else:
+            trace.append(
+                f"⚠ Draft compliance: failed — article used {recommended_c}"
+                + (f"/{requested_c}" if requested_c else "")
+                + f" required candidates (allowed={allowed_c})"
+            )
+
+    # Answer count snapshot
+    if state.is_recommendation and state.answer_count_snapshot:
+        snap = state.answer_count_snapshot
+        snap_status = snap.get("count_status", "")
+        snap_requested = snap.get("requested_count")
+        snap_allowed = snap.get("allowed_candidates_count", 0)
+        snap_article = snap.get("article_entities_count", 0)
+        snap_grounded = snap.get("grounded_entities_count", 0)
+        if snap_status == "satisfied":
+            trace.append(
+                f"✓ Count status: satisfied — {snap_article}/{snap_requested or snap_allowed} "
+                f"(grounded={snap_grounded})"
+            )
+        elif snap_status == "evidence_limited":
+            trace.append(
+                f"⚠ Count status: evidence_limited — {snap_article} of "
+                f"{snap_requested} requested (allowed={snap_allowed})"
+            )
+        elif snap_status == "failed":
+            failure_reason = snap.get("failure_reason", "count mismatch")
+            if "draft_candidate_compliance" in (failure_reason or ""):
+                trace.append(
+                    f"⚠ Count status: failed — draft_candidate_compliance_failed "
+                    f"({snap_allowed} allowed, {snap_article} in article, "
+                    f"{snap_requested} requested)"
+                )
+            else:
+                trace.append(
+                    f"⚠ Count status: failed — {snap_article}/{snap_requested} "
+                    f"(allowed={snap_allowed})"
+                )
+
     # Recommendation grounding (post-article)
     if state.is_recommendation and state.recommendation_candidates_summary:
         cs = state.recommendation_candidates_summary

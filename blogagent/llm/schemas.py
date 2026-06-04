@@ -22,10 +22,22 @@ class OutlineOutput(BaseModel):
     seo_keywords: list[str] = Field(default_factory=list)
 
 
+class DraftRecommendedEntity(BaseModel):
+    """A named entity recommended in the draft, linked to an allowed candidate."""
+
+    candidate_id: str = ""
+    name: str
+    section_heading: str | None = None
+    source_url: str | None = None
+
+
 class DraftOutput(BaseModel):
     article_markdown: str
     meta_description: str
     seo_keywords: list[str] = Field(default_factory=list)
+    # For recommendation topics: structured list of entities used in the draft.
+    # Empty list means model did not return structured entities (fallback: derive from markdown).
+    recommended_entities: list[DraftRecommendedEntity] = Field(default_factory=list)
 
 
 class ClaimItem(BaseModel):

@@ -87,10 +87,12 @@ After intent detection, BlogAgent builds a deterministic `QueryContract` that de
 
 For `7 best parfums for summer`, the contract is `recommendation / beauty_fragrance / specific_fragrance_product`. Brand-only names, section headings, source titles, category phrases, SEO keywords, and citation-only text are rejected as valid product recommendations.
 
-#### Unified Recommendation Candidate Table
-Before drafting, BlogAgent extracts and classifies candidates from source titles, snippets, extracted source text, and evidence facts. Each `RecommendationCandidate` records name, normalized name, entity type, usable status, confidence, rejection reason, source URLs/titles, source quality, evidence terms, and supported context.
+#### Entity Candidate Ledger
+Before drafting, BlogAgent extracts and classifies candidates from source titles, snippets, extracted source text, and evidence facts, then promotes only clean, source-backed entities into `state.allowed_candidates`.
 
-`state.validated_candidates` is the single allowed recommendation table used by evidence sufficiency, drafting, post-draft audit, article grounding, publish contract, and API/UI responses.
+The Candidate Cleanliness Gate v2 rejects malformed fragments, source titles, section headings, brand clusters, catalog/navigation residue, empty evidence spans, unknown weak sources, and truncated names such as `Tom Ford Neroli Portofino Eau de`. The locked allowed table carries `candidate_id`, canonical name, source URL/title, source quality/type, evidence span, evidence terms, and supported context.
+
+`state.allowed_candidates` is the single allowed recommendation table used by drafting, draft candidate compliance, article audit, article grounding, publish contract, and API/UI responses. `state.validated_candidates` is retained only as a compatibility fallback.
 
 #### Enrichment Search
 When evidence is insufficient for a recommendation topic (and Tavily is active):
@@ -124,9 +126,14 @@ After editorial polish, for recommendation topics, the pipeline extracts named p
 - The publish contract uses this grounding to verify source backing — a recommendation present in the article but unmatched to evidence does not count as usable
 
 #### Post-Draft Recommendation Audit
-After draft/revision/polish, BlogAgent audits article recommendations against `state.validated_candidates`. It flags recommendations outside the allowed list, brand-only recommendations for product-level fragrance contracts, section heading/source/category false positives, unsupported recommendations, and model-introduced source-grounded candidates.
+After draft/revision/polish, BlogAgent audits article recommendations against `state.allowed_candidates`. It flags recommendations outside the allowed list, brand-only recommendations for product-level fragrance contracts, section heading/source/category false positives, unsupported recommendations, and model-introduced source-grounded candidates.
 
 The API exposes `recommendation_audit`, and the run trace includes validated candidate and audit results.
+
+#### Draft Candidate Compliance
+For recommendation topics, `DraftOutput.recommended_entities` links the draft back to allowed `candidate_id`s. If a live model omits `recommended_entities` but the markdown uses allowed candidate names, BlogAgent derives the list deterministically from the markdown.
+
+When `allowed_candidates_count >= requested_count`, the article must use exactly the requested number of allowed candidates and include Quick Picks plus one detail section per recommended entity. If it uses fewer, the failure is `draft_candidate_compliance_failed`, not evidence-limited. Evidence-limited status is only valid when the ledger has fewer allowed candidates than requested and the article uses all of them.
 
 #### DraftOutput Missing-Field Completion
 When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omits `meta_description` or `seo_keywords`:

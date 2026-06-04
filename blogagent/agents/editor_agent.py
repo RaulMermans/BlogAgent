@@ -401,21 +401,33 @@ def _mock_recommendation_draft(
     lines.append("## Quick Picks")
     lines.append("")
     if has_allowed:
-        if requested_count and len(allowed_recommendations) < requested_count:
+        target_count = len(allowed_recommendations)
+        if requested_count and len(allowed_recommendations) >= requested_count:
+            target_count = requested_count
+        draft_candidates = allowed_recommendations[:target_count]
+
+        if requested_count and len(draft_candidates) < requested_count:
             lines.append(
                 f"We set out to find {requested_count} recommendations, but the available "
-                f"sources only supported {len(allowed_recommendations)} specific products "
+                f"sources only supported {len(draft_candidates)} specific products "
                 "with confidence. This draft lists only validated candidates."
             )
             lines.append("")
         lines.append("Based on the validated candidate table, the source-backed picks are:")
-        for cand in allowed_recommendations:
+        for cand in draft_candidates:
+            # Support EntityCandidate (canonical_name) and RecommendationCandidate (name) dicts
+            cand_name = (
+                cand.get("canonical_name")
+                or cand.get("name")
+                or cand.get("raw_mention")
+                or ""
+            ).strip()
             context = cand.get("supported_context") or cand.get("evidence_terms") or []
             context_text = f" — best for {context[0]}" if context else ""
             urls = cand.get("source_urls") or []
             title_ref = (cand.get("source_titles") or ["source evidence"])[0]
             citation = f" ([{title_ref}]({urls[0]}))" if urls else ""
-            lines.append(f"- {cand.get('name', '').strip()}{context_text}{citation}")
+            lines.append(f"- {cand_name}{context_text}{citation}")
     elif has_real_evidence:
         lines.append("Based on available sources, the following were identified:")
         for item in real_items[:5]:
@@ -454,8 +466,13 @@ def _mock_recommendation_draft(
         lines.append(f"## {section}")
         lines.append("")
         if has_allowed and section.lower().startswith("best"):
-            for cand in allowed_recommendations:
-                name = cand.get("name", "")
+            for cand in draft_candidates:
+                cand_name = (
+                    cand.get("canonical_name")
+                    or cand.get("name")
+                    or cand.get("raw_mention")
+                    or ""
+                ).strip()
                 terms = cand.get("evidence_terms") or cand.get("supported_context") or []
                 best_for = (
                     ", ".join(terms[:2]) if terms else "source-backed consideration"
@@ -463,9 +480,9 @@ def _mock_recommendation_draft(
                 urls = cand.get("source_urls") or []
                 title_ref = (cand.get("source_titles") or ["source evidence"])[0]
                 citation = f" [{title_ref}]({urls[0]})" if urls else ""
-                lines.append(f"### {name}")
+                lines.append(f"### {cand_name}")
                 lines.append("")
-                lines.append(f"- **Name**: {name}")
+                lines.append(f"- **Name**: {cand_name}")
                 lines.append(f"- **Best for**: {best_for}")
                 lines.append(
                     "- **Why it works**: The validated sources mention this product "
@@ -512,6 +529,26 @@ def _mock_recommendation_draft(
         article_markdown=article_md,
         meta_description=meta,
         seo_keywords=keywords,
+        recommended_entities=[
+            {
+                "candidate_id": c.get("candidate_id", ""),
+                "name": (
+                    c.get("canonical_name")
+                    or c.get("name")
+                    or c.get("raw_mention")
+                    or ""
+                ),
+                "section_heading": (
+                    c.get("canonical_name")
+                    or c.get("name")
+                    or c.get("raw_mention")
+                    or None
+                ),
+                "source_url": (c.get("source_urls") or [None])[0],
+            }
+            for c in (draft_candidates if has_allowed else [])
+            if (c.get("canonical_name") or c.get("name") or c.get("raw_mention"))
+        ],
     )
 
 
@@ -525,48 +562,77 @@ def _format_query_contract_prompt(
     """Append contract-aware drafting instructions to the recommendation prompt."""
     allowed_lines = []
     for c in allowed_recommendations[:20]:
+        # Support both EntityCandidate dicts and RecommendationCandidate dicts
+        cand_name = (
+            c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""
+        ).strip()
+        cand_id = c.get("candidate_id", "")
         terms = c.get("evidence_terms") or c.get("supported_context") or []
         urls = c.get("source_urls") or []
         allowed_lines.append(
-            f"- {c.get('name')} | quality={c.get('source_quality')} | "
-            f"terms={', '.join(terms[:6]) or 'none'} | sources={', '.join(urls[:2])}"
+            f"- [{cand_id or cand_name}] {cand_name} | "
+            f"quality={c.get('source_quality')} | "
+            f"terms={', '.join(terms[:6]) or 'none'} | "
+            f"sources={', '.join(urls[:2])}"
         )
     rejected_lines = []
     for c in rejected_candidates[:20]:
         reason = c.get("rejection_reason") or c.get("reason")
+        cand_name = (
+            c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""
+        ).strip()
         rejected_lines.append(
-            f"- {c.get('name')} | type={c.get('entity_type')} | reason={reason}"
+            f"- {cand_name} | type={c.get('entity_type')} | reason={reason}"
         )
     quality_counts = {
         "high": sum(1 for s in source_quality_scores if s.get("quality") == "high"),
         "medium": sum(1 for s in source_quality_scores if s.get("quality") == "medium"),
         "low": sum(1 for s in source_quality_scores if s.get("quality") == "low"),
     }
+    requested_count = query_contract.get("requested_count")
+    allowed_count = len(allowed_recommendations)
+    enough_candidates = allowed_count >= (requested_count or 0) if requested_count else True
+
+    count_rule = ""
+    if requested_count and enough_candidates:
+        count_rule = (
+            f"- You have {allowed_count} allowed candidates and {requested_count} were requested.\n"
+            f"- You MUST include exactly {requested_count} recommendations from the ALLOWED list.\n"
+            "- Using fewer is a compliance failure, not evidence-limited.\n"
+        )
+    elif requested_count and not enough_candidates:
+        count_rule = (
+            f"- Only {allowed_count} candidates available for {requested_count} requested.\n"
+            "- Evidence-limited: include all {allowed_count} candidates with a note "
+            "that the full count could not be sourced.\n"
+        )
+
     return (
         "\n\nQUERY CONTRACT — MANDATORY:\n"
         f"- task_type: {query_contract.get('task_type')}\n"
         f"- domain: {query_contract.get('domain')}\n"
-        f"- requested_count: {query_contract.get('requested_count')}\n"
+        f"- requested_count: {requested_count}\n"
         f"- answer_entity_type: {query_contract.get('answer_entity_type')}\n"
         f"- minimum_publishable_items: {query_contract.get('minimum_publishable_items')}\n"
         f"- evidence_limited_mode: {evidence_limited_mode}\n"
         f"- source_quality: {quality_counts['high']} high, "
         f"{quality_counts['medium']} medium, {quality_counts['low']} low\n\n"
-        "ALLOWED RECOMMENDATIONS — you may only recommend these items:\n"
+        "ALLOWED RECOMMENDATIONS — you may ONLY recommend items from this locked table:\n"
         + ("\n".join(allowed_lines) if allowed_lines else "- none\n")
-        + "\n\nREJECTED CANDIDATES — do not recommend or count these:\n"
+        + "\n\nREJECTED CANDIDATES — do NOT recommend or count these:\n"
         + ("\n".join(rejected_lines) if rejected_lines else "- none\n")
-        + "\n\nContract-aware drafting rules:\n"
-        "- You may only recommend items from ALLOWED RECOMMENDATIONS.\n"
-        "- Do not introduce products not in the allowed list.\n"
+        + "\n\nCandidate-bound drafting rules (STRICT):\n"
+        "- You may ONLY recommend items from ALLOWED RECOMMENDATIONS. No exceptions.\n"
+        "- Do not introduce any product, brand, or fragrance not in the allowed list.\n"
         "- Do not recommend brand-only names.\n"
         "- Do not turn section headings or source titles into recommendations.\n"
-        "- If allowed count is below requested_count, write an evidence-limited title and body.\n"
-        "- If allowed count is below minimum_publishable_items, write draft-only framing "
-        "and state evidence was insufficient.\n"
-        "- For each recommendation include name, best for, why it works, "
+        + count_rule
+        + "- For each recommendation include: name, best for, why it works, "
         "source-backed context, and caveat if evidence is thin.\n"
+        "- Include a Quick Picks section listing all recommendations.\n"
         "- For fragrance posts include notes/mood/occasion only if present in the terms above.\n"
+        "- If you cannot find enough allowed candidates for the requested count, "
+        "state this clearly in the title and body.\n"
     )
 
 

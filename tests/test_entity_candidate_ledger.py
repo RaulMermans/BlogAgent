@@ -223,6 +223,7 @@ class TestBuildCandidateLedger:
 
 class TestCandidateLedgerQuality:
     def test_strong_when_enough_usable(self):
+        """Ledger with clean candidates (score >= 0.85, spans present) is strong."""
         ledger = CandidateLedger(
             requested_count=3,
             raw_mentions_count=5,
@@ -230,16 +231,20 @@ class TestCandidateLedgerQuality:
             validated_candidates=[],
             allowed_candidates=[
                 EntityCandidate(
-                    raw_mention=f"Product {i}",
-                    canonical_name=f"product {i}",
+                    raw_mention=f"Brand Product {i} Eau de Parfum",
+                    canonical_name=f"brand product {i} eau de parfum",
                     entity_type="specific_product",
                     usable=True,
+                    clean_name_score=0.9,
+                    evidence_score=0.75,
+                    evidence_spans=[f"Brand Product {i} is a summer fragrance"],
+                    source_type="editorial",
                 )
                 for i in range(3)
             ],
             rejected_candidates=[],
             usable_count=3,
-            usable_names=[f"product {i}" for i in range(3)],
+            usable_names=[f"brand product {i} eau de parfum" for i in range(3)],
             rejected_count=0,
             rejected_examples=[],
             table_quality="not_required",

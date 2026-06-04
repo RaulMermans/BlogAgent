@@ -30,6 +30,10 @@ from blogagent.tools.article_entity_audit import (
 )
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
+from blogagent.tools.draft_candidate_compliance import (
+    check_draft_candidate_compliance,
+    derive_recommended_entities_from_markdown,
+)
 from blogagent.tools.entity_candidate_ledger import build_candidate_ledger
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, web_search
@@ -483,6 +487,20 @@ def write_draft(state: BlogRunState) -> BlogRunState:
     state.draft = result.data.article_markdown
     state.draft_meta_description = result.data.meta_description
     state.draft_seo_keywords = result.data.seo_keywords
+    recommended_entities = [
+        e.model_dump() if hasattr(e, "model_dump") else dict(e)
+        for e in (result.data.recommended_entities or [])
+    ]
+    if state.is_recommendation and not recommended_entities:
+        recommended_entities = derive_recommended_entities_from_markdown(
+            state.draft,
+            allowed_recs,
+        )
+        if recommended_entities:
+            result.data = result.data.model_copy(
+                update={"recommended_entities": recommended_entities}
+            )
+    state.draft_recommended_entities = recommended_entities
     _event(state, _llm_event("editor.draft", result))
     _propagate_llm_warnings(state, "editor.draft", result)
 
@@ -716,8 +734,26 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
         _propagate_llm_warnings(state, "editor.quality_revision", llm_result)
         return state
 
-    state.draft = llm_result.data.revised_markdown
-    state.revision_summary = llm_result.data.revision_summary
+    revision_data = llm_result.data
+    # Synthesise summary if revised_markdown is present but revision_summary missing
+    if revision_data is not None and revision_data.revised_markdown:
+        if not revision_data.revision_summary:
+            revision_data = revision_data.model_copy(
+                update={
+                    "revision_summary": (
+                        "Revision returned revised_markdown without summary; summary synthesized."
+                    )
+                }
+            )
+            llm_result = llm_result.model_copy(
+                update={
+                    "warning": "structured_output_completed_missing_fields=true",
+                    "data": revision_data,
+                }
+            )
+
+    state.draft = revision_data.revised_markdown
+    state.revision_summary = revision_data.revision_summary
     state.revision_status = "completed"
     state.revision_count += 1
     _event(state, _llm_event("editor.quality_revision", llm_result))
@@ -923,8 +959,26 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
         _propagate_llm_warnings(state, "editor.final_validation_revision", llm_result)
         return state
 
-    state.draft = llm_result.data.revised_markdown
-    state.revision_summary = llm_result.data.revision_summary
+    revision_data = llm_result.data
+    # Synthesise summary if revised_markdown is present but revision_summary missing
+    if revision_data is not None and revision_data.revised_markdown:
+        if not revision_data.revision_summary:
+            revision_data = revision_data.model_copy(
+                update={
+                    "revision_summary": (
+                        "Revision returned revised_markdown without summary; summary synthesized."
+                    )
+                }
+            )
+            llm_result = llm_result.model_copy(
+                update={
+                    "warning": "structured_output_completed_missing_fields=true",
+                    "data": revision_data,
+                }
+            )
+
+    state.draft = revision_data.revised_markdown
+    state.revision_summary = revision_data.revision_summary
     state.revision_status = "completed"
     state.revision_count += 1
     _event(state, _llm_event("editor.final_validation_revision", llm_result))
@@ -1012,6 +1066,39 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
     )
     state.entity_audit = entity_audit.model_dump()
 
+    # Run draft candidate compliance check
+    compliance = check_draft_candidate_compliance(
+        article_markdown=state.draft,
+        allowed_candidates=audit_candidates,
+        query_contract=contract,
+        minimum_publishable_items=contract.minimum_publishable_items,
+        draft_output={"recommended_entities": state.draft_recommended_entities},
+    )
+    state.draft_candidate_compliance = compliance.model_dump()
+
+    allowed_count = compliance.allowed_count
+    requested = state.requested_count
+
+    if contract.task_type == "recommendation":
+        if compliance.passes:
+            _event(
+                state,
+                f"draft_compliance: passes=true "
+                f"recommended={compliance.recommended_count} "
+                f"allowed_used={compliance.allowed_recommended_count} "
+                f"quick_picks={compliance.has_quick_picks}",
+            )
+        else:
+            _warn(state, f"draft_compliance: {compliance.failure_reason}")
+            _event(
+                state,
+                f"draft_compliance: passes=false "
+                f"allowed={allowed_count} "
+                f"recommended={compliance.recommended_count} "
+                f"requested={requested} "
+                f"reason={compliance.failure_reason}",
+            )
+
     # Build unified AnswerCountSnapshot — the canonical count for the pipeline
     snapshot = build_answer_count_snapshot(
         requested_count=state.requested_count,
@@ -1019,6 +1106,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         entity_audit=entity_audit,
         query_contract=contract,
         minimum_publishable_items=contract.minimum_publishable_items,
+        draft_candidate_compliance=compliance,
     )
     state.answer_count_snapshot = snapshot.model_dump()
     _event(
@@ -1028,6 +1116,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
         f"allowed={snapshot.allowed_candidates_count} "
         f"article={snapshot.article_entities_count} "
         f"grounded={snapshot.grounded_entities_count} "
+        f"compliance={snapshot.draft_candidate_compliance_passes} "
         f"status={snapshot.count_status}",
     )
 
@@ -1357,6 +1446,8 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         validated_candidates=candidates_for_contract,
         recommendation_audit=state.recommendation_audit or None,
         answer_count_snapshot=state.answer_count_snapshot or None,
+        draft_candidate_compliance=state.draft_candidate_compliance or None,
+        candidate_ledger_summary=state.candidate_ledger_summary or None,
     )
     state.publish_contract = result.model_dump()
     _event(

@@ -367,6 +367,7 @@ def generate_structured(
                     article_markdown=cleaned,
                     meta_description=parsed.meta_description,
                     seo_keywords=parsed.seo_keywords,
+                    recommended_entities=getattr(parsed, "recommended_entities", []),
                 )
         return _record_model_result(
             LLMResult(
@@ -382,6 +383,26 @@ def generate_structured(
             node_id=node_id,
         )
     except Exception as parse_exc:  # noqa: BLE001
+        # For RevisionOutput: try deterministic completion when revised_markdown exists
+        # but revision_summary is missing.
+        if output_model.__name__ == "RevisionOutput":
+            completed, ok = _try_complete_revision_output(response.text, output_model)
+            if ok:
+                return _record_model_result(
+                    LLMResult(
+                        data=completed,
+                        provider=provider_name,
+                        model=response.model,
+                        is_mock=False,
+                        configured_provider=provider_name,
+                        raw_text=response.text,
+                        warning="structured_output_completed_missing_fields=true",
+                    ),
+                    start=t0,
+                    output_model=output_model,
+                    node_id=node_id,
+                )
+
         # For DraftOutput: try deterministic field completion before repair/mock.
         # This handles the common case where the model returned valid article_markdown
         # but omitted meta_description (a required field).
@@ -564,6 +585,7 @@ def _try_repair(
                     article_markdown=cleaned,
                     meta_description=parsed.meta_description,
                     seo_keywords=parsed.seo_keywords,
+                    recommended_entities=getattr(parsed, "recommended_entities", []),
                 )
         return parsed, True
     except Exception:  # noqa: BLE001
@@ -607,6 +629,43 @@ def _try_complete_draft_output(
     # Synthesise seo_keywords from headings
     if not data.get("seo_keywords"):
         data["seo_keywords"] = _synthesise_seo_keywords(markdown)
+
+    try:
+        return output_model.model_validate(data), True
+    except Exception:
+        return None, False
+
+
+def _try_complete_revision_output(
+    raw_text: str,
+    output_model: type[BaseModel],
+) -> tuple[Any, bool]:
+    """Attempt to complete missing fields for RevisionOutput.
+
+    Called when JSON parsed but validation failed (e.g., revision_summary missing).
+    If revised_markdown is present, synthesise revision_summary from it.
+    Only falls back to mock if revised_markdown is also missing.
+
+    Returns (parsed_instance, True) on success or (None, False).
+    """
+    if output_model.__name__ != "RevisionOutput":
+        return None, False
+
+    try:
+        data = parse_json_object(raw_text)
+    except Exception:
+        return None, False
+
+    markdown = data.get("revised_markdown", "")
+    if not markdown or not markdown.strip():
+        # revised_markdown missing — cannot complete, must fallback to mock
+        return None, False
+
+    # Synthesise summary if missing
+    if not data.get("revision_summary", "").strip():
+        data["revision_summary"] = (
+            "Revision returned revised_markdown without summary; summary synthesized."
+        )
 
     try:
         return output_model.model_validate(data), True

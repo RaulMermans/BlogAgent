@@ -43,15 +43,26 @@ class EntityAudit(BaseModel):
 class AnswerCountSnapshot(BaseModel):
     """Unified count snapshot — single source of truth for all count checks.
 
-    Built after post-draft audit. Used by publish contract, run trace, and API.
+    Built after post-draft audit and draft candidate compliance check.
+    Used by publish contract, run trace, and API.
+
+    count_status rules:
+      satisfied        — allowed >= requested, recommended == requested, grounded == requested
+      evidence_limited — allowed < requested, article == allowed, allowed >= min, framing valid
+      failed           — draft compliance failure, missing Quick Picks, count mismatch,
+                         or grounded below minimum
+      not_applicable   — non-recommendation topic
     """
 
     requested_count: Optional[int]
     allowed_candidates_count: int
+    recommended_entities_count: int = 0
     article_entities_count: int
     grounded_entities_count: int
     evidence_limited: bool
+    draft_candidate_compliance_passes: bool = True
     count_status: CountStatus
+    failure_reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -118,19 +129,26 @@ def build_answer_count_snapshot(
     entity_audit: Optional[EntityAudit],
     query_contract: QueryContract,
     minimum_publishable_items: int = 3,
+    draft_candidate_compliance: Optional[object] = None,
 ) -> AnswerCountSnapshot:
     """Build a unified answer count snapshot from audit results.
 
     This is the canonical count used by the publish contract, trace, and UI.
-    Eliminates the '0 vs 7' and '25 vs 3' contradictions.
+
+    Key invariant:
+    - If allowed_count >= requested_count but article used fewer → count_status=failed
+      with defect_type=draft_candidate_compliance_failed (NOT evidence_limited)
+    - If allowed_count < requested_count → evidence_limited=True
     """
     if not requires_candidate_ledger(query_contract):
         return AnswerCountSnapshot(
             requested_count=requested_count,
             allowed_candidates_count=0,
+            recommended_entities_count=0,
             article_entities_count=0,
             grounded_entities_count=0,
             evidence_limited=False,
+            draft_candidate_compliance_passes=True,
             count_status="not_applicable",
         )
 
@@ -138,36 +156,94 @@ def build_answer_count_snapshot(
     article_count = entity_audit.article_entities_count if entity_audit else 0
     grounded_count = entity_audit.grounded_entities_count if entity_audit else 0
 
+    # Extract compliance info
+    compliance_passes = True
+    compliance_failure_reason: Optional[str] = None
+    recommended_count = article_count
+    if draft_candidate_compliance is not None:
+        compliance_passes = bool(
+            getattr(draft_candidate_compliance, "passes", True)
+        )
+        recommended_count = int(
+            getattr(draft_candidate_compliance, "recommended_count", article_count) or 0
+        )
+        if not compliance_passes:
+            compliance_failure_reason = getattr(
+                draft_candidate_compliance, "failure_reason", None
+            )
+
     # Determine count status
     count_status: CountStatus
+    evidence_limited = False
+    failure_reason: Optional[str] = None
 
     if requested_count is None:
         # No specific count requested — satisfied if we have minimum items
         if article_count >= minimum_publishable_items:
             count_status = "satisfied"
-            evidence_limited = False
         elif article_count >= 1:
             count_status = "evidence_limited"
             evidence_limited = True
         else:
             count_status = "failed"
             evidence_limited = True
+            failure_reason = "no recommendations detected in article"
     else:
-        if article_count >= requested_count:
-            count_status = "satisfied"
-            evidence_limited = False
-        elif article_count >= minimum_publishable_items:
-            count_status = "evidence_limited"
-            evidence_limited = True
+        if allowed_count >= requested_count:
+            # Enough candidates exist — any shortfall is a DRAFT compliance failure
+            if not compliance_passes:
+                count_status = "failed"
+                failure_reason = compliance_failure_reason or "draft_candidate_compliance_failed"
+            elif recommended_count != requested_count:
+                count_status = "failed"
+                failure_reason = (
+                    f"draft_candidate_compliance_failed: recommended_entities_count "
+                    f"{recommended_count}/{requested_count}"
+                )
+            elif article_count != requested_count:
+                count_status = "failed"
+                failure_reason = (
+                    f"article count mismatch: article has {article_count}/{requested_count}"
+                )
+            elif grounded_count != requested_count:
+                count_status = "failed"
+                failure_reason = (
+                    f"grounded count mismatch: grounded {grounded_count}/{requested_count}"
+                )
+            else:
+                count_status = "satisfied"
         else:
-            count_status = "failed"
+            # Fewer allowed candidates than requested → evidence-limited
             evidence_limited = True
+            if allowed_count < minimum_publishable_items:
+                count_status = "failed"
+                failure_reason = (
+                    f"allowed candidate count {allowed_count} is below minimum "
+                    f"publishable {minimum_publishable_items}"
+                )
+            elif (
+                recommended_count == allowed_count
+                and article_count == allowed_count
+                and grounded_count >= minimum_publishable_items
+                and compliance_passes
+            ):
+                count_status = "evidence_limited"
+            else:
+                count_status = "failed"
+                failure_reason = (
+                    compliance_failure_reason
+                    or f"evidence-limited count mismatch: recommended={recommended_count}, "
+                    f"article={article_count}, grounded={grounded_count}, allowed={allowed_count}"
+                )
 
     return AnswerCountSnapshot(
         requested_count=requested_count,
         allowed_candidates_count=allowed_count,
+        recommended_entities_count=recommended_count,
         article_entities_count=article_count,
         grounded_entities_count=grounded_count,
         evidence_limited=evidence_limited,
+        draft_candidate_compliance_passes=compliance_passes,
         count_status=count_status,
+        failure_reason=failure_reason,
     )

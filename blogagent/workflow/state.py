@@ -120,6 +120,8 @@ class BlogRunState(BaseModel):
     # SEO fields set by write_article_draft — used in the final package
     draft_meta_description: str = ""
     draft_seo_keywords: list[str] = Field(default_factory=list)
+    # Structured recommendations returned by DraftOutput or derived from markdown.
+    draft_recommended_entities: list[dict] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
     citation_matches: list[CitationMatch] = Field(default_factory=list)
     fact_check_report: Optional[FactCheckReport] = None
@@ -199,3 +201,5 @@ class BlogRunState(BaseModel):
     entity_audit: Optional[dict] = None
     # Unified answer count snapshot (dict-serialized AnswerCountSnapshot)
     answer_count_snapshot: Optional[dict] = None
+    # Draft candidate compliance check (dict-serialized DraftCandidateCompliance)
+    draft_candidate_compliance: Optional[dict] = None
