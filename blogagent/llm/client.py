@@ -83,7 +83,7 @@ def clean_article_markdown(text: str) -> str:
 
     for prefix in ("```markdown\n", "```markdown\r\n", "```\n", "```\r\n"):
         if stripped.startswith(prefix):
-            inner = stripped[len(prefix):]
+            inner = stripped[len(prefix) :]
             # Strip trailing fence
             if inner.endswith("\n```"):
                 inner = inner[:-4]
@@ -403,6 +403,26 @@ def generate_structured(
                     node_id=node_id,
                 )
 
+        # For EditorialPolishOutput: try deterministic completion when polished_markdown
+        # exists but other fields are missing (e.g., polish_summary is empty/missing).
+        if output_model.__name__ == "EditorialPolishOutput":
+            completed, ok = _try_complete_polish_output(response.text, output_model)
+            if ok:
+                return _record_model_result(
+                    LLMResult(
+                        data=completed,
+                        provider=provider_name,
+                        model=response.model,
+                        is_mock=False,
+                        configured_provider=provider_name,
+                        raw_text=response.text,
+                        warning="structured_output_completed_missing_fields=true",
+                    ),
+                    start=t0,
+                    output_model=output_model,
+                    node_id=node_id,
+                )
+
         # For DraftOutput: try deterministic field completion before repair/mock.
         # This handles the common case where the model returned valid article_markdown
         # but omitted meta_description (a required field).
@@ -568,10 +588,7 @@ def _try_repair(
 
     repair_user = (
         "Convert the following malformed model output into valid JSON only. "
-        "Preserve all fields and content. Do not add commentary."
-        + schema_hint
-        + "\n\n"
-        + text
+        "Preserve all fields and content. Do not add commentary." + schema_hint + "\n\n" + text
     )
     try:
         response = provider.generate(repair_system, repair_user, temperature=0.0)
@@ -673,6 +690,53 @@ def _try_complete_revision_output(
         return None, False
 
 
+def _try_complete_polish_output(
+    raw_text: str,
+    output_model: type[BaseModel],
+) -> tuple[Any, bool]:
+    """Attempt to complete missing fields for EditorialPolishOutput.
+
+    Called when JSON parsed but validation failed (e.g., polish_summary is missing
+    or not a list). If polished_markdown is present, synthesise missing fields.
+    Only falls back to mock if polished_markdown is also missing.
+
+    Returns (parsed_instance, True) on success or (None, False).
+    """
+    if output_model.__name__ != "EditorialPolishOutput":
+        return None, False
+
+    try:
+        data = parse_json_object(raw_text)
+    except Exception:
+        return None, False
+
+    markdown = data.get("polished_markdown", "")
+    if not markdown or not markdown.strip():
+        # polished_markdown missing — cannot complete, must fallback to mock
+        return None, False
+
+    # Synthesise missing fields
+    if not data.get("polish_summary"):
+        data["polish_summary"] = [
+            "Polish returned polished_markdown without revision_summary; summary synthesized."
+        ]
+    elif not isinstance(data.get("polish_summary"), list):
+        data["polish_summary"] = [str(data["polish_summary"])]
+
+    if not data.get("remaining_issues"):
+        data["remaining_issues"] = []
+    elif not isinstance(data.get("remaining_issues"), list):
+        data["remaining_issues"] = [str(data["remaining_issues"])]
+
+    if not isinstance(data.get("publishability_confidence"), (int, float)):
+        data["publishability_confidence"] = 0.7
+
+    try:
+        return output_model.model_validate(data), True
+    except Exception:
+        return None, False
+
+
 def _synthesise_meta_description(markdown: str) -> str:
     """Extract the first prose paragraph from markdown as a meta description."""
     for line in markdown.split("\n"):
@@ -697,9 +761,37 @@ def _synthesise_seo_keywords(markdown: str) -> list[str]:
     seen: set[str] = set()
     # Stop-words to skip
     skip = {
-        "the", "a", "an", "and", "or", "but", "for", "to", "in", "of", "is",
-        "are", "was", "were", "with", "by", "at", "on", "how", "why", "what",
-        "our", "we", "you", "your", "this", "that", "it", "be", "been", "as",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "for",
+        "to",
+        "in",
+        "of",
+        "is",
+        "are",
+        "was",
+        "were",
+        "with",
+        "by",
+        "at",
+        "on",
+        "how",
+        "why",
+        "what",
+        "our",
+        "we",
+        "you",
+        "your",
+        "this",
+        "that",
+        "it",
+        "be",
+        "been",
+        "as",
     }
     for heading in headings:
         for word in re.findall(r"\b[a-zA-Z]{4,}\b", heading.lower()):

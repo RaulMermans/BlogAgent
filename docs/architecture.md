@@ -200,13 +200,31 @@ Recommendation draft prompts receive:
 
 The drafter may only recommend allowed candidates. It may not introduce products, recommend brand-only names for product-level contracts, or turn headings/source titles into recommendations. When the allowed count is at least the requested count, the draft must use exactly the requested number of allowed candidates. When the allowed count is below the requested count, the draft must use all allowed candidates and apply evidence-limited title/body framing.
 
+### Domain Adapter Completeness Requirement
+
+Each non-general domain (`beauty_fragrance`, `beauty_makeup`, `fashion_lifestyle`, `software_tools`, `finance`) has a dedicated adapter in `blogagent/tools/domain_adapters/`. Adapters must implement:
+
+- `is_valid_entity(name, contract)` — accept named products/companies; reject headings, categories, and generic phrases
+- `get_rejection_reason(name, contract)` — human-readable explanation for every rejection
+- `classify_entity_type(name, contract)` — assign type (`software_product`, `company`, `category`, `section_heading`, …)
+- `get_known_brands_or_entities()` — seed list of known valid entities for the domain
+
+`classify_candidate_entity()` in `recommendation_extractor.py` delegates to the domain adapter for all non-fragrance recommendation domains. This means SoftwareToolsAdapter and FinanceAdapter drive both pre-draft candidate classification and post-draft audit classification. A heading that slips past `_is_generic_heading` will still be rejected by the adapter.
+
 ### Draft Candidate Compliance
 
 `blogagent/tools/draft_candidate_compliance.py` — deterministic, no LLM.
 
 After drafting, BlogAgent checks the article against the locked candidate table. `DraftOutput.recommended_entities` is preferred because it carries `candidate_id`; if a model omits that field but the markdown uses allowed names, BlogAgent derives `recommended_entities` from the markdown.
 
-The check fails when Quick Picks is missing, a recommended entity is not in the allowed table, allowed candidates are sufficient but the draft uses fewer than requested, or an evidence-limited draft does not use all allowed candidates. These failures are recorded as `state.draft_candidate_compliance` and feed `AnswerCountSnapshot`, run trace, API/UI banners, and the publish contract.
+The check fails when:
+- `allowed_count == 0` and `recommended_count > 0` — article introduced recommendations but ledger has zero allowed candidates (hard fail)
+- Quick Picks is missing for a recommendation topic
+- A recommended entity is not in the allowed table
+- Allowed candidates are sufficient but the draft uses fewer than requested
+- An evidence-limited draft does not use all allowed candidates
+
+These failures are recorded as `state.draft_candidate_compliance` and feed `AnswerCountSnapshot`, run trace, API/UI banners, and the publish contract.
 
 ### AnswerCountSnapshot
 
@@ -222,7 +240,28 @@ The check fails when Quick Picks is missing, a recommended entity is not in the 
 - `count_status`
 - `failure_reason`
 
+**Coherence invariants (non-negotiable):**
+- `allowed_candidates_count == 0` → `count_status = "failed"` — cannot be `satisfied` or `evidence_limited`
+- `candidate_ledger.table_quality == "failed"` → `count_status` cannot be `"satisfied"`
+- `draft_candidate_compliance_passes == False` → `count_status` cannot be `"satisfied"`
+- `count_status == "satisfied"` requires: ledger not failed, allowed ≥ minimum, recommended ≥ minimum, grounded ≥ minimum, compliance passes, no unknown recommendations
+- `count_status == "evidence_limited"` requires: allowed < requested, allowed ≥ minimum, article uses only allowed candidates, evidence-limited framing present
+- `count_status == "not_applicable"` only for non-recommendation topics
+
 `satisfied` requires allowed, recommended, article, and grounded counts to match the requested count. `evidence_limited` only applies when allowed candidates are fewer than requested but at least the minimum publishable count, and the article uses all allowed candidates. If enough allowed candidates exist but the draft uses too few, status is `failed` with `draft_candidate_compliance_failed`.
+
+### Candidate Ledger Failure Mode
+
+When `candidate_ledger.table_quality == "failed"` (usable_count < minimum_publishable_items):
+
+- `evidence_sufficiency.sufficient = False` — score capped at ≤ 59
+- `evidence_limited_mode = True` — draft receives this signal
+- The draft should explain evidence limitation rather than produce a normal recommendation list
+- `draft_candidate_compliance` fails if the draft introduces any recommendations
+- `answer_count_snapshot.count_status = "failed"`
+- `publish_contract.status = "draft_only_not_publish_ready"`
+
+The chain ensures no impossible state (allowed=0, compliance=pass, count=satisfied, contract=ready) can exist.
 
 ### Post-Article Recommendation Grounding
 

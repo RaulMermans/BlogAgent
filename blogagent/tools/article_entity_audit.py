@@ -156,21 +156,44 @@ def build_answer_count_snapshot(
     article_count = entity_audit.article_entities_count if entity_audit else 0
     grounded_count = entity_audit.grounded_entities_count if entity_audit else 0
 
+    # Hard invariant: if allowed=0 for recommendation topic, the count cannot be satisfied.
+    # The candidate ledger failed — any article recommendations are unsupported.
+    if allowed_count == 0:
+        # Extract compliance passes/failure for reporting
+        comp_passes = True
+        comp_failure: Optional[str] = None
+        comp_recommended = article_count
+        if draft_candidate_compliance is not None:
+            comp_passes = bool(getattr(draft_candidate_compliance, "passes", True))
+            comp_failure = getattr(draft_candidate_compliance, "failure_reason", None)
+            comp_recommended = int(
+                getattr(draft_candidate_compliance, "recommended_count", article_count) or 0
+            )
+        return AnswerCountSnapshot(
+            requested_count=requested_count,
+            allowed_candidates_count=0,
+            recommended_entities_count=comp_recommended,
+            article_entities_count=article_count,
+            grounded_entities_count=grounded_count,
+            evidence_limited=True,
+            draft_candidate_compliance_passes=comp_passes,
+            count_status="failed",
+            failure_reason=(
+                comp_failure or "no allowed candidates — candidate ledger quality gate failed"
+            ),
+        )
+
     # Extract compliance info
     compliance_passes = True
     compliance_failure_reason: Optional[str] = None
     recommended_count = article_count
     if draft_candidate_compliance is not None:
-        compliance_passes = bool(
-            getattr(draft_candidate_compliance, "passes", True)
-        )
+        compliance_passes = bool(getattr(draft_candidate_compliance, "passes", True))
         recommended_count = int(
             getattr(draft_candidate_compliance, "recommended_count", article_count) or 0
         )
         if not compliance_passes:
-            compliance_failure_reason = getattr(
-                draft_candidate_compliance, "failure_reason", None
-            )
+            compliance_failure_reason = getattr(draft_candidate_compliance, "failure_reason", None)
 
     # Determine count status
     count_status: CountStatus

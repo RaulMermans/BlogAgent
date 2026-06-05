@@ -1288,6 +1288,38 @@ def _build_app_html() -> str:
       document.getElementById('title-display').closest('.form-card').appendChild(qcDiv);
     }
 
+    // Candidate ledger summary (primary source of candidate quality info)
+    const ledgerSummary = data.candidate_ledger_summary || {};
+    if (ledgerSummary.table_quality) {
+      const ledgerDiv = document.createElement('div');
+      ledgerDiv.style.marginBottom = '0.8rem';
+      const ledgerLabel = document.createElement('div');
+      ledgerLabel.className = 'meta-label';
+      ledgerLabel.textContent = 'Candidate Ledger';
+      ledgerDiv.appendChild(ledgerLabel);
+      const quality = ledgerSummary.table_quality || 'unknown';
+      const usable = ledgerSummary.usable_count || 0;
+      const rejected = ledgerSummary.rejected_count || 0;
+      const qualityColor = quality === 'strong' ? '#166534' : quality === 'limited' ? '#854d0e' : '#b91c1c';
+      const ledgerText = document.createElement('p');
+      ledgerText.style.cssText = 'font-size:0.85rem;margin:0.2rem 0;';
+      ledgerText.innerHTML = `<span style="color:${qualityColor};font-weight:600;">${quality}</span> — ${usable} allowed / ${rejected} rejected`;
+      ledgerDiv.appendChild(ledgerText);
+      if (ledgerSummary.usable_names && ledgerSummary.usable_names.length > 0) {
+        const names = document.createElement('p');
+        names.style.cssText = 'font-size:0.8rem;color:#555;font-style:italic;margin:0.1rem 0;';
+        names.textContent = ledgerSummary.usable_names.slice(0, 5).join(', ') + (ledgerSummary.usable_names.length > 5 ? '…' : '');
+        ledgerDiv.appendChild(names);
+      }
+      if (ledgerSummary.quality_issues && ledgerSummary.quality_issues.length > 0) {
+        const issueText = document.createElement('p');
+        issueText.style.cssText = 'font-size:0.78rem;color:#b91c1c;margin:0.1rem 0;';
+        issueText.textContent = ledgerSummary.quality_issues[0];
+        ledgerDiv.appendChild(issueText);
+      }
+      document.getElementById('title-display').closest('.form-card').appendChild(ledgerDiv);
+    }
+
     const recCandidates = data.recommendation_candidates_summary || {};
     if (recCandidates.usable_count !== undefined) {
       const reqCount = data.requested_count;
@@ -1339,6 +1371,7 @@ def _build_app_html() -> str:
     const effectiveStatus = (pubContract && pubContract.status) ? pubContract.status : pubStatus;
     if (effectiveStatus === 'draft_only_not_publish_ready') {
       const draftBanner = document.createElement('div');
+      draftBanner.className = 'dynamic-banner';
       draftBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
       const contractDefects = pubContract.defects || [];
       const highContractDefects = contractDefects.filter(d => d.severity === 'high');
@@ -1347,6 +1380,7 @@ def _build_app_html() -> str:
       document.getElementById('output-section').insertBefore(draftBanner, document.getElementById('output-section').firstChild);
     } else if (effectiveStatus === 'publish_ready_with_warnings') {
       const warnBanner = document.createElement('div');
+      warnBanner.className = 'dynamic-banner';
       warnBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
       warnBanner.textContent = '⚠ Publish ready with warnings — review before publishing.';
       document.getElementById('output-section').insertBefore(warnBanner, document.getElementById('output-section').firstChild);
@@ -1362,6 +1396,7 @@ def _build_app_html() -> str:
 
     if (dcc.passes === false) {
       const dccBanner = document.createElement('div');
+      dccBanner.className = 'dynamic-banner';
       const dccAllowed = dcc.allowed_count || 0;
       const dccRecommended = dcc.recommended_count || 0;
       const dccReason = dcc.failure_reason || '';
@@ -1378,6 +1413,7 @@ def _build_app_html() -> str:
       document.getElementById('output-section').insertBefore(dccBanner, document.getElementById('output-section').firstChild);
     } else if (snapStatus === 'evidence_limited' && snapAllowed < (snapRequested || snapAllowed)) {
       const evBanner = document.createElement('div');
+      evBanner.className = 'dynamic-banner';
       evBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
       evBanner.textContent = 'Evidence-limited: only ' + snapAllowed + ' allowed candidates found for ' + (snapRequested || '?') + ' requested.';
       document.getElementById('output-section').insertBefore(evBanner, document.getElementById('output-section').firstChild);
@@ -1389,6 +1425,7 @@ def _build_app_html() -> str:
     const highDefects = fvDefects.filter(d => d.severity === 'high');
     if (fvStatus === 'failed' || highDefects.length > 0) {
       const fvBanner = document.createElement('div');
+      fvBanner.className = 'dynamic-banner';
       fvBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;';
       const msgs = highDefects.map(d => d.message).join(' | ') || 'High-severity quality issues remain.';
       fvBanner.textContent = '⚠ Generated with unresolved quality issues: ' + msgs;
@@ -1508,14 +1545,30 @@ def _build_app_html() -> str:
     document.getElementById('error-box').textContent = '';
     document.getElementById('output-section').style.display = 'none';
     document.getElementById('warnings-details').style.display = 'none';
+    document.getElementById('warnings-body').textContent = '';
     document.getElementById('trace-details').style.display = 'none';
     document.getElementById('trace-list').innerHTML = '';
     document.getElementById('sources-list').innerHTML = '';
+    document.getElementById('article-display').textContent = '';
+    document.getElementById('keywords-display').innerHTML = '';
+    document.getElementById('stats-row').innerHTML = '';
     _hideWorkflowPanel();
-    // Remove dynamically injected rows from prior runs
-    const skillDivs = document.querySelectorAll('.form-card .meta-label');
-    const dynamicLabels = ['Editorial Skills', 'Editorial Polish', 'Query Contract', 'Recommendation Candidates', 'Enrichment Queries', 'Candidate Ledger', 'Draft Compliance'];
-    skillDivs.forEach(el => { if (dynamicLabels.includes(el.textContent)) el.closest('div').remove(); });
+    // Remove all dynamic banners inserted by renderOutput from prior runs
+    document.querySelectorAll('.dynamic-banner').forEach(el => el.remove());
+    // Remove dynamically injected metadata rows from prior runs
+    const metaLabelEls = document.querySelectorAll('.form-card .meta-label');
+    const dynamicLabels = [
+      'Editorial Skills', 'Editorial Polish', 'Query Contract',
+      'Recommendation Candidates', 'Enrichment Queries',
+      'Candidate Ledger', 'Draft Compliance',
+      'Answer Count Snapshot', 'Entity Audit',
+    ];
+    metaLabelEls.forEach(el => {
+      if (dynamicLabels.includes(el.textContent)) {
+        const parent = el.closest('div');
+        if (parent) parent.remove();
+      }
+    });
   }
 
   document.addEventListener('DOMContentLoaded', init);

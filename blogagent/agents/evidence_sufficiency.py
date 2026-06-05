@@ -81,6 +81,13 @@ def evaluate_evidence_sufficiency(
     if recommendation_candidates is not None:
         usable_candidates = [c for c in recommendation_candidates if c.get("usable")]
         supported_count = len(usable_candidates)
+        # Invariant: if the candidate ledger produced zero usable candidates,
+        # evidence is not sufficient regardless of source quality scores.
+        if supported_count == 0:
+            score = min(score, 59)
+            missing.append(
+                "Candidate ledger failed — no usable named entities extracted from sources"
+            )
     else:
         # Legacy proxy: each high/medium source assumed to cover ~2 picks
         high_med_count = len(high_medium)

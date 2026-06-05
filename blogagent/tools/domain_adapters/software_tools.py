@@ -22,10 +22,14 @@ _KNOWN_SOFTWARE_PRODUCTS: frozenset[str] = frozenset(
         "notion ai",
         "chatgpt",
         "gpt-4",
+        "gpt-4o",
         "claude",
+        "claude ai",
         "gemini",
+        "google gemini",
         "copilot",
         "github copilot",
+        "microsoft copilot",
         "perplexity",
         "perplexity ai",
         "canva",
@@ -74,6 +78,54 @@ _KNOWN_SOFTWARE_PRODUCTS: frozenset[str] = frozenset(
         "vercel",
         "netlify",
         "heroku",
+        # Student/education AI tools
+        "quizlet",
+        "khanmigo",
+        "studley ai",
+        "studley",
+        "duolingo max",
+        "duolingo",
+        "wolfram alpha",
+        "elicit",
+        "consensus",
+        "scholarcy",
+        "paperpal",
+        "research rabbit",
+        "connected papers",
+        "scite",
+        "iris.ai",
+        "poe",
+        "character.ai",
+        "copy.ai",
+        "writesonic",
+        "rytr",
+        "tome",
+        "gamma",
+        "beautiful.ai",
+        "socratic",
+        "photomath",
+        "mathway",
+        "chegg",
+        "course hero",
+        "anki",
+        "remnote",
+        "notion student",
+        "evernote",
+        "google docs",
+        "microsoft word",
+        "google scholar",
+        "zotero",
+        "mendeley",
+        "readwise",
+        "speechify",
+        "otter ai",
+        "fireflies.ai",
+        "krisp",
+        "notta",
+        "supernormal",
+        "microsoft loop",
+        "coda",
+        "roam",
     }
 )
 
@@ -96,7 +148,47 @@ _GENERIC_SOFTWARE_CATEGORIES: frozenset[str] = frozenset(
         "note-taking apps",
         "ai assistants",
         "chatbots",
+        # Student/education generic phrases
+        "study tools",
+        "education technology",
+        "learning ai",
+        "edtech tools",
+        "student tools",
+        "educational tools",
+        "learning tools",
+        "online tools",
+        "free tools",
+        "best tools",
+        "top tools",
+        "ai learning",
+        "smart tools",
+        "digital tools",
+        "virtual tools",
+        "teaching tools",
+        "homework help",
+        "study aids",
+        "academic tools",
     }
+)
+
+# Substrings that indicate an editorial section heading, not a product name
+_SOFTWARE_HEADING_SUBSTRINGS: tuple[str, ...] = (
+    "navigating",
+    "the ai landscape",
+    "landscape for",
+    "for student success",
+    "for students",
+    "spotlight on",
+    "our approach",
+    "the shifting",
+    "opportunities in",
+    "key ai",
+    "choosing the",
+    "how to choose",
+    "tips for",
+    "guide to",
+    "overview of",
+    "introduction to",
 )
 
 # Software product signal terms
@@ -135,13 +227,26 @@ class SoftwareToolsAdapter(DomainAdapter):
 
         lower = _normalize(name)
 
+        # Reject generic category phrases
         if lower in _GENERIC_SOFTWARE_CATEGORIES:
             return False
 
+        # Reject domain-specific section headings
+        if self._is_software_heading(lower):
+            return False
+
+        # Accept known products
         if lower in _KNOWN_SOFTWARE_PRODUCTS:
             return True
 
-        if self._looks_like_software_product(lower):
+        # Accept domain-style names (.io, .ai, .com)
+        if any(ind in lower for ind in (".io", ".ai", ".com", ".co")):
+            words = lower.split()
+            if len(words) <= 3:
+                return True
+
+        # Accept short properly capitalized product names (1-3 words, not a heading)
+        if self._looks_like_named_software_product(name, lower):
             return True
 
         return False
@@ -154,6 +259,9 @@ class SoftwareToolsAdapter(DomainAdapter):
         lower = _normalize(name)
         if lower in _GENERIC_SOFTWARE_CATEGORIES:
             return "generic software category phrases do not count — need named product"
+
+        if self._is_software_heading(lower):
+            return "section headings do not count as software products"
 
         if not self.is_valid_entity(name, query_contract):
             return "not a named software product or tool"
@@ -168,9 +276,11 @@ class SoftwareToolsAdapter(DomainAdapter):
         lower = _normalize(name)
         if lower in _GENERIC_SOFTWARE_CATEGORIES:
             return "category"
+        if self._is_software_heading(lower):
+            return "section_heading"
         if lower in _KNOWN_SOFTWARE_PRODUCTS:
             return "software_product"
-        if self._looks_like_software_product(lower):
+        if any(ind in lower for ind in (".io", ".ai", ".com", ".co")):
             return "software_product"
         return "unknown"
 
@@ -180,13 +290,65 @@ class SoftwareToolsAdapter(DomainAdapter):
     def get_known_brands_or_entities(self) -> list[str]:
         return sorted(_KNOWN_SOFTWARE_PRODUCTS)
 
-    def _looks_like_software_product(self, lower: str) -> bool:
+    def _is_software_heading(self, lower: str) -> bool:
+        """Return True if the text is a section heading, not a product name."""
+        return any(sub in lower for sub in _SOFTWARE_HEADING_SUBSTRINGS)
+
+    def _looks_like_named_software_product(self, original_name: str, lower: str) -> bool:
+        """Return True if the original name looks like a proper named software product."""
         words = lower.split()
-        if len(words) < 1 or len(words) > 5:
+        original_words = original_name.strip().split()
+
+        # Must be 1-4 words to be a product name (not a sentence/heading)
+        if not (1 <= len(words) <= 4):
             return False
-        # Named products tend to start with capital letter (checked before normalization)
-        # or match known patterns
-        if any(ind in lower for ind in (".io", ".ai", ".com", ".co")):
-            return True
-        # Has capitalized proper noun form (checked via original text - available via name param)
-        return False
+
+        # First word must be capitalized in the original
+        if not original_words or not original_words[0]:
+            return False
+        first_char = original_words[0][0]
+        if not first_char.isupper():
+            return False
+
+        # Reject if first word is a generic heading word
+        _HEADING_STARTERS = frozenset(
+            {
+                "the",
+                "a",
+                "an",
+                "how",
+                "why",
+                "what",
+                "when",
+                "where",
+                "navigating",
+                "exploring",
+                "understanding",
+                "best",
+                "top",
+                "new",
+                "great",
+                "good",
+                "free",
+                "better",
+                "worst",
+                "all",
+                "our",
+                "your",
+                "their",
+                "this",
+                "that",
+                "these",
+                "those",
+            }
+        )
+        if original_words[0].lower() in _HEADING_STARTERS:
+            return False
+
+        # Must have a meaningful (non-stop-word) token
+        _STOP = frozenset({"the", "a", "an", "and", "or", "for", "in", "of", "to", "with"})
+        meaningful = [w for w in words if w not in _STOP]
+        if not meaningful:
+            return False
+
+        return True

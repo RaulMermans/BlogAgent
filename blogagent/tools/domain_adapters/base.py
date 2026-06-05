@@ -72,6 +72,19 @@ _SECTION_HEADING_SUBSTRINGS: tuple[str, ...] = (
     "best options",
     "top picks",
     "our picks",
+    # Editorial heading patterns that appear as H2/H3 in recommendation articles
+    "navigating",
+    "spotlight on",
+    "our approach",
+    "the shifting",
+    "opportunities in",
+    "players for",
+    "landscape for",
+    "identifying energy",
+    "identifying ai",
+    "key energy",
+    "key ai",
+    "for student success",
 )
 
 _SOURCE_ARTIFACT_PATTERNS: tuple[str, ...] = (

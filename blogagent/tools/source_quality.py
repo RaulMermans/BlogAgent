@@ -60,6 +60,30 @@ _MEDIUM_QUALITY_DOMAINS: frozenset[str] = frozenset(
         "cultbeauty.co.uk",
         "spacenk.com",
         "bluemercury.com",  # prestige retailer with editorial content
+        # Finance media
+        "nerdwallet.com",
+        "fool.com",  # The Motley Fool
+        "marketbeat.com",
+        "investopedia.com",
+        "thestreet.com",
+        "seekingalpha.com",
+        "benzinga.com",
+        "stockanalysis.com",
+        "macrotrends.net",
+        "simply wall st",
+        "simplywall.st",
+        # Education / edtech editorial
+        "edtechmagazine.com",
+        "edweek.org",
+        "edsurge.com",
+        "educause.edu",
+        "onegoal.org",
+        "iu.org",
+        "commonsense.org",
+        "commonsensemedia.org",
+        # Official product sites (medium confidence — product claims only)
+        "studley.ai",
+        "shakiledu.com",
     }
 )
 

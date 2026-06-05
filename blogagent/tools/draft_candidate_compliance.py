@@ -97,12 +97,7 @@ def check_draft_candidate_compliance(
         if not c.get("usable", True):
             continue
         # Use canonical_name, name, or raw_mention
-        n = (
-            c.get("canonical_name")
-            or c.get("name")
-            or c.get("raw_mention")
-            or ""
-        ).strip()
+        n = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
         if n:
             allowed_names.append(n)
         cid = c.get("candidate_id", "")
@@ -116,9 +111,7 @@ def check_draft_candidate_compliance(
     recommended_count = len(article_recs)
 
     # Check for Quick Picks section
-    has_quick_picks = bool(
-        re.search(r"#{1,3}\s*Quick\s*Picks?", article_markdown, re.IGNORECASE)
-    )
+    has_quick_picks = bool(re.search(r"#{1,3}\s*Quick\s*Picks?", article_markdown, re.IGNORECASE))
 
     # Count detail sections (H2/H3 with product-looking headings)
     detail_sections_count = _count_detail_sections(article_markdown, allowed_names)
@@ -148,13 +141,10 @@ def check_draft_candidate_compliance(
     for c in allowed_candidates:
         if not c.get("usable", True):
             continue
-        n = (
-            c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""
-        ).strip()
+        n = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
         cid = c.get("candidate_id", "")
         article_rec_norms = {
-            _norm(r.get("name", "") if isinstance(r, dict) else str(r))
-            for r in article_recs
+            _norm(r.get("name", "") if isinstance(r, dict) else str(r)) for r in article_recs
         }
         article_rec_ids = {
             r.get("candidate_id", "")
@@ -219,10 +209,7 @@ def derive_recommended_entities_from_markdown(
             continue
         seen_ids.add(cid)
         name = (
-            match.get("canonical_name")
-            or match.get("name")
-            or match.get("raw_mention")
-            or rec_name
+            match.get("canonical_name") or match.get("name") or match.get("raw_mention") or rec_name
         )
         source_urls = match.get("source_urls") or []
         source_url = match.get("source_url") or (source_urls[0] if source_urls else None)
@@ -283,8 +270,17 @@ def _decide_compliance(
     article_markdown: str,
 ) -> Optional[str]:
     """Return a failure_reason string or None if compliant."""
-    # Non-recommendation topics are always compliant
-    if requested_count is None and allowed_count == 0:
+    # Hard invariant: if the candidate ledger has zero allowed candidates,
+    # any recommendations introduced by the model are unsupported.
+    # This applies regardless of requested_count.
+    if allowed_count == 0:
+        if recommended_count > 0:
+            return (
+                "draft_candidate_compliance_failed: article introduced "
+                f"{recommended_count} recommendation(s) but candidate ledger has "
+                "zero allowed candidates — all recommendations are unsupported"
+            )
+        # No recommendations and no candidates → compliant (no article was expected)
         return None
 
     # Insufficient allowed candidates — evidence-limited is acceptable
@@ -367,12 +363,7 @@ def _find_allowed_candidate(rec_name: str, allowed_candidates: list[dict]) -> di
     for c in allowed_candidates:
         if not c.get("usable", True):
             continue
-        name = (
-            c.get("canonical_name")
-            or c.get("name")
-            or c.get("raw_mention")
-            or ""
-        ).strip()
+        name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
         if name and _matches_any(rec_norm, {_norm(name)}):
             return c
     return None
@@ -396,7 +387,7 @@ def _norm(name: str) -> str:
     # Remove leading articles
     for prefix in ("the ", "a ", "an "):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
     return name
 
 
@@ -415,7 +406,8 @@ def _matches_any(rec_norm: str, allowed_norms: set[str]) -> bool:
         allowed_words = set(allowed.split())
         shared = rec_words & allowed_words
         if (
-            rec_norm.split() and allowed.split()
+            rec_norm.split()
+            and allowed.split()
             and rec_norm.split()[0] == allowed.split()[0]
             and len(shared) >= 2
         ):

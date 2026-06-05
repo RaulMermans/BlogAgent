@@ -135,6 +135,24 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 - `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
 - For `publish_ready_with_warnings`: evidence-limited articles are accepted only when the candidate ledger has fewer allowed candidates than requested and the article uses all allowed candidates. Framing detection is pattern-matching, not semantic judgment.
 
+## Domain Adapters Require Domain-Specific Examples
+
+Each domain adapter (`software_tools`, `finance`, `beauty_fragrance`, etc.) maintains a known-entity list that drives acceptance of named candidates. Limitations:
+
+- A software tool or company **not in the known-entity list** will only be accepted if it passes `_looks_like_named_software_product` or `_looks_like_company_or_security`, which are heuristic and conservative by design.
+- Search snippets often do not contain structured entity lists — the adapter may fail to extract candidates even when the source clearly discusses the topic.
+- Finance content is educational only. The pipeline applies safety constraints (no buy/sell language, disclaimer required). This is enforced deterministically but cannot substitute for a licensed financial advisor.
+- Human review is required before publishing any recommendation or financial content.
+
+## Candidate Ledger Failure Behavior
+
+When the candidate ledger fails (usable_count < minimum_publishable_items):
+
+- The draft is produced with `evidence_limited_mode=True`, but the model may still introduce company/product names from training data rather than from evidence.
+- Draft compliance will reject these unsupported names, and the publish contract will block the article.
+- The final status will be `draft_only_not_publish_ready` with an informative failure reason.
+- The article is still returned in the API response for reference, but it is not publish-ready.
+
 ## Candidate Cleanliness Gate v2
 
 The candidate ledger now applies a strict cleanliness gate before marking a candidate `usable`:

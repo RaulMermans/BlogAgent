@@ -321,7 +321,7 @@ class BeautyFragranceAdapter(DomainAdapter):
         for brand in _BRAND_ONLY_NAMES:
             if lower.startswith(brand + " ") and len(words) > len(brand.split()):
                 # Check that what follows the brand is not prose
-                remainder = lower[len(brand):].strip()
+                remainder = lower[len(brand) :].strip()
                 if not self._is_prose_fragment(remainder, remainder.split()):
                     return True
         return False
@@ -329,12 +329,48 @@ class BeautyFragranceAdapter(DomainAdapter):
     # Prose verbs that should never appear after a brand prefix in a product name
     _PROSE_VERB_SET: frozenset[str] = frozenset(
         {
-            "will", "always", "went", "down", "rabbit", "can't", "won't", "didn't",
-            "is", "was", "are", "were", "have", "has", "had", "but", "on",
-            "never", "still", "just", "really", "i", "me", "my", "got",
-            "smells", "wore", "bought", "tried", "felt", "said", "loved",
-            "actually", "literally", "personally", "definitely", "enough",
-            "always", "usually", "sometimes", "often", "very",
+            "will",
+            "always",
+            "went",
+            "down",
+            "rabbit",
+            "can't",
+            "won't",
+            "didn't",
+            "is",
+            "was",
+            "are",
+            "were",
+            "have",
+            "has",
+            "had",
+            "but",
+            "on",
+            "never",
+            "still",
+            "just",
+            "really",
+            "i",
+            "me",
+            "my",
+            "got",
+            "smells",
+            "wore",
+            "bought",
+            "tried",
+            "felt",
+            "said",
+            "loved",
+            "actually",
+            "literally",
+            "personally",
+            "definitely",
+            "enough",
+            "always",
+            "usually",
+            "sometimes",
+            "often",
+            "very",
         }
     )
     # First-person indicators

@@ -399,6 +399,19 @@ _NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
     "top summer",
     "scent categories",
     "fragrance wardrobe",
+    # Editorial heading patterns common in non-fragrance domains
+    "navigating",
+    "spotlight on",
+    "our approach",
+    "the shifting",
+    "opportunities in",
+    "players for",
+    "landscape for",
+    "identifying energy",
+    "identifying ai",
+    "key energy",
+    "key ai",
+    "for student success",
 )
 
 # ---------------------------------------------------------------------------
@@ -506,9 +519,20 @@ def classify_candidate_entity(
 
         return "unknown", False, "not a specific fragrance product"
 
-    # Non-fragrance recommendation topics keep the legacy permissive behavior.
-    if query_contract.task_type == "recommendation" and _looks_like_product_name(raw):
-        return "specific_product", True, None
+    # For all other recommendation domains, delegate to the domain adapter.
+    # This ensures domain-specific rules (e.g., FinanceAdapter, SoftwareToolsAdapter)
+    # are applied consistently during both extraction and auditing.
+    if query_contract.task_type == "recommendation":
+        from blogagent.tools.domain_adapters import get_adapter  # noqa: PLC0415
+
+        adapter = get_adapter(query_contract.domain)
+        if adapter.is_valid_entity(raw, query_contract):
+            return "specific_product", True, None
+        entity_type = adapter.classify_entity_type(raw, query_contract)
+        rejection = adapter.get_rejection_reason(raw, query_contract)
+        classified_type = entity_type if entity_type != "unknown" else "unknown"
+        reason = rejection or "not a valid recommendation item for this contract"
+        return classified_type, False, reason
 
     return "unknown", False, "not a valid recommendation item for this contract"
 
@@ -536,8 +560,10 @@ def extract_candidates_from_sources(
 
     for source in sources or []:
         url = getattr(source, "url", "") if not isinstance(source, dict) else source.get("url", "")
-        title = getattr(source, "title", "") if not isinstance(source, dict) else source.get(
-            "title", ""
+        title = (
+            getattr(source, "title", "")
+            if not isinstance(source, dict)
+            else source.get("title", "")
         )
         text = (
             getattr(source, "extracted_text", "")
@@ -834,9 +860,7 @@ def extract_recommendations_from_article(markdown: str) -> list[ArticleRecommend
                 existing = recs[norm_to_index[norm]]
             if rec.source_urls:
                 merged_urls = list(dict.fromkeys(existing.source_urls + rec.source_urls))
-                recs[norm_to_index[norm]] = existing.model_copy(
-                    update={"source_urls": merged_urls}
-                )
+                recs[norm_to_index[norm]] = existing.model_copy(update={"source_urls": merged_urls})
             if rec.evidence_terms:
                 merged_terms = list(dict.fromkeys(existing.evidence_terms + rec.evidence_terms))
                 recs[norm_to_index[norm]] = existing.model_copy(
@@ -973,7 +997,7 @@ def normalize_recommendation_name(name: str) -> str:
     # Remove leading articles
     for prefix in ("the ", "a ", "an "):
         if name.startswith(prefix):
-            name = name[len(prefix):]
+            name = name[len(prefix) :]
     return name
 
 
@@ -1070,9 +1094,7 @@ def match_article_recommendations_to_evidence(
                     cq = cand.get("source_quality", "medium")
                     if cq == "high" and best_quality != "high":
                         best_quality = "high"
-                    support_reason = (
-                        f"Partial product name match in evidence: {cand.get('name')}"
-                    )
+                    support_reason = f"Partial product name match in evidence: {cand.get('name')}"
                     break
 
         # 3. Brand prefix match (first word of rec matches first word of candidate)
@@ -1273,9 +1295,8 @@ def _looks_like_url_or_citation(name: str) -> bool:
 
 def _is_source_title_phrase(name: str) -> bool:
     lower = normalize_recommendation_name(name)
-    return (
-        ("best" in lower or "top" in lower or "vetted" in lower or "editor" in lower)
-        and any(t in lower for t in ("perfume", "parfum", "fragrance", "cologne", "scent"))
+    return ("best" in lower or "top" in lower or "vetted" in lower or "editor" in lower) and any(
+        t in lower for t in ("perfume", "parfum", "fragrance", "cologne", "scent")
     )
 
 
@@ -1526,6 +1547,18 @@ def _looks_like_product_name(name: str) -> bool:
         "section",
         "part ",
         "chapter ",
+        # Editorial verbs that signal article headings, not product names
+        "navigating",
+        "exploring",
+        "understanding the",
+        "examining",
+        "leveraging",
+        "maximizing",
+        "unlocking",
+        "harnessing",
+        "identifying",
+        "spotlight on",
+        "our approach",
     ):
         if lower.startswith(skip):
             return False

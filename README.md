@@ -133,7 +133,20 @@ The API exposes `recommendation_audit`, and the run trace includes validated can
 #### Draft Candidate Compliance
 For recommendation topics, `DraftOutput.recommended_entities` links the draft back to allowed `candidate_id`s. If a live model omits `recommended_entities` but the markdown uses allowed candidate names, BlogAgent derives the list deterministically from the markdown.
 
-When `allowed_candidates_count >= requested_count`, the article must use exactly the requested number of allowed candidates and include Quick Picks plus one detail section per recommended entity. If it uses fewer, the failure is `draft_candidate_compliance_failed`, not evidence-limited. Evidence-limited status is only valid when the ledger has fewer allowed candidates than requested and the article uses all of them.
+**Hard invariants:**
+- If `allowed_candidates_count == 0` and `recommended_count > 0` → **compliance fails**. The article introduced recommendations with no validated candidates.
+- If `allowed_candidates_count >= requested_count`, the article must use exactly the requested number of allowed candidates and include Quick Picks. Using fewer is `draft_candidate_compliance_failed`, not evidence-limited.
+- Evidence-limited status is only valid when the ledger has fewer allowed candidates than requested and the article uses all of them.
+
+These invariants prevent the impossible states observed in production: `allowed=0, compliance=pass` or `allowed=0, count_status=satisfied`.
+
+#### Domain Adapter Completeness
+Each recommendation domain (`software_tools`, `finance`, `beauty_fragrance`, etc.) has a dedicated adapter that classifies extraction candidates. The adapter is used during both pre-draft extraction (entity classification) and post-draft audit (entity validation). A heading like "Navigating the AI Landscape for Student Success" or "The Shifting Sands of Energy: Opportunities in 2026" is rejected by the adapter before it can appear as a counted recommendation.
+
+Finance content is always framed as educational watchlist material — the pipeline enforces `not financial advice` disclaimer, no direct buy/sell language, and no performance predictions without sourced attribution.
+
+#### Draft-Only Evidence Report Mode
+When the candidate ledger fails (usable_count < minimum_publishable_items), the pipeline sets `evidence_limited_mode=True`. If the model still produces a normal "best X" recommendation article, draft compliance hard-fails and the publish contract blocks it as `draft_only_not_publish_ready`. The final response explains what was searched, why no validated candidates passed, and what sources were found.
 
 #### DraftOutput Missing-Field Completion
 When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omits `meta_description` or `seo_keywords`:
