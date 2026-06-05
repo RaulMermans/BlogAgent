@@ -203,3 +203,6 @@ class BlogRunState(BaseModel):
     answer_count_snapshot: Optional[dict] = None
     # Draft candidate compliance check (dict-serialized DraftCandidateCompliance)
     draft_candidate_compliance: Optional[dict] = None
+    # Final Answer Contract — canonical post-polish publish status
+    # (dict-serialized FinalAnswerContract)
+    final_answer_contract: Optional[dict] = None

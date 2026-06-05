@@ -113,7 +113,8 @@ check_draft_candidate_compliance → verify draft used allowed candidates (new �
 recommendation_audit             → compare article recs to validated candidate table
 check_publish_contract           → re-run after polish + grounding to reflect improvements
 package_article                  → assemble ArticlePackage (with SEO fields)
-compute_publish_ready_status     → uses publish_contract as final authority
+build_final_answer_contract      → canonical post-polish count/status arbiter (see below)
+compute_publish_ready_status     → uses FinalAnswerContract as primary authority
 ```
 
 ---
@@ -344,11 +345,11 @@ Advisory thresholds: `publish_ready = score >= 75 and no high defects`. `polish_
 
 The publish contract is the final authority; the publishability evaluator is advisory.
 
-### Publish Contract (Final Truth Layer)
+### Publish Contract (Intermediate Hard-Fail Layer)
 
 `blogagent/agents/publish_contract.py` — deterministic, no LLM.
 
-Hard-fail conditions that override everything else:
+Hard-fail conditions applied after the publishability evaluator:
 
 | Defect | Severity | Score Cap |
 |---|---|---|
@@ -357,6 +358,7 @@ Hard-fail conditions that override everything else:
 | Unmet requested count without valid evidence-limited explanation | HIGH | 59 |
 | Draft candidate compliance failed | HIGH | 59 |
 | Candidate ledger failed | HIGH | 59 |
+| **answer_count_snapshot.count_status=failed** | **HIGH** | **59** |
 | Invalid recommendations outside query contract | HIGH | 59 |
 | Insufficient validated candidates | HIGH | 65 |
 | Weak source dominance (>60% low-quality) | MEDIUM | 74 |
@@ -365,12 +367,46 @@ Hard-fail conditions that override everything else:
 | Generic intro with no editorial POV | MEDIUM | 79 |
 | Thin article (<200 words) | HIGH | 65 |
 
-Status rules:
-- `publish_ready` — score ≥ 85, no high defects, no unresolved count mismatch
-- `publish_ready_with_warnings` — score ≥ 75, no high defects, evidence-limited count accepted
-- `draft_only_not_publish_ready` — score < 75 or any high defect
+**Hard invariant (added in Final Publish Contract Reconciliation sprint):**  
+`answer_count_snapshot.count_status == "failed"` always adds a HIGH-severity `count_status_failed` defect, ensuring `publish_ready_with_warnings` is never produced when the snapshot itself reported failure. This closes the regression where `requested=7, allowed=5, article=3` produced `publish_ready_with_warnings`.
 
-`state.publish_contract` is set twice: once before editorial polish, once after. The post-polish result is used by `compute_publish_ready_status` as the final truth.
+`state.publish_contract` is set twice: once before editorial polish, once after.
+
+### FinalAnswerContract (Canonical Post-Polish Arbiter)
+
+`blogagent/tools/final_answer_contract.py` — deterministic, no LLM.
+
+Built **after** `package_article` (once the final title is known) from:
+- `answer_count_snapshot` — article/grounded counts from the entity audit
+- `candidate_ledger_summary` — authoritative `allowed_count` (Cleanliness Gate v2)
+- Article text — parsed Quick Picks count, detail section count, title declared count
+- `publish_contract` — fallback for non-recommendation topics
+
+**Invariants enforced:**
+
+| Rule | Effect |
+|---|---|
+| `count_status == "failed"` | → `draft_only_not_publish_ready` (always) |
+| `allowed_count == 0` and `article > 0` | → impossible state → `draft_only_not_publish_ready` |
+| `final_article_count < allowed_count` | → draft used fewer than available → failure |
+| `grounded_count < final_article_count` | → ungrounded recommendations → failure |
+| `quick_picks_count != final_article_count` | → structural mismatch → failure |
+| `detail_sections != quick_picks_count` (both > 0) | → structural mismatch → failure |
+| `title_declared_count != final_article_count` | → title/body count conflict → failure |
+| `final_article_count < minimum_publishable_items` | → below floor → failure |
+
+**Modes:**
+
+| Mode | Condition | `publish_status` |
+|---|---|---|
+| `exact` | `count_status == "satisfied"`, no failures | `publish_ready` |
+| `evidence_limited` | `count_status == "evidence_limited"`, no failures | `publish_ready_with_warnings` |
+| `failed` | any failure reason above | `draft_only_not_publish_ready` |
+| `not_applicable` | non-recommendation topic | defers to `publish_contract.status` |
+
+**Source of truth:** `allowed_count` always comes from `candidate_ledger_summary.usable_count` (Cleanliness Gate v2), never from `recommendation_candidates_summary.usable_count` (broad extraction that over-counts).
+
+`compute_publish_ready_status` uses `FinalAnswerContract.publish_status` as its primary authority. The publish contract and final-validation status are secondary fallbacks for topics where the contract is not applicable.
 
 ### Editorial Polish Agent
 
@@ -409,8 +445,9 @@ enrichment_queries: list[str]              # queries used in enrichment pass
 publishability_evaluation: Optional[dict]  # PublishabilityEvaluation dict
 polish_summary: list[str]                  # editorial polish change summary
 publishability_score: int = 0             # convenience field from evaluation
-publish_contract: Optional[dict]           # PublishContractResult dict (final truth)
-publish_ready_status: str                  # mirrors publish_contract.status
+publish_contract: Optional[dict]           # PublishContractResult dict
+final_answer_contract: Optional[dict]      # FinalAnswerContract dict (canonical authority)
+publish_ready_status: str                  # mirrors final_answer_contract.publish_status
 ```
 
 ### Source Quality Classification

@@ -35,6 +35,7 @@ from blogagent.tools.draft_candidate_compliance import (
     derive_recommended_entities_from_markdown,
 )
 from blogagent.tools.entity_candidate_ledger import build_candidate_ledger
+from blogagent.tools.final_answer_contract import build_final_answer_contract
 from blogagent.tools.source_score import ScoreInput, source_score
 from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
@@ -1459,6 +1460,63 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
 
 
 # ---------------------------------------------------------------------------
+# Final Answer Contract — canonical post-polish count/publish arbiter
+# ---------------------------------------------------------------------------
+
+
+def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
+    """Build the canonical FinalAnswerContract after all pipeline stages.
+
+    Must run after:
+    - editorial polish  (state.draft is final)
+    - ground_article_recommendations  (state.answer_count_snapshot is built)
+    - check_publish_contract_node (second run, post-polish)
+    - package_article  (state.final_article_package.title is available)
+
+    The resulting FinalAnswerContract is then used by compute_publish_ready_status
+    as the sole authority on publish_ready_status.
+    """
+    # Prefer package title; fall back to outline title; fall back to empty
+    title = ""
+    if state.final_article_package:
+        title = state.final_article_package.title
+    elif state.outline:
+        title = state.outline.title
+
+    meta_description = state.draft_meta_description or ""
+    min_publishable = int(
+        (state.query_contract or {}).get("minimum_publishable_items") or 3
+    )
+
+    contract = build_final_answer_contract(
+        article_markdown=state.draft,
+        title=title,
+        meta_description=meta_description,
+        answer_count_snapshot=state.answer_count_snapshot or None,
+        candidate_ledger_summary=state.candidate_ledger_summary or None,
+        query_contract=state.query_contract or None,
+        publish_contract=state.publish_contract or None,
+        minimum_publishable_items=min_publishable,
+        is_recommendation=state.is_recommendation,
+    )
+    state.final_answer_contract = contract.model_dump()
+    _event(
+        state,
+        f"final_answer_contract: "
+        f"mode={contract.final_count_mode} "
+        f"status={contract.publish_status} "
+        f"article={contract.final_article_count} "
+        f"allowed={contract.allowed_count} "
+        f"quick_picks={contract.quick_picks_count} "
+        f"title_count={contract.title_declared_count}",
+    )
+    if contract.failure_reasons:
+        for reason in contract.failure_reasons[:2]:
+            _warn(state, f"final_answer_contract: {reason}")
+    return state
+
+
+# ---------------------------------------------------------------------------
 # Publish ready status computation
 # ---------------------------------------------------------------------------
 
@@ -1466,23 +1524,48 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
 def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
     """Compute the final publish_ready_status after all evaluations.
 
-    The publish contract is the final truth layer. If it has not run (no contract
-    present), falls back to the legacy publishability + final-validation logic.
+    Priority order (highest to lowest):
+    1. FinalAnswerContract.publish_status — canonical post-polish count arbiter.
+       Enforces the invariant that count_status=failed cannot produce
+       publish_ready_with_warnings, and that title/quick-picks/grounding mismatches
+       are caught regardless of what earlier checks reported.
+    2. PublishContractResult.status — earlier deterministic hard-fail layer.
+    3. Final-validation hard-fail override — if final_validation_status=failed,
+       override to draft_only.
+    4. Legacy publishability fallback (no contract built).
     """
     fv_status = state.final_validation_status or "passed"
 
-    # If final validation hard-failed, that overrides everything
+    # 1. FinalAnswerContract is the canonical authority when built.
+    if state.final_answer_contract:
+        fac_status = state.final_answer_contract.get(
+            "publish_status", "draft_only_not_publish_ready"
+        )
+        # Ensure valid literal
+        _VALID_STATUSES = {
+            "publish_ready",
+            "publish_ready_with_warnings",
+            "draft_only_not_publish_ready",
+        }
+        if fac_status not in _VALID_STATUSES:
+            fac_status = "draft_only_not_publish_ready"
+        # Hard override: if final validation hard-failed, downgrade regardless
+        if fv_status == "failed" and fac_status == "publish_ready":
+            fac_status = "draft_only_not_publish_ready"
+        state.publish_ready_status = fac_status
+        return state
+
+    # 2. Fallback: use publish contract.
     if fv_status == "failed":
         state.publish_ready_status = "draft_only_not_publish_ready"
         return state
 
-    # Use publish contract as the primary authority
     if state.publish_contract:
         contract_status = state.publish_contract.get("status", "draft_only_not_publish_ready")
         state.publish_ready_status = contract_status
         return state
 
-    # Legacy fallback (no contract ran)
+    # 3. Legacy fallback (no contract built — should not happen in normal pipeline).
     pub_eval = state.publishability_evaluation
     if pub_eval is None:
         if fv_status == "passed_with_warnings" or state.final_validation_warnings:

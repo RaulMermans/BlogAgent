@@ -135,6 +135,16 @@ The publishability evaluator and publish contract are **heuristic layers**, not 
 - `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
 - For `publish_ready_with_warnings`: evidence-limited articles are accepted only when the candidate ledger has fewer allowed candidates than requested and the article uses all allowed candidates. Framing detection is pattern-matching, not semantic judgment.
 
+## FinalAnswerContract — Known Gaps
+
+The `FinalAnswerContract` (`blogagent/tools/final_answer_contract.py`) is the canonical post-polish publish status arbiter. Known limitations:
+
+- **Quick Picks count** is extracted by counting bullet/numbered list items in the `## Quick Picks` section. Articles that use unusual structural patterns (e.g., bold items without `-` prefix) may be undercounted.
+- **Detail sections count** is extracted by counting numbered H2/H3 headings (`## 1. Name`). Articles that use other structures (bold headings, unnumbered sections) will report `detail_sections_count=0`, which avoids a false failure but also won't catch genuine mismatches in those formats.
+- **Title declared count** uses regex patterns for common forms (`7 Best`, `Top 5`, `Best 3`). Novel title structures may not be parsed. When `title_declared_count=None` (unparseable), the title check is skipped.
+- **`allowed_count`** is always sourced from `candidate_ledger_summary.usable_count`. If the ledger was not built (non-recommendation topics or very early pipeline failure), the count falls back to `answer_count_snapshot.allowed_candidates_count`. Both should be identical in normal pipeline execution.
+- **Evidence-limited explanation detection** is not re-checked in FinalAnswerContract — it relies on `answer_count_snapshot.count_status == "evidence_limited"` having already verified framing in `build_answer_count_snapshot`. If the snapshot says `evidence_limited`, FinalAnswerContract trusts that determination.
+
 ## Domain Adapters Require Domain-Specific Examples
 
 Each domain adapter (`software_tools`, `finance`, `beauty_fragrance`, etc.) maintains a known-entity list that drives acceptance of named candidates. Limitations:

@@ -64,6 +64,7 @@ _SCORE_CAPS: dict[str, int] = {
     "thin_article": 65,  # article body is very short
     "draft_candidate_compliance_failed": 59,  # model did not use allowed candidates
     "candidate_ledger_failed": 59,  # candidate ledger quality gate failed
+    "count_status_failed": 59,  # answer_count_snapshot.count_status=failed
 }
 
 # ---------------------------------------------------------------------------
@@ -513,6 +514,26 @@ def check_publish_contract(
                 severity="high",
                 message=f"Article is very short ({word_count} words). Minimum 200 words required.",
                 fixable=False,
+            )
+        )
+
+    # --- Hard invariant: count_status=failed cannot produce publish_ready_with_warnings ---
+    # This is the line of last defence before FinalAnswerContract takes over.
+    # If the answer count snapshot explicitly reports "failed", the contract must
+    # not silently accept evidence-limited framing and mark the article as warnings-only.
+    if (
+        is_recommendation
+        and answer_count_snapshot
+        and answer_count_snapshot.get("count_status") == "failed"
+        and not any(d.type == "count_status_failed" for d in defects)
+    ):
+        snap_failure = (answer_count_snapshot.get("failure_reason") or "count mismatch")[:120]
+        defects.append(
+            ContractDefect(
+                type="count_status_failed",
+                severity="high",
+                message=f"Answer count snapshot failed: {snap_failure}",
+                fixable=True,
             )
         )
 

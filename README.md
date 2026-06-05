@@ -156,12 +156,24 @@ When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omit
 - Mock fallback only happens when `article_markdown` itself is absent or unrecoverable
 
 #### Publish Ready Status
+
 The final `publish_ready_status` field indicates:
 - `publish_ready` — article meets editorial standards, ready to post
 - `publish_ready_with_warnings` — minor issues (evidence limits, low sources) but usable
 - `draft_only_not_publish_ready` — significant quality gap; human editing required
 
-The final publish contract is the authority. A high publishability/editorial score never overrides a failed query contract; the UI shows draft-only status prominently when the contract fails.
+**`FinalAnswerContract` is the canonical authority** (added in the Final Publish Contract Reconciliation sprint). It is built after all pipeline stages complete — drafting, revision, polish, grounding, and the publish contract check — and enforces these invariants:
+
+| Check | Failure means |
+|---|---|
+| `count_status == "failed"` | → `draft_only` (always; closes regression where 3/5 used produced `publish_ready_with_warnings`) |
+| `allowed_count == 0` and `article > 0` | → impossible state |
+| `final_article_count < allowed_count` | → draft used fewer items than available |
+| `grounded_count < final_article_count` | → ungrounded recommendations |
+| `quick_picks_count ≠ final_article_count` | → Quick Picks structural mismatch |
+| `title_declared_count ≠ final_article_count` | → title/body conflict |
+
+`allowed_count` always comes from `candidate_ledger_summary.usable_count` (Cleanliness Gate v2), never from the broader `recommendation_candidates_summary` (which over-counts). The UI shows a status card with failure/warning reasons from `final_answer_contract.failure_reasons` and `warning_reasons`.
 
 ### Workflow
 

@@ -20,6 +20,7 @@ from blogagent.workflow.nodes import (
     _event,
     _propagate_llm_warnings,
     build_evidence_table,
+    build_final_answer_contract_node,
     build_query_contract_node,
     check_external_effects,
     check_publish_contract_node,
@@ -236,7 +237,12 @@ def run_pipeline(topic: str) -> BlogRunState:
 
             state = _execute_step(state, package_article)
 
-            # Compute publish readiness status (uses publish contract as final authority).
+            # Build FinalAnswerContract — canonical post-polish count/status arbiter.
+            # Must run after package_article (needs final title) and after the second
+            # check_publish_contract_node (needs publish_contract for not_applicable path).
+            state = _execute_step(state, build_final_answer_contract_node)
+
+            # Compute publish readiness status — uses FinalAnswerContract as primary authority.
             state = _execute_step(state, compute_publish_ready_status)
 
             # Compute execution_mode from what actually ran.

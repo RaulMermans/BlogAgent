@@ -105,6 +105,8 @@ class RunResponse(BaseModel):
     # Draft candidate compliance (passes + failure reason)
     draft_candidate_compliance: dict[str, Any] = {}
     draft_recommended_entities: list[dict[str, Any]] = []
+    # Final Answer Contract — canonical post-polish publish status
+    final_answer_contract: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +327,9 @@ def _run_topic(topic: str) -> RunResponse:
         if state.draft_candidate_compliance
         else {},
         draft_recommended_entities=list(state.draft_recommended_entities),
+        final_answer_contract=dict(state.final_answer_contract)
+        if state.final_answer_contract
+        else {},
     )
 
 
@@ -1214,15 +1219,20 @@ def _build_app_html() -> str:
       addStat(statsRow, 'editorial score ' + publishScore + '/100', scoreType);
     }
 
-    // Publish ready status — only show green if contract is truly publish_ready
-    if (contractStatus === 'publish_ready') {
+    // Final Answer Contract — canonical status badge (takes precedence over older fields)
+    const fac = data.final_answer_contract || {};
+    const facStatus = fac.publish_status || contractStatus || pubStatus;
+    if (facStatus === 'publish_ready') {
       addStat(statsRow, '✓ publish ready', 'ok');
-    } else if (contractStatus === 'publish_ready_with_warnings') {
+    } else if (facStatus === 'publish_ready_with_warnings') {
       addStat(statsRow, '⚠ publish ready with warnings', 'warn');
-    } else if (contractStatus === 'draft_only_not_publish_ready' || pubStatus === 'draft_only_not_publish_ready') {
+    } else if (facStatus === 'draft_only_not_publish_ready') {
       addStat(statsRow, '✗ draft only', 'danger');
     }
-    if (pubContract.status) {
+    if (fac.final_count_mode) {
+      const modeColor = fac.final_count_mode === 'exact' ? 'ok' : fac.final_count_mode === 'evidence_limited' ? 'warn' : 'danger';
+      addStat(statsRow, 'count: ' + fac.final_count_mode, modeColor);
+    } else if (pubContract.status) {
       addStat(statsRow, 'final contract: ' + (pubContract.passes ? 'passed' : 'failed'), pubContract.passes ? 'ok' : 'danger');
     }
 
@@ -1367,8 +1377,64 @@ def _build_app_html() -> str:
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
 
+    // Final Answer Contract status card — shown for all recommendation articles
+    const facData = data.final_answer_contract || {};
+    if (facData.final_count_mode && facData.final_count_mode !== 'not_applicable') {
+      const facCard = document.createElement('div');
+      facCard.className = 'dynamic-banner';
+      const isReady = facData.publish_status === 'publish_ready';
+      const isWarn = facData.publish_status === 'publish_ready_with_warnings';
+      const isDraft = facData.publish_status === 'draft_only_not_publish_ready';
+      let cardStyle = '';
+      let headerText = '';
+      if (isReady) {
+        cardStyle = 'background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#166534;';
+        headerText = '✓ Final Answer Contract: Publish Ready';
+      } else if (isWarn) {
+        cardStyle = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;';
+        headerText = '⚠ Final Answer Contract: Publish Ready with Warnings';
+      } else {
+        cardStyle = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;';
+        headerText = '✗ Final Answer Contract: Draft Only — Not Publish Ready';
+      }
+      facCard.style.cssText = cardStyle;
+      const header = document.createElement('div');
+      header.style.fontWeight = '700';
+      header.style.marginBottom = '0.4rem';
+      header.textContent = headerText;
+      facCard.appendChild(header);
+      const countsLine = document.createElement('div');
+      countsLine.style.cssText = 'font-size:0.82rem;margin-bottom:0.3rem;';
+      const req = facData.requested_count != null ? facData.requested_count : '—';
+      countsLine.textContent = `requested: ${req} · allowed: ${facData.allowed_count} · article: ${facData.final_article_count} · grounded: ${facData.grounded_count} · quick picks: ${facData.quick_picks_count} · mode: ${facData.final_count_mode}`;
+      facCard.appendChild(countsLine);
+      if (isDraft && facData.failure_reasons && facData.failure_reasons.length > 0) {
+        const reasonsDiv = document.createElement('div');
+        reasonsDiv.style.cssText = 'font-size:0.82rem;margin-top:0.2rem;';
+        facData.failure_reasons.slice(0, 3).forEach(r => {
+          const p = document.createElement('p');
+          p.style.margin = '0.1rem 0';
+          p.textContent = '• ' + r;
+          reasonsDiv.appendChild(p);
+        });
+        facCard.appendChild(reasonsDiv);
+      }
+      if (isWarn && facData.warning_reasons && facData.warning_reasons.length > 0) {
+        const warnDiv = document.createElement('div');
+        warnDiv.style.cssText = 'font-size:0.82rem;margin-top:0.2rem;';
+        facData.warning_reasons.slice(0, 2).forEach(r => {
+          const p = document.createElement('p');
+          p.style.margin = '0.1rem 0';
+          p.textContent = '⚠ ' + r;
+          warnDiv.appendChild(p);
+        });
+        facCard.appendChild(warnDiv);
+      }
+      document.getElementById('output-section').insertBefore(facCard, document.getElementById('output-section').firstChild);
+    }
+
     // Draft-only banner — shown when article is not publish-ready
-    const effectiveStatus = (pubContract && pubContract.status) ? pubContract.status : pubStatus;
+    const effectiveStatus = facData.publish_status || (pubContract && pubContract.status ? pubContract.status : pubStatus);
     if (effectiveStatus === 'draft_only_not_publish_ready') {
       const draftBanner = document.createElement('div');
       draftBanner.className = 'dynamic-banner';
@@ -1561,7 +1627,7 @@ def _build_app_html() -> str:
       'Editorial Skills', 'Editorial Polish', 'Query Contract',
       'Recommendation Candidates', 'Enrichment Queries',
       'Candidate Ledger', 'Draft Compliance',
-      'Answer Count Snapshot', 'Entity Audit',
+      'Answer Count Snapshot', 'Entity Audit', 'Final Answer Contract',
     ];
     metaLabelEls.forEach(el => {
       if (dynamicLabels.includes(el.textContent)) {
