@@ -81,11 +81,15 @@ def build_final_answer_contract(
     contract_cfg = query_contract or {}
     task_type = contract_cfg.get("task_type", "unknown")
     answer_entity_type = contract_cfg.get("answer_entity_type", "general_answer")
+    contract_requested_count = contract_cfg.get("requested_count")
 
     requires_count_checking = (
         is_recommendation
         and task_type == "recommendation"
-        and answer_entity_type not in ("general_answer", "unknown")
+        and (
+            answer_entity_type not in ("general_answer", "concept", "unknown")
+            or contract_requested_count is not None
+        )
     )
 
     # --- Extract counts from snapshot ---
@@ -146,6 +150,21 @@ def build_final_answer_contract(
     if count_status == "failed":
         snap_reason = snap.get("failure_reason") or "answer_count_snapshot.count_status=failed"
         failure_reasons.append(snap_reason)
+
+    # 1b. Counted/concrete recommendation queries must have a candidate ledger.
+    ledger_quality = (candidate_ledger_summary or {}).get("table_quality", "")
+    if requested_count is not None and ledger_quality == "not_required":
+        failure_reasons.append(
+            "internal consistency failure: requested recommendation count exists but "
+            "candidate ledger is not_required"
+        )
+    if count_status == "not_applicable" and requested_count is not None:
+        failure_reasons.append(
+            "internal consistency failure: counted recommendation query produced "
+            "answer_count_snapshot.count_status=not_applicable"
+        )
+    if ledger_quality == "failed":
+        failure_reasons.append("candidate ledger failed")
 
     # 2. allowed=0 with article>0 is an impossible state.
     if allowed_count == 0 and final_article_count > 0:

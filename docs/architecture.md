@@ -159,6 +159,21 @@ recommendation / beauty_fragrance / specific_fragrance_product
 
 That means a valid item must be a specific fragrance product with source evidence. Brand-only names (`Kilian`, `Glossier`), section headings (`How We Chose`), source titles, category phrases, SEO keywords, and citation-only text do not count.
 
+Generic counted product prompts use a deterministic fallback contract instead of
+`general/general_answer`. For example:
+
+```text
+5 best affordable luxury watches
+→ recommendation / consumer_products / specific_product / watch / requested_count=5
+```
+
+This fallback covers concrete consumer-product categories that do not fit a more
+specific adapter, such as watches, luggage, backpacks, cameras, headphones, office
+chairs, mattresses, coffee machines, laptops, skincare products, kitchen gear, travel
+gear, and home products. Counted recommendation queries cannot remain
+`general/general_answer`; if that state appears, candidate validation and the final
+contract treat it as an internal consistency failure.
+
 ### Recommendation Candidate Extraction
 
 `blogagent/tools/recommendation_extractor.py` — deterministic, no LLM.
@@ -167,7 +182,7 @@ Runs during `build_evidence_table` for recommendation topics. Extracts named pro
 - Bold markdown names: `**Brand Name**`
 - Numbered list items: `1. Brand Name`
 - Bullet list items: `- Brand Name`
-- Known brand prefix scan (fragrance/beauty brands)
+- Known brand prefix scan (fragrance/beauty and generic product brands)
 
 Each candidate tracks:
 - `normalized_name`
@@ -203,7 +218,7 @@ The drafter may only recommend allowed candidates. It may not introduce products
 
 ### Domain Adapter Completeness Requirement
 
-Each non-general domain (`beauty_fragrance`, `beauty_makeup`, `fashion_lifestyle`, `software_tools`, `finance`) has a dedicated adapter in `blogagent/tools/domain_adapters/`. Adapters must implement:
+Each non-general domain (`beauty_fragrance`, `beauty_makeup`, `fashion_lifestyle`, `software_tools`, `finance`, `consumer_products`) has a dedicated adapter in `blogagent/tools/domain_adapters/`. Adapters must implement:
 
 - `is_valid_entity(name, contract)` — accept named products/companies; reject headings, categories, and generic phrases
 - `get_rejection_reason(name, contract)` — human-readable explanation for every rejection
@@ -211,6 +226,12 @@ Each non-general domain (`beauty_fragrance`, `beauty_makeup`, `fashion_lifestyle
 - `get_known_brands_or_entities()` — seed list of known valid entities for the domain
 
 `classify_candidate_entity()` in `recommendation_extractor.py` delegates to the domain adapter for all non-fragrance recommendation domains. This means SoftwareToolsAdapter and FinanceAdapter drive both pre-draft candidate classification and post-draft audit classification. A heading that slips past `_is_generic_heading` will still be rejected by the adapter.
+
+`GenericProductAdapter` validates product models and product lines for the
+`consumer_products` domain. It accepts source-supported names such as `Tissot PRX
+Quartz`, `Sony WH-1000XM5`, `Away Bigger Carry-On`, and `Herman Miller Aeron`. It
+rejects generic product/category phrases, brand-only names, sale/shop/navigation text,
+and buying-guide section headings when the contract requires `specific_product`.
 
 ### Draft Candidate Compliance
 
@@ -394,6 +415,8 @@ Built **after** `package_article` (once the final title is known) from:
 | `detail_sections != quick_picks_count` (both > 0) | → structural mismatch → failure |
 | `title_declared_count != final_article_count` | → title/body count conflict → failure |
 | `final_article_count < minimum_publishable_items` | → below floor → failure |
+| counted recommendation with `candidate_ledger=not_required` | → internal consistency failure |
+| counted recommendation with `count_status=not_applicable` | → internal consistency failure |
 
 **Modes:**
 
@@ -407,6 +430,11 @@ Built **after** `package_article` (once the final title is known) from:
 **Source of truth:** `allowed_count` always comes from `candidate_ledger_summary.usable_count` (Cleanliness Gate v2), never from `recommendation_candidates_summary.usable_count` (broad extraction that over-counts).
 
 `compute_publish_ready_status` uses `FinalAnswerContract.publish_status` as its primary authority. The publish contract and final-validation status are secondary fallbacks for topics where the contract is not applicable.
+
+For `consumer_products`, FinalAnswerContract applies the same count authority used for
+fragrance, software, and finance recommendation domains. A product recommendation fails
+if it recommends unsupported products, if the title count does not match the delivered
+count, if Quick Picks/detail sections disagree, or if the candidate ledger did not run.
 
 ### Editorial Polish Agent
 

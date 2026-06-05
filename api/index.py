@@ -1293,6 +1293,7 @@ def _build_app_html() -> str:
       const qcText = document.createElement('p');
       qcText.style.cssText = 'font-size:0.85rem;color:#444;margin:0.2rem 0;';
       qcText.textContent = `${queryContract.task_type} / ${queryContract.domain} / ${queryContract.answer_entity_type}` +
+        (queryContract.entity_subtype ? ` / ${queryContract.entity_subtype}` : '') +
         (queryContract.requested_count ? ` / ${queryContract.requested_count} requested` : '');
       qcDiv.appendChild(qcText);
       document.getElementById('title-display').closest('.form-card').appendChild(qcDiv);
@@ -1331,7 +1332,7 @@ def _build_app_html() -> str:
     }
 
     const recCandidates = data.recommendation_candidates_summary || {};
-    if (recCandidates.usable_count !== undefined) {
+    if (recCandidates.usable_count !== undefined && !ledgerSummary.table_quality) {
       const reqCount = data.requested_count;
       const usableCount = recCandidates.usable_count;
       const candDiv = document.createElement('div');
@@ -1435,6 +1436,13 @@ def _build_app_html() -> str:
 
     // Draft-only banner — shown when article is not publish-ready
     const effectiveStatus = facData.publish_status || (pubContract && pubContract.status ? pubContract.status : pubStatus);
+    if (queryContract.task_type === 'recommendation' && ledgerSummary.table_quality === 'not_required') {
+      const consistencyBanner = document.createElement('div');
+      consistencyBanner.className = 'dynamic-banner';
+      consistencyBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
+      consistencyBanner.textContent = 'Internal consistency error: recommendation query marked candidate ledger as not_required.';
+      document.getElementById('output-section').insertBefore(consistencyBanner, document.getElementById('output-section').firstChild);
+    }
     if (effectiveStatus === 'draft_only_not_publish_ready') {
       const draftBanner = document.createElement('div');
       draftBanner.className = 'dynamic-banner';

@@ -135,6 +135,18 @@ class DomainAdapter:
         if any(lower.startswith(p) for p in editorial_patterns) and any(
             domain_kw in lower
             for domain_kw in ("perfume", "parfum", "fragrance", "makeup", "tools", "apps", "stocks")
+            + (
+                "watch",
+                "watches",
+                "luggage",
+                "camera",
+                "cameras",
+                "headphones",
+                "office chairs",
+                "mattress",
+                "laptops",
+                "sneakers",
+            )
         ):
             return True
         return False

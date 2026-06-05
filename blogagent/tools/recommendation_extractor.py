@@ -113,6 +113,12 @@ _SUITABILITY_TERMS: frozenset[str] = frozenset(
         "office-friendly",
         "summer heat",
         "warm-weather",
+        "affordable",
+        "luxury",
+        "picks",
+        "recommendations",
+        "under",
+        "buying guide",
     }
 )
 
@@ -276,6 +282,22 @@ _BRAND_PREFIXES: tuple[str, ...] = (
     "guerlain",
     "maison francis kurkdjian",
     "giorgio armani",
+    "tissot",
+    "seiko",
+    "hamilton",
+    "orient",
+    "citizen",
+    "longines",
+    "sony",
+    "bose",
+    "apple",
+    "samsonite",
+    "away",
+    "travelpro",
+    "fujifilm",
+    "canon",
+    "herman miller",
+    "steelcase",
 )
 
 _BRAND_ONLY_NAMES: frozenset[str] = frozenset(
@@ -373,6 +395,16 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
         "fragrance wardrobe",
         "recommendations",
         "guide",
+        "affordable luxury watches",
+        "best luxury watches",
+        "top picks",
+        "what makes a great watch",
+        "shop now",
+        "on sale",
+        "luxury brands",
+        "watch brands",
+        "men's watches",
+        "under $500",
     }
 )
 
@@ -412,6 +444,17 @@ _NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
     "key energy",
     "key ai",
     "for student success",
+    "affordable luxury watches",
+    "best luxury watches",
+    "top picks",
+    "what makes a great watch",
+    "final takeaway",
+    "shop now",
+    "on sale",
+    "luxury brands",
+    "watch brands",
+    "men's watches",
+    "under $",
 )
 
 # ---------------------------------------------------------------------------
@@ -423,7 +466,14 @@ class RecommendationCandidate(BaseModel):
     name: str
     normalized_name: str = ""
     entity_type: Literal[
-        "specific_product", "brand", "section_heading", "category", "source_title", "unknown"
+        "specific_product",
+        "brand",
+        "brand_cluster",
+        "section_heading",
+        "category",
+        "source_title",
+        "source_nav",
+        "unknown",
     ] = "unknown"
     domain: str = "general"
     is_specific_product: bool = False
@@ -527,6 +577,9 @@ def classify_candidate_entity(
 
         adapter = get_adapter(query_contract.domain)
         if adapter.is_valid_entity(raw, query_contract):
+            entity_type = adapter.classify_entity_type(raw, query_contract)
+            if entity_type == "category":
+                return "category", True, None
             return "specific_product", True, None
         entity_type = adapter.classify_entity_type(raw, query_contract)
         rejection = adapter.get_rejection_reason(raw, query_contract)
@@ -1489,23 +1542,47 @@ def _extract_names_from_text(text: str) -> list[str]:
         if _looks_like_product_name(name):
             found.append(name)
 
+    # Labeled list structures: "Best Overall: Sony WH-1000XM5".
+    for m in re.finditer(
+        r"(?:^|[\n.;])\s*(?:best|top|pick|affordable|budget|luxury|reviewed|tested)"
+        r"[^:\n]{0,40}:\s+([A-Z][A-Za-z0-9&' .+/-]{2,60}?)(?:\s*[—–,;.]|\n|$)",
+        text,
+        re.IGNORECASE,
+    ):
+        name = m.group(1).strip(" .,;:")
+        if _looks_like_product_name(name):
+            found.append(name)
+
     # Known brand prefix scan: "Chanel Chance Eau Tendre ..."
     lower = text.lower()
     for prefix in _BRAND_PREFIXES:
-        idx = lower.find(prefix)
-        if idx == -1:
-            continue
-        # Capture up to 6 words starting from brand prefix in original case
-        raw = text[idx : idx + 80]
-        tokens = raw.split()[:6]
-        candidate = " ".join(t.strip(".,;:!?\"'()") for t in tokens).strip()
-        # Trim trailing stop words from the candidate
-        candidate_words = candidate.split()
-        while candidate_words and candidate_words[-1].lower() in _STOP_WORDS:
-            candidate_words.pop()
-        candidate = " ".join(candidate_words)
-        if _looks_like_product_name(candidate):
-            found.append(candidate)
+        start = 0
+        while True:
+            idx = lower.find(prefix, start)
+            if idx == -1:
+                break
+            # Capture up to 6 words starting from brand prefix in original case
+            raw = text[idx : idx + 90]
+            tokens = raw.split()[:6]
+            candidate = " ".join(t.strip(".,;:!?\"'()") for t in tokens).strip()
+            # Trim trailing stop words from the candidate
+            candidate_words = candidate.split()
+            while candidate_words and candidate_words[-1].lower() in _STOP_WORDS:
+                candidate_words.pop()
+            candidate = " ".join(candidate_words)
+            if _looks_like_product_name(candidate):
+                found.append(candidate)
+            start = idx + len(prefix)
+
+    # Comma-separated names in source titles/snippets.
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z]+(?:\s+[A-Z0-9][A-Za-z0-9&' .+/-]{1,24}){1,5})"
+        r"(?=,|\sand\s|\.)",
+        text,
+    ):
+        name = m.group(1).strip(" .,;:")
+        if _looks_like_product_name(name):
+            found.append(name)
 
     # Deduplicate preserving order; prefer longer/more specific names
     seen: set[str] = set()
@@ -1541,6 +1618,8 @@ def _looks_like_product_name(name: str) -> bool:
         "what ",
         "when ",
         "the best",
+        "best ",
+        "top ",
         "introduction",
         "overview",
         "conclusion",

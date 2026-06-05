@@ -163,6 +163,29 @@ def test_run_recommendation_response_includes_query_contract(monkeypatch):
     assert "recommendation_audit" in body
 
 
+def test_run_generic_product_recommendation_uses_consumer_products_contract(monkeypatch):
+    monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_EDITOR", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_FACTCHECK", "false")
+    monkeypatch.setenv("BLOGAGENT_USE_LLM_CITATION_JUDGE", "false")
+    response = client.post("/run", json={"topic": "5 best affordable luxury watches"})
+    body = response.json()
+    contract = body["query_contract"]
+    ledger = body["candidate_ledger_summary"]
+    final_contract = body["final_answer_contract"]
+
+    assert response.status_code == 200
+    assert contract["task_type"] == "recommendation"
+    assert contract["domain"] == "consumer_products"
+    assert contract["answer_entity_type"] == "specific_product"
+    assert contract["entity_subtype"] == "watch"
+    assert contract["requested_count"] == 5
+    assert ledger["table_quality"] != "not_required"
+    assert final_contract["final_count_mode"] != "not_applicable"
+    assert final_contract["publish_status"] == "draft_only_not_publish_ready"
+
+
 def test_run_response_does_not_include_raw_source_text(monkeypatch):
     monkeypatch.setenv("BLOGAGENT_SEARCH_PROVIDER", "mock")
     monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
@@ -357,6 +380,19 @@ def test_app_contains_topic_input():
     response = client.get("/app")
     assert "topic" in response.text.lower()
     assert "<textarea" in response.text
+
+
+def test_app_uses_final_answer_contract_for_visible_status():
+    response = client.get("/app")
+    assert "Final Answer Contract" in response.text
+    assert "facData.publish_status" in response.text
+    assert "effectiveStatus = facData.publish_status" in response.text
+
+
+def test_app_shows_consistency_error_for_not_required_recommendation_ledger():
+    response = client.get("/app")
+    assert "Internal consistency error" in response.text
+    assert "candidate ledger as not_required" in response.text
 
 
 def test_app_contains_generate_button():

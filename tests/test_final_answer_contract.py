@@ -41,6 +41,17 @@ def _rec_query_contract(requested_count: int | None = None) -> dict:
     }
 
 
+def _consumer_query_contract(requested_count: int | None = 5) -> dict:
+    return {
+        "task_type": "recommendation",
+        "domain": "consumer_products",
+        "answer_entity_type": "specific_product",
+        "entity_subtype": "watch",
+        "minimum_publishable_items": 3,
+        "requested_count": requested_count,
+    }
+
+
 def _snap(
     *,
     requested: int | None,
@@ -65,6 +76,10 @@ def _snap(
 
 def _ledger(usable: int) -> dict:
     return {"usable_count": usable, "table_quality": "limited" if usable > 0 else "failed"}
+
+
+def _ledger_quality(usable: int, quality: str) -> dict:
+    return {"usable_count": usable, "table_quality": quality}
 
 
 def _article_exact(n: int, name_prefix: str = "Parfum") -> str:
@@ -174,6 +189,20 @@ class TestExactCountPass:
         assert fac.publish_status == "publish_ready"
         assert fac.final_count_mode == "exact"
 
+    def test_consumer_products_exact_publish_ready(self):
+        n = 5
+        fac = _build(
+            article_markdown=_article_exact(n, name_prefix="Watch"),
+            title="5 Best Watches for Everyday Wear",
+            answer_count_snapshot=_snap(
+                requested=n, allowed=n, article=n, grounded=n, status="satisfied"
+            ),
+            candidate_ledger_summary=_ledger_quality(n, "strong"),
+            query_contract=_consumer_query_contract(n),
+        )
+        assert fac.publish_status == "publish_ready"
+        assert fac.final_count_mode == "exact"
+
 
 # ---------------------------------------------------------------------------
 # B. Evidence-limited pass
@@ -224,6 +253,19 @@ class TestEvidenceLimitedPass:
         assert fac.final_article_count == 5
         assert fac.grounded_count == 5
         assert fac.quick_picks_count == 5
+
+    def test_consumer_products_evidence_limited_publish_ready_with_warnings(self):
+        fac = _build(
+            article_markdown=_article_exact(3, name_prefix="Watch"),
+            title="3 Best Watches for Everyday Wear",
+            answer_count_snapshot=_snap(
+                requested=5, allowed=3, article=3, grounded=3, status="evidence_limited"
+            ),
+            candidate_ledger_summary=_ledger_quality(3, "limited"),
+            query_contract=_consumer_query_contract(5),
+        )
+        assert fac.publish_status == "publish_ready_with_warnings"
+        assert fac.final_count_mode == "evidence_limited"
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +326,38 @@ class TestRegressionCase:
         assert fac.allowed_count == 5
         assert fac.final_article_count == 3
         assert fac.grounded_count == 3
+
+    def test_consumer_products_requested_five_allowed_five_article_three_fails(self):
+        fac = _build(
+            article_markdown=_article_exact(3, name_prefix="Watch"),
+            title="3 Best Watches",
+            answer_count_snapshot=_snap(
+                requested=5,
+                allowed=5,
+                article=3,
+                grounded=3,
+                status="failed",
+                failure_reason="draft_candidate_compliance_failed: used 3/5",
+            ),
+            candidate_ledger_summary=_ledger_quality(5, "strong"),
+            query_contract=_consumer_query_contract(5),
+        )
+        assert fac.publish_status == "draft_only_not_publish_ready"
+        assert fac.final_count_mode == "failed"
+
+    def test_consumer_products_candidate_ledger_not_required_fails(self):
+        fac = _build(
+            article_markdown=_article_exact(5, name_prefix="Watch"),
+            title="5 Best Watches",
+            answer_count_snapshot=_snap(
+                requested=5, allowed=0, article=5, grounded=5, status="not_applicable"
+            ),
+            candidate_ledger_summary=_ledger_quality(0, "not_required"),
+            query_contract=_consumer_query_contract(5),
+        )
+        assert fac.publish_status == "draft_only_not_publish_ready"
+        assert fac.final_count_mode == "failed"
+        assert any("not_required" in r for r in fac.failure_reasons)
 
 
 # ---------------------------------------------------------------------------

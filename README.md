@@ -87,12 +87,24 @@ After intent detection, BlogAgent builds a deterministic `QueryContract` that de
 
 For `7 best parfums for summer`, the contract is `recommendation / beauty_fragrance / specific_fragrance_product`. Brand-only names, section headings, source titles, category phrases, SEO keywords, and citation-only text are rejected as valid product recommendations.
 
+Generic product recommendation prompts now fall back to `consumer_products` instead of
+`general/general_answer`. For example, `5 best affordable luxury watches` becomes
+`recommendation / consumer_products / specific_product / watch` with `requested_count=5`.
+This fallback covers consumer categories such as watches, luggage, backpacks, cameras,
+headphones, office chairs, mattresses, coffee machines, laptops, skincare products,
+kitchen gear, travel gear, and home products when no more specific domain applies.
+
 #### Entity Candidate Ledger
 Before drafting, BlogAgent extracts and classifies candidates from source titles, snippets, extracted source text, and evidence facts, then promotes only clean, source-backed entities into `state.allowed_candidates`.
 
 The Candidate Cleanliness Gate v2 rejects malformed fragments, source titles, section headings, brand clusters, catalog/navigation residue, empty evidence spans, unknown weak sources, and truncated names such as `Tom Ford Neroli Portofino Eau de`. The locked allowed table carries `candidate_id`, canonical name, source URL/title, source quality/type, evidence span, evidence terms, and supported context.
 
 `state.allowed_candidates` is the single allowed recommendation table used by drafting, draft candidate compliance, article audit, article grounding, publish contract, and API/UI responses. `state.validated_candidates` is retained only as a compatibility fallback.
+
+Counted recommendation queries and concrete "best/top/recommend" entity queries must build
+the candidate ledger. A counted recommendation cannot be `general/general_answer`, and a
+candidate ledger status of `not_required` is treated as an internal consistency failure for
+such queries.
 
 #### Enrichment Search
 When evidence is insufficient for a recommendation topic (and Tavily is active):
@@ -141,7 +153,13 @@ For recommendation topics, `DraftOutput.recommended_entities` links the draft ba
 These invariants prevent the impossible states observed in production: `allowed=0, compliance=pass` or `allowed=0, count_status=satisfied`.
 
 #### Domain Adapter Completeness
-Each recommendation domain (`software_tools`, `finance`, `beauty_fragrance`, etc.) has a dedicated adapter that classifies extraction candidates. The adapter is used during both pre-draft extraction (entity classification) and post-draft audit (entity validation). A heading like "Navigating the AI Landscape for Student Success" or "The Shifting Sands of Energy: Opportunities in 2026" is rejected by the adapter before it can appear as a counted recommendation.
+Each recommendation domain (`software_tools`, `finance`, `beauty_fragrance`, `consumer_products`, etc.) has a dedicated adapter that classifies extraction candidates. The adapter is used during both pre-draft extraction (entity classification) and post-draft audit (entity validation). A heading like "Navigating the AI Landscape for Student Success" or "The Shifting Sands of Energy: Opportunities in 2026" is rejected by the adapter before it can appear as a counted recommendation.
+
+`GenericProductAdapter` handles product models and product lines for generic consumer-product
+lists. It accepts names such as `Tissot PRX Quartz`, `Sony WH-1000XM5`, `Away Bigger
+Carry-On`, and `Herman Miller Aeron`, while rejecting phrases like `affordable luxury
+watches`, `buying guide`, `shop now`, `under $500`, and brand-only names when a specific
+product is required.
 
 Finance content is always framed as educational watchlist material — the pipeline enforces `not financial advice` disclaimer, no direct buy/sell language, and no performance predictions without sourced attribution.
 

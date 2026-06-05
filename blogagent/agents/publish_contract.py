@@ -193,6 +193,21 @@ def check_publish_contract(
     # Candidate ledger quality hard fail
     if candidate_ledger_summary and is_recommendation:
         ledger_quality = candidate_ledger_summary.get("table_quality", "")
+        if ledger_quality == "not_required" and (
+            requested_count is not None
+            or answer_entity_type not in ("", "general_answer", "concept", "unknown")
+        ):
+            defects.append(
+                ContractDefect(
+                    type="candidate_ledger_failed",
+                    severity="high",
+                    message=(
+                        "Internal consistency failure: recommendation query requires "
+                        "candidate validation but candidate ledger is not_required."
+                    ),
+                    fixable=False,
+                )
+            )
         if ledger_quality == "failed":
             ledger_issues = candidate_ledger_summary.get("quality_issues", [])
             issue_str = ledger_issues[0] if ledger_issues else "ledger quality failed"

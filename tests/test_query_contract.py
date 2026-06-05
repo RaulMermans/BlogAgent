@@ -125,3 +125,91 @@ def test_finance_safety_constraints():
     assert any("educational" in c.lower() for c in constraints)
     assert any("financial advice" in c.lower() for c in constraints)
     assert any("buy/sell" in c.lower() for c in constraints)
+
+
+def test_affordable_luxury_watches_falls_back_to_consumer_products():
+    contract = build_query_contract(
+        "5 best affordable luxury watches",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=5,
+    )
+    assert contract.task_type == "recommendation"
+    assert contract.domain == "consumer_products"
+    assert contract.answer_entity_type == "specific_product"
+    assert contract.entity_subtype == "watch"
+    assert contract.requested_count == 5
+    assert contract.minimum_publishable_items == 3
+    assert requires_candidate_ledger(contract) is True
+
+
+def test_carry_on_luggage_falls_back_to_consumer_products():
+    contract = build_query_contract(
+        "best carry-on luggage for Europe",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=None,
+    )
+    assert contract.domain == "consumer_products"
+    assert contract.answer_entity_type == "specific_product"
+    assert contract.entity_subtype == "luggage"
+
+
+def test_beginner_cameras_falls_back_to_consumer_products():
+    contract = build_query_contract(
+        "best cameras for beginners",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=None,
+    )
+    assert contract.domain == "consumer_products"
+    assert contract.answer_entity_type == "specific_product"
+    assert contract.entity_subtype == "camera"
+
+
+def test_office_chairs_under_300_falls_back_to_consumer_products():
+    contract = build_query_contract(
+        "best office chairs under 300",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=None,
+    )
+    assert contract.domain == "consumer_products"
+    assert contract.answer_entity_type == "specific_product"
+    assert contract.entity_subtype == "office_chair"
+
+
+def test_leather_sneakers_not_general_answer():
+    contract = build_query_contract(
+        "best leather sneakers for men",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=None,
+    )
+    assert contract.domain in ("fashion_lifestyle", "consumer_products")
+    assert contract.answer_entity_type != "general_answer"
+
+
+def test_watches_explainer_does_not_require_ledger():
+    contract = build_query_contract(
+        "why watches are expensive",
+        is_recommendation=False,
+        is_financial=False,
+        requested_count=None,
+    )
+    assert contract.task_type == "explainer"
+    assert contract.domain == "general"
+    assert contract.answer_entity_type == "general_answer"
+    assert requires_candidate_ledger(contract) is False
+
+
+def test_counted_recommendation_cannot_be_general_answer():
+    contract = build_query_contract(
+        "5 best affordable luxury watches",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=5,
+    )
+    assert not (
+        contract.domain == "general" and contract.answer_entity_type == "general_answer"
+    )

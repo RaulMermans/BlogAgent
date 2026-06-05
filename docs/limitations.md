@@ -150,6 +150,14 @@ The `FinalAnswerContract` (`blogagent/tools/final_answer_contract.py`) is the ca
 Each domain adapter (`software_tools`, `finance`, `beauty_fragrance`, etc.) maintains a known-entity list that drives acceptance of named candidates. Limitations:
 
 - A software tool or company **not in the known-entity list** will only be accepted if it passes `_looks_like_named_software_product` or `_looks_like_company_or_security`, which are heuristic and conservative by design.
+- Generic consumer products use `GenericProductAdapter`, which is heuristic. Product extraction
+  works best for clear brand + model/product-line names and may need new examples for niche
+  categories, unusual model names, aliases, or category-specific naming conventions.
+- Search snippets and source titles may not expose exact product names, especially when a
+  review article hides picks behind interactive modules or lazy-loaded tables. In those cases
+  the candidate ledger can correctly fail even when the source page contains useful products.
+- Generic product category phrases are rejected for `specific_product` contracts. Queries that
+  truly want categories/types/essentials need wording that makes that category intent explicit.
 - Search snippets often do not contain structured entity lists — the adapter may fail to extract candidates even when the source clearly discusses the topic.
 - Finance content is educational only. The pipeline applies safety constraints (no buy/sell language, disclaimer required). This is enforced deterministically but cannot substitute for a licensed financial advisor.
 - Human review is required before publishing any recommendation or financial content.
@@ -227,6 +235,13 @@ Source quality classification is a **domain heuristic**, not a live quality asse
 - The classifier does not evaluate content — a high-domain source can still have a low-quality article for a given topic.
 - Domain lists are static and may become outdated as new authoritative sources emerge.
 - Source type (`editorial`, `retailer_editorial`, `forum`, `social`, `video`, `unknown`) is inferred from domains/paths, not from full content analysis.
+- Generic product review domains such as Wirecutter/NYTimes, Tom's Guide, TechRadar, The Verge,
+  CNET, RTINGS, Trusted Reviews, What Hi-Fi, Gear Patrol, GQ, Esquire, Hodinkee, Teddy
+  Baldassarre, Bob's Watches, WatchTime, aBlogtoWatch, Strategist, Good Housekeeping,
+  Reviewed, and Consumer Reports are treated as medium/high editorial signals, but this does
+  not verify that a specific article supports a specific recommendation.
+- Reddit, Facebook, YouTube, and other social/user-generated sources are low quality unless
+  corroborated by stronger sources.
 
 The classifier is intentionally simple. It provides a usable editorial signal without LLM calls.
 

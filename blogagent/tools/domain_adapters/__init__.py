@@ -9,6 +9,7 @@ from __future__ import annotations
 from blogagent.tools.domain_adapters.base import DomainAdapter
 from blogagent.tools.domain_adapters.beauty_fragrance import BeautyFragranceAdapter
 from blogagent.tools.domain_adapters.beauty_makeup import BeautyMakeupAdapter
+from blogagent.tools.domain_adapters.consumer_products import GenericProductAdapter
 from blogagent.tools.domain_adapters.fashion_lifestyle import FashionLifestyleAdapter
 from blogagent.tools.domain_adapters.finance import FinanceAdapter
 from blogagent.tools.domain_adapters.general import GeneralAdapter
@@ -20,6 +21,7 @@ _ADAPTER_REGISTRY: dict[str, DomainAdapter] = {
     "fashion_lifestyle": FashionLifestyleAdapter(),
     "software_tools": SoftwareToolsAdapter(),
     "finance": FinanceAdapter(),
+    "consumer_products": GenericProductAdapter(),
     "general": GeneralAdapter(),
 }
 
@@ -33,6 +35,7 @@ __all__ = [
     "DomainAdapter",
     "BeautyFragranceAdapter",
     "BeautyMakeupAdapter",
+    "GenericProductAdapter",
     "FashionLifestyleAdapter",
     "SoftwareToolsAdapter",
     "FinanceAdapter",

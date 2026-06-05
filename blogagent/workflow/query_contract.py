@@ -17,6 +17,7 @@ Domain = Literal[
     "fashion_lifestyle",
     "software_tools",
     "finance",
+    "consumer_products",
     "general",
 ]
 
@@ -48,12 +49,41 @@ _FRAGRANCE_TERMS = (
     "eau de",
 )
 _MAKEUP_TERMS = ("makeup", "mascara", "foundation", "lipstick", "concealer", "blush", "eyeshadow")
-_FASHION_TERMS = ("fashion", "outfit", "style", "shoes", "bags", "wardrobe", "capsule", "clothes")
+_FASHION_TERMS = (
+    "fashion",
+    "outfit",
+    "style",
+    "shoes",
+    "sneaker",
+    "sneakers",
+    "bags",
+    "wardrobe",
+    "capsule",
+    "clothes",
+)
 _SOFTWARE_TERMS = ("tools", "apps", "software", "platform", "plugin", "extension", "ai tools")
 _HOW_TO_TERMS = ("how to", "how do", "steps to", "guide to")
 _COMPARISON_TERMS = (" vs ", " versus ", "compare", "comparison")
 _ANALYSIS_TERMS = ("analysis", "what caused", "trend", "forecast")
 _BRAND_QUERY_TERMS = ("brands", "houses", "labels")
+_RECOMMENDATION_INTENT_TERMS = ("best", "top", "recommend", "recommendation", "picks")
+_CATEGORY_QUERY_TERMS = ("categories", "category", "essentials", "types", "kinds")
+
+_CONSUMER_PRODUCT_SUBTYPES: dict[str, tuple[str, ...]] = {
+    "watch": ("watch", "watches"),
+    "luggage": ("luggage", "carry-on", "carry on", "suitcase", "suitcases"),
+    "backpack": ("backpack", "backpacks"),
+    "camera": ("camera", "cameras"),
+    "headphone": ("headphone", "headphones", "earbuds", "earbud"),
+    "office_chair": ("office chair", "office chairs", "desk chair", "desk chairs"),
+    "mattress": ("mattress", "mattresses"),
+    "coffee_machine": ("coffee machine", "coffee machines", "espresso machine", "coffee maker"),
+    "laptop": ("laptop", "laptops"),
+    "skincare_product": ("skincare", "skin care", "serum", "sunscreen", "moisturizer"),
+    "kitchen_gear": ("kitchen gear", "cookware", "knife", "knives", "air fryer", "blender"),
+    "travel_gear": ("travel gear", "packing cube", "travel pillow"),
+    "home_product": ("home product", "home products", "vacuum", "robot vacuum", "air purifier"),
+}
 
 
 def build_query_contract(
@@ -89,6 +119,14 @@ def build_query_contract(
         domain = "fashion_lifestyle"
     elif any(t in lower for t in _SOFTWARE_TERMS):
         domain = "software_tools"
+    elif task_type == "recommendation" and _contains_consumer_product_phrase(lower):
+        domain = "consumer_products"
+    elif (
+        task_type == "recommendation"
+        and requested_count is not None
+        and any(t in lower for t in _RECOMMENDATION_INTENT_TERMS)
+    ):
+        domain = "consumer_products"
     else:
         domain = "general"
 
@@ -234,6 +272,42 @@ def build_query_contract(
             ],
         )
 
+    if domain == "consumer_products" and task_type == "recommendation":
+        asks_for_categories = any(t in lower for t in _CATEGORY_QUERY_TERMS)
+        subtype = _infer_consumer_product_subtype(lower)
+        return QueryContract(
+            task_type=task_type,
+            domain=domain,
+            requested_count=requested_count,
+            answer_entity_type="product_category" if asks_for_categories else "specific_product",
+            entity_subtype=subtype,
+            valid_item_rules=[
+                "must be a specific named product, product model, or product line",
+                "brand-only names do not count when specific products are required",
+                "product categories count only when the prompt explicitly asks for "
+                "categories/types/essentials",
+                "must have source evidence",
+            ],
+            invalid_item_rules=[
+                "generic category phrases do not count as product recommendations",
+                "section headings do not count",
+                "source titles do not count unless they contain a clean product name",
+                "buying-guide, sale, shop, and navigation text do not count",
+                "brand-only names do not count as specific product recommendations",
+            ],
+            required_evidence_fields=[
+                "name",
+                "source_urls",
+                "source_titles",
+                "source_quality",
+                "evidence_spans",
+                "supported_context",
+            ],
+            minimum_publishable_items=3,
+            evidence_limited_allowed=True,
+            exact_count_required=requested_count is not None,
+        )
+
     return QueryContract(
         task_type=task_type,
         domain=domain,
@@ -250,7 +324,19 @@ def build_query_contract(
 
 def requires_candidate_ledger(contract: QueryContract) -> bool:
     """Return True when the query contract requires a candidate ledger."""
-    return contract.task_type == "recommendation" and contract.answer_entity_type not in (
-        "general_answer",
-        "unknown",
-    )
+    if contract.task_type != "recommendation":
+        return False
+    if contract.requested_count is not None:
+        return True
+    return contract.answer_entity_type not in ("general_answer", "concept", "unknown")
+
+
+def _contains_consumer_product_phrase(lower: str) -> bool:
+    return any(term in lower for terms in _CONSUMER_PRODUCT_SUBTYPES.values() for term in terms)
+
+
+def _infer_consumer_product_subtype(lower: str) -> Optional[str]:
+    for subtype, terms in _CONSUMER_PRODUCT_SUBTYPES.items():
+        if any(term in lower for term in terms):
+            return subtype
+    return None
