@@ -235,19 +235,20 @@ def test_recommendation_topic_mock_draft_does_not_invent_products():
     state = run_pipeline("Best parfums for summer")
     assert state.final_article_package is not None
     article = state.final_article_package.article_markdown
-    # Should say real search is needed rather than listing fake products
-    assert (
-        "available sources did not provide" in article
-        or "Real search" in article
-        or "Enable" in article
-    )
+    assert "Evidence Report" in article
+    assert "Why Not Publish-Ready" in article
+    assert "No candidates passed validation" in article
 
 
-def test_recommendation_topic_mock_draft_has_quick_picks_section():
-    """Mock draft for recommendation topics must include a Quick Picks section."""
+def test_recommendation_topic_below_minimum_uses_evidence_report_structure():
+    """Below-minimum drafts must not pretend to be normal best-of lists."""
     state = run_pipeline("Best laptops for students")
     assert state.final_article_package is not None
-    assert "Quick Picks" in state.final_article_package.article_markdown
+    article = state.final_article_package.article_markdown
+    assert "Evidence Report" in article
+    assert "Validated Candidates Found" in article
+    assert "Quick Picks" not in article
+    assert state.publish_ready_status == "draft_only_not_publish_ready"
 
 
 def test_tavily_recommendation_topic_does_not_add_mock_warning(monkeypatch):

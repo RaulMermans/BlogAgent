@@ -19,9 +19,14 @@ from blogagent.tools.validators import (
 from blogagent.workflow.nodes import (
     _event,
     _propagate_llm_warnings,
+    audit_writer_output_node,
+    build_candidate_pack_node,
     build_evidence_table,
     build_final_answer_contract_node,
     build_query_contract_node,
+    build_review_packet_node,
+    build_revision_plan_node,
+    build_writer_handoff_node,
     check_external_effects,
     check_publish_contract_node,
     compute_publish_ready_status,
@@ -37,6 +42,9 @@ from blogagent.workflow.nodes import (
     intake_topic,
     match_citations,
     package_article,
+    repair_after_initial_draft,
+    repair_before_final_contract,
+    resolve_tone_profile_node,
     revise_if_final_validation_failed,
     revise_if_needed,
     run_editorial_polish,
@@ -95,6 +103,7 @@ _PRE_FACTCHECK = [
     intake_topic,
     check_external_effects,  # guardrail — sets state.blocked; short-circuits if True
     build_query_contract_node,  # precise answer contract
+    resolve_tone_profile_node,  # explicit or domain-inferred voice contract
     select_skills,  # deterministic skill selection based on intent
     generate_research_questions,
     run_web_search,
@@ -104,8 +113,14 @@ _PRE_FACTCHECK = [
     build_evidence_table,
     evaluate_evidence_sufficiency_node,  # pre-draft evidence gate
     run_enrichment_search,  # optional second Tavily pass for recommendation topics
+    build_candidate_pack_node,  # exact locked recommendation set
+    build_writer_handoff_node,  # structured writer contract
     generate_outline,
     write_draft,
+    audit_writer_output_node,
+    repair_after_initial_draft,
+    build_review_packet_node,
+    build_revision_plan_node,
     evaluate_quality,  # deterministic quality checks on draft
     revise_if_needed,  # quality-driven revision (at most once)
     final_validate_quality,  # post-revision quality gate
@@ -115,8 +130,12 @@ _PRE_FACTCHECK = [
 ]
 
 
-def run_pipeline(topic: str) -> BlogRunState:
-    state = BlogRunState(topic=topic, run_id=str(uuid.uuid4()))
+def run_pipeline(topic: str, tone_profile_id: str | None = None) -> BlogRunState:
+    state = BlogRunState(
+        topic=topic,
+        tone_profile_id=tone_profile_id,
+        run_id=str(uuid.uuid4()),
+    )
     telemetry = AgentPulseClient.from_env(run_id=state.run_id)
     # execution_mode starts as "mock" and is updated after the pipeline finishes.
 
@@ -197,6 +216,11 @@ def run_pipeline(topic: str) -> BlogRunState:
                     state.revision_summary = llm_result.data.revision_summary
                     state.revision_count += 1
                     state.revision_status = "completed"
+                    state = _execute_step(
+                        state,
+                        repair_before_final_contract,
+                        timing_name="repair_after_fact_check_revision",
+                    )
 
                     _event(state, _llm_event("editor.revision", llm_result))
                     _propagate_llm_warnings(state, "editor.revision", llm_result)
@@ -222,6 +246,13 @@ def run_pipeline(topic: str) -> BlogRunState:
 
             # Editorial polish — runs at most once, when publishability or contract requires it.
             state = _execute_step(state, run_editorial_polish)
+
+            # Final deterministic restoration before grounding and final contracts.
+            state = _execute_step(
+                state,
+                repair_before_final_contract,
+                timing_name="repair_before_final_contract",
+            )
 
             # Post-article recommendation grounding — extracts and matches recommendations from
             # the final (polished) article text to source evidence.  Runs after polish so the
@@ -403,6 +434,9 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
             f"{qc.get('task_type')} / {qc.get('domain')} / {qc.get('answer_entity_type')}"
         )
 
+    if state.tone_profile:
+        trace.append(f"✓ Tone: {state.tone_profile.get('label', 'Auto')}")
+
     # Skills
     if state.selected_skills:
         trace.append(f"✓ Skills: {', '.join(state.selected_skills)}")
@@ -528,7 +562,65 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     else:
         trace.append("✓ Final validation: passed")
 
-    # Candidate ledger quality
+    # Structured agent handoff protocol
+    if state.candidate_pack:
+        pack = state.candidate_pack
+        symbol = "⚠" if pack.get("mode") in {"evidence_limited", "below_minimum"} else "✓"
+        trace.append(
+            f"{symbol} CandidatePack: {pack.get('mode')} — "
+            f"{pack.get('final_target_count', 0)} locked candidates"
+            + (
+                f" / {pack.get('requested_count')} requested"
+                if pack.get("requested_count") is not None
+                else ""
+            )
+        )
+    if state.writer_output_audit:
+        audit = state.writer_output_audit
+        used = len(audit.get("used_candidate_ids", []))
+        target = len((state.candidate_pack or {}).get("locked_candidate_ids", []))
+        symbol = "✓" if audit.get("passes_locked_structure") else "⚠"
+        trace.append(f"{symbol} Writer: used {used}/{target} locked candidates")
+    if state.review_packet:
+        review = state.review_packet
+        high_count = len(
+            [d for d in review.get("defects", []) if d.get("severity") == "high"]
+        )
+        symbol = "✓" if review.get("contract_passes") else "⚠"
+        trace.append(
+            f"{symbol} Reviewer: contract "
+            f"{'passed' if review.get('contract_passes') else 'failed'}, "
+            f"{high_count} high defects"
+        )
+    if state.revision_output_audit:
+        audit = state.revision_output_audit
+        resolved = len(audit.get("resolved_defect_ids", []))
+        unresolved = len(audit.get("unresolved_defect_ids", []))
+        symbol = "✓" if not unresolved else "⚠"
+        trace.append(
+            f"{symbol} Revision handoff: resolved {resolved}, unresolved {unresolved}"
+        )
+    elif state.revision_plan:
+        trace.append("✓ Revision handoff: skipped or no contract repair required")
+    if state.polish_output_audit:
+        audit = state.polish_output_audit
+        used = len(audit.get("used_candidate_ids", []))
+        target = len((state.candidate_pack or {}).get("locked_candidate_ids", []))
+        symbol = "✓" if audit.get("structure_preserved") else "⚠"
+        trace.append(f"{symbol} Polish: preserved {used}/{target} locked candidates")
+    if state.locked_repair_result:
+        repair = state.locked_repair_result
+        restored = len(repair.get("restored_candidate_ids", []))
+        remaining = len(repair.get("remaining_issues", []))
+        symbol = "✓" if not remaining else "⚠"
+        detail = (
+            f"restored {restored} candidate(s)"
+            if repair.get("repair_applied")
+            else "no repair needed"
+        )
+        trace.append(f"{symbol} Locked repair: {detail}, {remaining} issue(s) remain")
+
+    # Candidate ledger quality (debug-oriented source classification summary)
     if state.is_recommendation and state.entity_candidate_ledger:
         ledger = state.entity_candidate_ledger
         ledger_quality = ledger.get("table_quality", "")
@@ -612,16 +704,6 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         unmatched = cs.get("unmatched_names", [])
         requested = state.requested_count
 
-        validated_count = len(state.validated_candidates)
-        if requested is not None:
-            if validated_count >= requested:
-                trace.append(f"✓ Validated candidates: {validated_count} usable")
-            else:
-                trace.append(
-                    f"⚠ Validated candidates: {validated_count}/{requested} usable"
-                    + (" — evidence-limited" if state.evidence_limited_mode else "")
-                )
-
         if article_count is not None:
             # Post-article grounding data is available
             if grounded_count == article_count and article_count > 0:
@@ -640,10 +722,6 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
                     )
             else:
                 trace.append("⚠ Article recommendations: none detected in final article")
-
-            if requested is not None:
-                symbol = "✓" if usable >= requested else "⚠"
-                trace.append(f"{symbol} Usable recommendations: {usable}/{requested}")
         else:
             # Only pre-draft evidence candidates available
             if requested is not None:
@@ -741,6 +819,14 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
                 "⚠ Publish contract: draft_only_not_publish_ready — "
                 f"{n_defects} issue(s){cap_note}"
             )
+
+    if state.final_answer_contract:
+        fac = state.final_answer_contract
+        symbol = "✓" if fac.get("publish_status") == "publish_ready" else "⚠"
+        trace.append(
+            f"{symbol} FinalAnswerContract: {fac.get('publish_status')} "
+            f"(mode={fac.get('final_count_mode')})"
+        )
 
     # Editorial polish
     if state.polish_summary:

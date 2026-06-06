@@ -27,6 +27,8 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 | Quality Evaluator (deterministic, 10 checks) | **Done** |
 | Quality-driven Revision Agent | **Done** — mock by default; LLM-gated via env |
 | Final quality validator (post-revision, warns not blocks) | **Done** |
+| Structured Agent Handoff Protocol | **Done** — locked candidates survive writer/revision/polish |
+| Optional tone profile selector | **Done** — voice only; never changes contract |
 | Source quality scoring (domain heuristic, high/medium/low) | **Done** |
 | Heuristic claim extraction | **Done** |
 | Revision loop (max 1) | **Done** |
@@ -100,6 +102,35 @@ Before drafting, BlogAgent extracts and classifies candidates from source titles
 The Candidate Cleanliness Gate v2 rejects malformed fragments, source titles, section headings, brand clusters, catalog/navigation residue, empty evidence spans, unknown weak sources, and truncated names such as `Tom Ford Neroli Portofino Eau de`. The locked allowed table carries `candidate_id`, canonical name, source URL/title, source quality/type, evidence span, evidence terms, and supported context.
 
 `state.allowed_candidates` is the single allowed recommendation table used by drafting, draft candidate compliance, article audit, article grounding, publish contract, and API/UI responses. `state.validated_candidates` is retained only as a compatibility fallback.
+
+#### Structured Agent Handoff Protocol
+
+Recommendation stages exchange typed artifacts instead of relying on free-form agent
+conversation:
+
+```text
+QueryContract → EntityCandidateLedger → CandidatePack
+→ WriterHandoff → WriterOutputAudit → ReviewPacket
+→ RevisionPlan → RevisionOutputAudit
+→ PolishHandoff → PolishOutputAudit
+→ LockedRepair → FinalAnswerContract
+```
+
+`CandidatePack` is the exact recommendation authority. It deduplicates clear aliases,
+selects the final target count, locks candidate IDs/display names/source URLs, and marks
+the run as `exact`, `evidence_limited`, or `below_minimum`. The writer receives a
+deterministic skeleton with Quick Picks and one detail section per locked candidate.
+
+The reviewer is contract-first: missing locked candidates, unknown entities, count drift,
+and structural mismatches are high-severity defects. Revision consumes the resulting
+`ReviewPacket` and `RevisionPlan`; polish receives an explicit allow/deny change list.
+Deterministic locked-entity repair runs after every article-mutating stage and before the
+final contract. It can restore conservative source-backed structure, but it cannot make a
+below-minimum pack publish-ready.
+
+Tone profiles (`Auto`, Editorial Magazine, Practical Buying Guide, Expert Analyst,
+Personal Blog, Luxury / Premium, SEO Neutral) affect prose only. They cannot change
+candidate identity, count, citations, evidence policy, safety constraints, or status.
 
 Counted recommendation queries and concrete "best/top/recommend" entity queries must build
 the candidate ledger. A counted recommendation cannot be `general/general_answer`, and a
@@ -212,8 +243,12 @@ User Topic
 → [if insufficient + is_recommendation + tavily active + pass_count < 2]
     → Enrichment Search    (3 targeted queries; max 10 sources total)
     → re-extract + re-score + rebuild evidence
+→ CandidatePack              (deduplicated, locked final recommendation set)
+→ WriterHandoff              (candidate/count/evidence/tone contract)
 → Editor Agent outline     (skill briefs injected)
 → Editor Agent draft       (skill briefs injected)
+→ WriterOutputAudit + locked repair
+→ ReviewPacket + RevisionPlan
 → Quality Evaluator        (10 deterministic checks; scores 0–100; score capped at 69 on HIGH defect)
 → [if HIGH-severity defect and revision_count < 1]
     → Revision Agent       (quality-driven; mock or LLM; skill briefs injected)
@@ -229,6 +264,7 @@ User Topic
 → Publish Contract (pre-polish check)
 → [if polish_required=True]
     → Editorial Polish Agent (LLM; runs at most once; skill briefs injected)
+→ PolishOutputAudit + locked repair
 → ground_article_recommendations  (post-article grounding: extract recs from final article; match to evidence)
 → recommendation_audit     (article recommendations vs validated candidate table)
 → Publish Contract (post-polish + grounding check — final truth layer)

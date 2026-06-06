@@ -88,6 +88,9 @@ Caveats:
 
 Total revision budget: **1 revision pass** across quality, final-validation, and fact-check loops.
 
+Structured handoffs do not increase this budget. `ReviewPacket` and `RevisionPlan` make
+the single revision more targeted; they do not create another autonomous loop.
+
 In mock mode, both revision agents return the draft mostly unchanged with an explanatory summary. The loops exist to demonstrate control flow — improving draft quality requires a real LLM provider.
 
 Inspect `state.revision_summary` and `state.revision_count` to determine which loop ran.
@@ -170,6 +173,19 @@ When the candidate ledger fails (usable_count < minimum_publishable_items):
 - Draft compliance will reject these unsupported names, and the publish contract will block the article.
 - The final status will be `draft_only_not_publish_ready` with an informative failure reason.
 - The article is still returned in the API response for reference, but it is not publish-ready.
+
+## Structured Handoff and Locked Repair Limits
+
+- The workflow remains bounded to one revision pass and one polish pass.
+- CandidatePack quality is source-dependent. It cannot recover products that candidate
+  extraction never found or that lack sufficient evidence.
+- Alias deduplication is conservative and may leave unusual aliases separate or merge only
+  when evidence supports clear identity overlap.
+- Locked repair prioritizes contract preservation over elegance. Restored sections may be
+  shorter because they use only attached evidence spans, terms, and context.
+- Repair cannot invent missing evidence and cannot make a below-minimum pack publish-ready.
+- Tone profiles affect voice only. They never override count, candidate, citation, safety,
+  or publish contracts.
 
 ## Candidate Cleanliness Gate v2
 

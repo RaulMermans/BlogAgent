@@ -9,6 +9,7 @@ revised_markdown and revision_summary in state without schema changes.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -52,6 +53,8 @@ def _mock_quality_revision(
     draft: str,
     quality_evaluation: dict,
     is_financial: bool,
+    candidate_pack: dict | None = None,
+    query_contract: dict | None = None,
 ) -> RevisionOutput:
     """Deterministic mock revision that applies simple fixes."""
     defects = quality_evaluation.get("defects", [])
@@ -62,6 +65,20 @@ def _mock_quality_revision(
         "No LLM provider configured — structural fixes applied where possible."
     )
     revised = draft
+
+    if candidate_pack and query_contract:
+        from blogagent.tools.locked_entity_repair import (  # noqa: PLC0415
+            repair_locked_recommendation_article,
+        )
+
+        repair = repair_locked_recommendation_article(
+            revised,
+            candidate_pack,
+            query_contract,
+        )
+        revised = repair.repaired_markdown
+        if repair.repair_applied:
+            summary += " " + " ".join(repair.repair_summary)
 
     # Apply financial disclaimer if missing (deterministic fix).
     if is_financial and not _has_disclaimer(draft):
@@ -99,6 +116,11 @@ def revise_with_quality_context(
     requested_count: Optional[int],
     selected_skills: list[str],
     source_quality_scores: list[dict],
+    review_packet: dict | None = None,
+    revision_plan: dict | None = None,
+    candidate_pack: dict | None = None,
+    query_contract: dict | None = None,
+    tone_profile: dict | None = None,
 ) -> LLMResult:
     """Revise the draft using quality evaluation defects as guidance.
 
@@ -107,7 +129,15 @@ def revise_with_quality_context(
     otherwise unchanged with an explanatory summary.
     """
     if not _use_llm():
-        return _mock_llm_result(_mock_quality_revision(draft, quality_evaluation, is_financial))
+        return _mock_llm_result(
+            _mock_quality_revision(
+                draft,
+                quality_evaluation,
+                is_financial,
+                candidate_pack=candidate_pack,
+                query_contract=query_contract,
+            )
+        )
 
     defects = quality_evaluation.get("defects", [])
     defect_lines = (
@@ -134,6 +164,20 @@ def revise_with_quality_context(
         requested_count=(str(requested_count) if requested_count is not None else "not specified"),
         draft=draft[:4000],
     )
+    if review_packet:
+        system_prompt += "\n\nREVIEW PACKET:\n" + json.dumps(review_packet, indent=2)
+    if revision_plan:
+        system_prompt += "\n\nREVISION PLAN:\n" + json.dumps(revision_plan, indent=2)
+    if candidate_pack:
+        system_prompt += (
+            "\n\nLOCKED CANDIDATE PACK:\n"
+            + json.dumps(candidate_pack, indent=2)
+            + "\nThe candidate list is locked. Resolve defects inside this structure."
+        )
+    if tone_profile:
+        system_prompt += "\n\nTONE PROFILE (voice only; do not change contract):\n" + json.dumps(
+            tone_profile, indent=2
+        )
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
@@ -144,7 +188,13 @@ def revise_with_quality_context(
     )
     if result.is_mock:
         return _fallback_llm_result(
-            _mock_quality_revision(draft, quality_evaluation, is_financial),
+            _mock_quality_revision(
+                draft,
+                quality_evaluation,
+                is_financial,
+                candidate_pack=candidate_pack,
+                query_contract=query_contract,
+            ),
             result,
         )
     return result

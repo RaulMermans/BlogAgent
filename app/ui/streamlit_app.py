@@ -14,10 +14,31 @@ st.caption(
 )
 
 topic = st.text_input("Topic", placeholder="e.g. The history of the internet")
+tone_label = st.selectbox(
+    "Tone",
+    [
+        "Auto",
+        "Editorial Magazine",
+        "Practical Buying Guide",
+        "Expert Analyst",
+        "Personal Blog",
+        "Luxury / Premium",
+        "SEO Neutral",
+    ],
+)
+tone_ids = {
+    "Auto": None,
+    "Editorial Magazine": "editorial_magazine",
+    "Practical Buying Guide": "practical_buying_guide",
+    "Expert Analyst": "expert_analyst",
+    "Personal Blog": "personal_blog",
+    "Luxury / Premium": "luxury_premium",
+    "SEO Neutral": "seo_neutral",
+}
 
 if st.button("Run pipeline") and topic.strip():
     with st.spinner("Running pipeline..."):
-        state = run_pipeline(topic.strip())
+        state = run_pipeline(topic.strip(), tone_profile_id=tone_ids[tone_label])
 
     errors = validate_final_state(state)
 
@@ -26,6 +47,8 @@ if st.button("Run pipeline") and topic.strip():
     elif state.final_article_package:
         pkg = state.final_article_package
         st.success(f"Pipeline complete. Run ID: `{pkg.run_id}`")
+        if state.tone_profile:
+            st.caption(f"Tone: {state.tone_profile.get('label', 'Auto')}")
 
         col1, col2 = st.columns([2, 1])
 

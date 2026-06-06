@@ -12,6 +12,7 @@ product notes not in the evidence table.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -129,6 +130,8 @@ def polish_article(
     is_recommendation: bool,
     requested_count: Optional[int],
     evidence_sufficiency: Optional[dict],
+    polish_handoff: dict | None = None,
+    tone_profile: dict | None = None,
 ) -> LLMResult:
     """Polish the article for publish-readiness.
 
@@ -164,6 +167,17 @@ def polish_article(
         evidence_limited=str(evidence_limited),
         article=article_markdown[:5000],
     )
+    if polish_handoff:
+        system_prompt += (
+            "\n\nSTRUCTURED POLISH HANDOFF:\n"
+            + json.dumps(polish_handoff, indent=2)
+            + "\nThe locked candidate list and structure are immutable."
+        )
+    if tone_profile:
+        system_prompt += (
+            "\n\nTONE PROFILE (voice only; never change the candidate contract):\n"
+            + json.dumps(tone_profile, indent=2)
+        )
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,

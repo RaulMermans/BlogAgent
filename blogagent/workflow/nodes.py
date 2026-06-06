@@ -24,10 +24,15 @@ from blogagent.agents.publishability_evaluator import (
 from blogagent.llm.client import detect_repeated_excerpts
 from blogagent.llm.schemas import LLMResult
 from blogagent.observability.agentpulse_client import current_client, current_node_id, safe_summary
+from blogagent.tools.agent_handoffs import (
+    build_polish_handoff,
+    build_writer_handoff,
+)
 from blogagent.tools.article_entity_audit import (
     audit_article_entities,
     build_answer_count_snapshot,
 )
+from blogagent.tools.candidate_pack import CandidatePack, build_candidate_pack
 from blogagent.tools.citation_matcher import CitationMatchInput, citation_matcher
 from blogagent.tools.claim_extractor import ClaimExtractInput, claim_extractor
 from blogagent.tools.draft_candidate_compliance import (
@@ -36,7 +41,22 @@ from blogagent.tools.draft_candidate_compliance import (
 )
 from blogagent.tools.entity_candidate_ledger import build_candidate_ledger
 from blogagent.tools.final_answer_contract import build_final_answer_contract
+from blogagent.tools.handoff_auditor import (
+    audit_polish_output,
+    audit_revision_output,
+    audit_writer_output,
+    build_review_packet,
+    build_revision_plan,
+)
+from blogagent.tools.locked_entity_repair import (
+    RepairResult,
+    repair_locked_recommendation_article,
+)
+from blogagent.tools.recommendation_article_skeleton import (
+    build_candidate_locked_recommendation_skeleton,
+)
 from blogagent.tools.source_score import ScoreInput, source_score
+from blogagent.tools.tone_profile import resolve_tone_profile
 from blogagent.tools.web_search import SearchInput, web_search
 from blogagent.tools.webpage_extract import ExtractInput, webpage_extract
 from blogagent.workflow.query_contract import (
@@ -207,9 +227,17 @@ def build_query_contract_node(state: BlogRunState) -> BlogRunState:
     state.query_contract = contract.model_dump()
     _event(
         state,
-        "query_contract: "
-        f"{contract.task_type}/{contract.domain}/{contract.answer_entity_type}",
+        f"query_contract: {contract.task_type}/{contract.domain}/{contract.answer_entity_type}",
     )
+    return state
+
+
+def resolve_tone_profile_node(state: BlogRunState) -> BlogRunState:
+    """Resolve the requested tone or infer a domain default."""
+    domain = (state.query_contract or {}).get("domain", "general")
+    profile = resolve_tone_profile(state.tone_profile_id, domain)
+    state.tone_profile = profile.model_dump()
+    _event(state, f"tone_profile: {profile.id}")
     return state
 
 
@@ -423,6 +451,174 @@ def build_evidence_table(state: BlogRunState) -> BlogRunState:
 
 
 # ---------------------------------------------------------------------------
+# Structured recommendation handoffs
+# ---------------------------------------------------------------------------
+
+
+def build_candidate_pack_node(state: BlogRunState) -> BlogRunState:
+    """Lock the exact recommendation set after bounded research completes."""
+    contract = QueryContract.model_validate(state.query_contract or {})
+    if state.entity_candidate_ledger is None:
+        return state
+    pack = build_candidate_pack(contract, state.entity_candidate_ledger)
+    state.candidate_pack = pack.model_dump()
+    state.evidence_limited_mode = pack.mode in {"evidence_limited", "below_minimum"}
+    _event(
+        state,
+        f"candidate_pack: mode={pack.mode} locked={pack.final_target_count} "
+        f"allowed={pack.allowed_count} requested={pack.requested_count}",
+    )
+    return state
+
+
+def build_writer_handoff_node(state: BlogRunState) -> BlogRunState:
+    if not state.candidate_pack:
+        return state
+    handoff = build_writer_handoff(
+        state.query_contract,
+        state.candidate_pack,
+        state.tone_profile,
+    )
+    state.writer_handoff = handoff.model_dump()
+    return state
+
+
+def audit_writer_output_node(state: BlogRunState) -> BlogRunState:
+    if not state.candidate_pack:
+        return state
+    audit = audit_writer_output(
+        state.draft,
+        {"recommended_entities": state.draft_recommended_entities},
+        state.candidate_pack,
+        state.query_contract,
+    )
+    state.writer_output_audit = audit.model_dump()
+    _event(
+        state,
+        f"writer_handoff_audit: used={len(audit.used_candidate_ids)}/"
+        f"{len(CandidatePack.model_validate(state.candidate_pack).locked_candidate_ids)} "
+        f"missing={len(audit.missing_candidate_ids)} "
+        f"unknown={len(audit.unknown_candidate_names)}",
+    )
+    return state
+
+
+def repair_after_initial_draft(state: BlogRunState) -> BlogRunState:
+    return _repair_locked_article(state, stage="initial_draft")
+
+
+def build_review_packet_node(state: BlogRunState) -> BlogRunState:
+    if not state.candidate_pack:
+        return state
+    current_audit = audit_writer_output(
+        state.draft,
+        {"recommended_entities": state.draft_recommended_entities},
+        state.candidate_pack,
+        state.query_contract,
+    )
+    review = build_review_packet(
+        state.draft,
+        current_audit,
+        state.candidate_pack,
+        state.query_contract,
+        state.entity_audit,
+        state.answer_count_snapshot,
+    )
+    state.review_packet = review.model_dump()
+    _event(
+        state,
+        f"review_packet: contract_passes={review.contract_passes} "
+        f"high_defects={len([d for d in review.defects if d.severity == 'high'])} "
+        f"revision_mode={review.required_revision_mode}",
+    )
+    return state
+
+
+def build_revision_plan_node(state: BlogRunState) -> BlogRunState:
+    if not state.review_packet or not state.candidate_pack:
+        return state
+    plan = build_revision_plan(state.review_packet, state.candidate_pack)
+    state.revision_plan = plan.model_dump()
+    return state
+
+
+def repair_before_final_contract(state: BlogRunState) -> BlogRunState:
+    return _repair_locked_article(state, stage="final")
+
+
+def _repair_locked_article(state: BlogRunState, stage: str) -> BlogRunState:
+    if not state.candidate_pack:
+        return state
+    result = repair_locked_recommendation_article(
+        state.draft,
+        state.candidate_pack,
+        state.query_contract,
+    )
+    state.draft = result.repaired_markdown
+    state.locked_repair_result = _merge_repair_results(
+        state.locked_repair_result,
+        result,
+        stage,
+    )
+    if result.repair_applied:
+        _event(
+            state,
+            f"locked_repair: stage={stage} restored={len(result.restored_candidate_ids)} "
+            f"remaining={len(result.remaining_issues)}",
+        )
+    return state
+
+
+def _merge_repair_results(
+    existing: dict | None,
+    current: RepairResult,
+    stage: str,
+) -> dict:
+    if not existing:
+        data = current.model_dump()
+        data["repair_summary"] = [f"{stage}: {item}" for item in current.repair_summary]
+        return data
+    merged = dict(existing)
+    merged["repaired_markdown"] = current.repaired_markdown
+    merged["repair_applied"] = bool(existing.get("repair_applied")) or current.repair_applied
+    merged["restored_candidate_ids"] = list(
+        dict.fromkeys(
+            list(existing.get("restored_candidate_ids", [])) + list(current.restored_candidate_ids)
+        )
+    )
+    merged["remaining_issues"] = list(current.remaining_issues)
+    merged["repair_summary"] = list(existing.get("repair_summary", [])) + [
+        f"{stage}: {item}" for item in current.repair_summary
+    ]
+    return merged
+
+
+def _candidate_pack_allowed_candidates(state: BlogRunState) -> list[dict]:
+    if not state.candidate_pack:
+        return list(state.allowed_candidates or state.validated_candidates)
+    pack = CandidatePack.model_validate(state.candidate_pack)
+    return [
+        {
+            "candidate_id": item.candidate_id,
+            "canonical_name": item.canonical_name,
+            "name": item.display_name,
+            "raw_mention": item.display_name,
+            "entity_type": item.entity_type,
+            "entity_subtype": item.entity_subtype,
+            "source_urls": [item.source_url] if item.source_url else [],
+            "source_titles": [item.source_title] if item.source_title else [],
+            "source_quality": item.source_quality or "medium",
+            "source_type": item.source_type or "unknown",
+            "evidence_spans": list(item.evidence_spans),
+            "evidence_terms": list(item.evidence_terms),
+            "supported_context": list(item.supported_context),
+            "usable": True,
+        }
+        for item in pack.items
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Article generation — backed by Editor Agent
 # ---------------------------------------------------------------------------
 
@@ -431,12 +627,23 @@ def generate_outline(state: BlogRunState) -> BlogRunState:
     """Call the Editor Agent to produce an evidence-grounded outline."""
     from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
 
+    locked_skeleton = ""
+    if state.candidate_pack:
+        locked_skeleton = build_candidate_locked_recommendation_skeleton(
+            state.query_contract,
+            state.candidate_pack,
+            state.topic,
+            state.tone_profile,
+        )
     result = editor_agent.generate_outline(
         topic=state.topic,
         evidence_table=state.evidence_table,
         source_scores=state.source_scores,
         is_recommendation=state.is_recommendation,
         skill_briefs=get_skill_briefs(state.selected_skills),
+        writer_handoff=state.writer_handoff,
+        locked_skeleton=locked_skeleton,
+        tone_profile=state.tone_profile,
     )
     from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
 
@@ -465,12 +672,19 @@ def write_draft(state: BlogRunState) -> BlogRunState:
     from blogagent.skills.registry import get_skill_briefs  # noqa: PLC0415
 
     # Prefer allowed_candidates from ledger; fall back to validated_candidates
-    allowed_recs = state.allowed_candidates or state.validated_candidates
-    rejected_recs = (
-        state.rejected_candidates
-        or [c for c in state.recommendation_candidates if not c.get("usable")]
-    )
+    allowed_recs = _candidate_pack_allowed_candidates(state)
+    rejected_recs = state.rejected_candidates or [
+        c for c in state.recommendation_candidates if not c.get("usable")
+    ]
 
+    locked_skeleton = ""
+    if state.candidate_pack:
+        locked_skeleton = build_candidate_locked_recommendation_skeleton(
+            state.query_contract,
+            state.candidate_pack,
+            state.topic,
+            state.tone_profile,
+        )
     result = editor_agent.write_article_draft(
         topic=state.topic,
         outline=outline_out,
@@ -484,6 +698,10 @@ def write_draft(state: BlogRunState) -> BlogRunState:
         rejected_candidates=rejected_recs,
         evidence_limited_mode=state.evidence_limited_mode,
         source_quality_scores=state.source_quality_scores,
+        writer_handoff=state.writer_handoff,
+        candidate_pack=state.candidate_pack,
+        locked_skeleton=locked_skeleton,
+        tone_profile=state.tone_profile,
     )
     state.draft = result.data.article_markdown
     state.draft_meta_description = result.data.meta_description
@@ -674,6 +892,12 @@ def evaluate_quality(state: BlogRunState) -> BlogRunState:
         evaluate_quality as _evaluate,
     )
 
+    target_count = state.requested_count
+    quality_is_recommendation = state.is_recommendation
+    if state.candidate_pack:
+        pack = CandidatePack.model_validate(state.candidate_pack)
+        target_count = pack.final_target_count
+        quality_is_recommendation = state.is_recommendation and pack.mode != "below_minimum"
     result = _evaluate(
         topic=state.topic,
         draft=state.draft,
@@ -681,10 +905,11 @@ def evaluate_quality(state: BlogRunState) -> BlogRunState:
         source_scores=state.source_scores,
         source_quality_scores=state.source_quality_scores,
         warnings=list(state.warnings),
-        is_recommendation=state.is_recommendation,
+        is_recommendation=quality_is_recommendation,
         is_financial=state.is_financial,
-        requested_count=state.requested_count,
+        requested_count=target_count,
         selected_skills=state.selected_skills,
+        review_packet=state.review_packet,
     )
     state.quality_evaluation = result.model_dump()
     _event(
@@ -706,7 +931,14 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
     """Call the Revision Agent when the quality evaluator requires it."""
     if state.quality_evaluation is None:
         return state
-    if not state.quality_evaluation.get("revision_required", False):
+    review_requires_revision = bool(
+        state.review_packet
+        and state.review_packet.get("required_revision_mode") in {"targeted_repair", "full_rewrite"}
+    )
+    if (
+        not state.quality_evaluation.get("revision_required", False)
+        and not review_requires_revision
+    ):
         return state
     if state.revision_count >= _QUALITY_MAX_REVISIONS:
         _warn(state, "Quality revision skipped: revision limit reached.")
@@ -726,6 +958,11 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
         requested_count=state.requested_count,
         selected_skills=state.selected_skills,
         source_quality_scores=state.source_quality_scores,
+        review_packet=state.review_packet,
+        revision_plan=state.revision_plan,
+        candidate_pack=state.candidate_pack,
+        query_contract=state.query_contract,
+        tone_profile=state.tone_profile,
     )
 
     if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
@@ -757,6 +994,16 @@ def revise_if_needed(state: BlogRunState) -> BlogRunState:
     state.revision_summary = revision_data.revision_summary
     state.revision_status = "completed"
     state.revision_count += 1
+    state = _repair_locked_article(state, stage="quality_revision")
+    if state.candidate_pack and state.revision_plan:
+        audit = audit_revision_output(
+            state.draft,
+            revision_data,
+            state.revision_plan,
+            state.candidate_pack,
+            state.query_contract,
+        )
+        state.revision_output_audit = audit.model_dump()
     _event(state, _llm_event("editor.quality_revision", llm_result))
     _propagate_llm_warnings(state, "editor.quality_revision", llm_result)
     return state
@@ -813,7 +1060,11 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
     # Use the rich extractor (not the simple counter) to avoid false "0 vs N" mismatches.
     # extract_recommendations_from_article handles more article formats than count_recommendations.
     evidence_limited = False
-    if state.is_recommendation and state.requested_count is not None:
+    below_minimum = bool(
+        state.candidate_pack
+        and CandidatePack.model_validate(state.candidate_pack).mode == "below_minimum"
+    )
+    if state.is_recommendation and state.requested_count is not None and not below_minimum:
         # Try rich extractor first; fall back to simple counter
         rich_recs = extract_recommendations_from_article(state.draft)
         actual = len(rich_recs) if rich_recs else count_recommendations(state.draft)
@@ -842,9 +1093,7 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
 
                 if (
                     actual > 0
-                    and actual >= (state.query_contract or {}).get(
-                        "minimum_publishable_items", 3
-                    )
+                    and actual >= (state.query_contract or {}).get("minimum_publishable_items", 3)
                     and ledger_usable < state.requested_count
                 ):
                     # Ledger has fewer candidates than requested — this is evidence-limited
@@ -951,6 +1200,11 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
         requested_count=state.requested_count,
         selected_skills=state.selected_skills,
         source_quality_scores=state.source_quality_scores,
+        review_packet=state.review_packet,
+        revision_plan=state.revision_plan,
+        candidate_pack=state.candidate_pack,
+        query_contract=state.query_contract,
+        tone_profile=state.tone_profile,
     )
 
     if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
@@ -982,6 +1236,16 @@ def revise_if_final_validation_failed(state: BlogRunState) -> BlogRunState:
     state.revision_summary = revision_data.revision_summary
     state.revision_status = "completed"
     state.revision_count += 1
+    state = _repair_locked_article(state, stage="final_validation_revision")
+    if state.candidate_pack and state.revision_plan:
+        audit = audit_revision_output(
+            state.draft,
+            revision_data,
+            state.revision_plan,
+            state.candidate_pack,
+            state.query_contract,
+        )
+        state.revision_output_audit = audit.model_dump()
     _event(state, _llm_event("editor.final_validation_revision", llm_result))
     _propagate_llm_warnings(state, "editor.final_validation_revision", llm_result)
 
@@ -1014,7 +1278,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
     article_count = len(article_recs)
 
     # Re-hydrate evidence candidates from stored dicts
-    evidence_candidates = list(state.validated_candidates or state.recommendation_candidates)
+    evidence_candidates = _candidate_pack_allowed_candidates(state)
 
     groundings = match_article_recommendations_to_evidence(
         article_recs=article_recs,
@@ -1044,7 +1308,7 @@ def ground_article_recommendations(state: BlogRunState) -> BlogRunState:
     contract = QueryContract.model_validate(state.query_contract or {})
 
     # Use allowed_candidates from ledger when available (more accurate)
-    audit_candidates = list(state.allowed_candidates or state.validated_candidates)
+    audit_candidates = _candidate_pack_allowed_candidates(state)
 
     audit = audit_article_recommendations(
         markdown=state.draft,
@@ -1163,6 +1427,10 @@ def package_article(state: BlogRunState) -> BlogRunState:
     assert state.outline is not None, "Outline must exist before packaging"
 
     title = state.outline.title
+    if state.candidate_pack:
+        title_match = re.search(r"^#\s+(.+)$", state.draft, re.MULTILINE)
+        if title_match:
+            title = title_match.group(1).strip()
     slug = _slugify(title)
 
     meta_description = state.draft_meta_description or f"A comprehensive overview of {state.topic}."
@@ -1389,11 +1657,31 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
     Runs at most once.
     """
     if not _should_run_polish(state):
+        if state.candidate_pack:
+            handoff = build_polish_handoff(
+                state.draft,
+                state.candidate_pack,
+                state.tone_profile,
+            )
+            state.polish_handoff = handoff.model_dump()
+            state.polish_output_audit = audit_polish_output(
+                state.draft,
+                None,
+                state.candidate_pack,
+                state.query_contract,
+            ).model_dump()
         return state
 
     from blogagent.agents.editor_agent import _format_evidence  # noqa: PLC0415
 
     evidence_summary = _format_evidence(state.evidence_table, state.source_scores)
+    if state.candidate_pack:
+        handoff = build_polish_handoff(
+            state.draft,
+            state.candidate_pack,
+            state.tone_profile,
+        )
+        state.polish_handoff = handoff.model_dump()
 
     llm_result = polish_article(
         article_markdown=state.draft,
@@ -1404,6 +1692,8 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
         is_recommendation=state.is_recommendation,
         requested_count=state.requested_count,
         evidence_sufficiency=state.evidence_sufficiency,
+        polish_handoff=state.polish_handoff,
+        tone_profile=state.tone_profile,
     )
 
     if llm_result.is_mock and llm_result.configured_provider != "mock" and llm_result.error:
@@ -1415,6 +1705,23 @@ def run_editorial_polish(state: BlogRunState) -> BlogRunState:
     polish_out: EditorialPolishOutput = llm_result.data
     state.draft = polish_out.polished_markdown
     state.polish_summary = list(polish_out.polish_summary)
+    if state.candidate_pack:
+        polish_audit = audit_polish_output(
+            state.draft,
+            polish_out,
+            state.candidate_pack,
+            state.query_contract,
+        )
+        state.polish_output_audit = polish_audit.model_dump()
+        if polish_audit.candidate_list_changed or polish_audit.count_changed:
+            state = _repair_locked_article(state, stage="polish")
+            remaining = (state.locked_repair_result or {}).get("remaining_issues", [])
+            _event(
+                state,
+                "polish_contract_drift_repaired"
+                if not remaining
+                else "polish_contract_drift_failed",
+            )
     _event(state, _llm_event("editor.polish", llm_result))
     _propagate_llm_warnings(state, "editor.polish", llm_result)
 
@@ -1432,7 +1739,7 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
     # Pass recommendation grounding data when available (after ground_article_recommendations ran)
     rec_grounding = state.recommendation_candidates_summary if state.is_recommendation else None
     # Use allowed_candidates from ledger when available
-    candidates_for_contract = state.allowed_candidates or state.validated_candidates
+    candidates_for_contract = _candidate_pack_allowed_candidates(state)
     result: PublishContractResult = check_publish_contract(
         article_markdown=state.draft,
         topic=state.topic,
@@ -1484,16 +1791,25 @@ def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
         title = state.outline.title
 
     meta_description = state.draft_meta_description or ""
-    min_publishable = int(
-        (state.query_contract or {}).get("minimum_publishable_items") or 3
-    )
+    min_publishable = int((state.query_contract or {}).get("minimum_publishable_items") or 3)
 
+    candidate_summary = dict(state.candidate_ledger_summary or {})
+    if state.candidate_pack:
+        pack = CandidatePack.model_validate(state.candidate_pack)
+        candidate_summary["usable_count"] = pack.final_target_count
+        candidate_summary["table_quality"] = (
+            "failed"
+            if pack.mode == "below_minimum"
+            else "limited"
+            if pack.mode == "evidence_limited"
+            else "strong"
+        )
     contract = build_final_answer_contract(
         article_markdown=state.draft,
         title=title,
         meta_description=meta_description,
         answer_count_snapshot=state.answer_count_snapshot or None,
-        candidate_ledger_summary=state.candidate_ledger_summary or None,
+        candidate_ledger_summary=candidate_summary or None,
         query_contract=state.query_contract or None,
         publish_contract=state.publish_contract or None,
         minimum_publishable_items=min_publishable,

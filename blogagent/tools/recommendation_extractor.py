@@ -405,6 +405,12 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
         "watch brands",
         "men's watches",
         "under $500",
+        "what was searched",
+        "validated candidates found",
+        "why not publish-ready",
+        "why this is not publish-ready",
+        "what evidence is missing",
+        "suggested next search or refinement",
     }
 )
 
@@ -455,6 +461,11 @@ _NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
     "watch brands",
     "men's watches",
     "under $",
+    "what was searched",
+    "validated candidates found",
+    "not publish-ready",
+    "what evidence is missing",
+    "suggested next search",
 )
 
 # ---------------------------------------------------------------------------

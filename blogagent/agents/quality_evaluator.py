@@ -27,16 +27,7 @@ from blogagent.workflow.state import (
 
 
 class QualityDefect(BaseModel):
-    type: Literal[
-        "top_n_mismatch",
-        "repeated_text",
-        "weak_source_dominance",
-        "unsupported_recommendation",
-        "missing_structure",
-        "financial_safety",
-        "seo_issue",
-        "generic_output",
-    ]
+    type: str
     severity: Literal["low", "medium", "high"]
     message: str
     fixable: bool = False
@@ -66,10 +57,25 @@ def evaluate_quality(
     is_financial: bool,
     requested_count: Optional[int],
     selected_skills: list[str],  # noqa: ARG001 — reserved for future skill-aware checks
+    review_packet: Optional[dict] = None,
 ) -> QualityEvaluationOutput:
     """Run all deterministic quality checks and return a structured report."""
     defects: list[QualityDefect] = []
     score = 100
+
+    # Contract-first structured review. These defects dominate style scoring.
+    if review_packet:
+        for defect in review_packet.get("defects", []):
+            defects.append(
+                QualityDefect(
+                    type=defect.get("type", "handoff_contract"),
+                    severity=defect.get("severity", "high"),
+                    message=defect.get("required_fix", "Repair the structured handoff defect."),
+                    fixable=defect.get("fix_scope") != "safety",
+                )
+            )
+        if not review_packet.get("contract_passes", True):
+            score = min(score, 59)
 
     # --- 1. Top-N count mismatch (recommendation only) ---
     # Use the rich extractor to avoid false "0 vs N" mismatches for unusual article formats.

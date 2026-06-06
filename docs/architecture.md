@@ -83,6 +83,7 @@ Mock fallback only happens when `article_markdown` itself is absent, empty, or i
 intake_topic                     → normalize topic; detect recommendation/financial intent
 check_external_effects           → guardrail: block publishing requests; extract requested_count
 build_query_contract             → define exact answer contract and valid entity type
+resolve_tone_profile             → explicit or domain-inferred voice contract
 select_skills                    → deterministic skill selection (fragrance/lifestyle/rec/financial/factual)
 generate_research_qs             → Editor Agent: research plan (mock or LLM); skill briefs injected
 run_web_search [pass 1]          → call web_search tool (mock default; Tavily optional)
@@ -94,8 +95,14 @@ build_candidate_table            → extract and validate recommendation candida
 evaluate_evidence_sufficiency    → deterministic pre-draft gate; sets recommended_action
 [if recommended_action=search_more + tavily + pass < 2]
   run_enrichment_search          → 3 targeted queries; re-extract + re-score + rebuild evidence
+build_candidate_pack             → deduplicate and lock the final recommendation set
+build_writer_handoff             → package candidate/count/evidence/tone constraints
 generate_outline                 → Editor Agent: outline (mock or LLM); skill briefs injected
 write_draft                      → Editor Agent: draft (mock or LLM); skill briefs injected
+audit_writer_output              → verify locked IDs, Quick Picks, detail sections, and count
+repair_after_initial_draft       → restore deterministic locked structure when possible
+build_review_packet              → contract-first structured defects
+build_revision_plan              → exact repair instructions and forbidden changes
 evaluate_quality                 → deterministic quality checks; score capped at 69 on HIGH defect
 revise_if_needed                 → Revision Agent if HIGH-severity defect (at most once)
 final_validate_quality           → sets final_validation_status / final_validation_defects
@@ -108,6 +115,8 @@ evaluate_publishability          → heuristic publish-readiness check; scores 0
 check_publish_contract           → deterministic final truth layer; hard-fail conditions (pre-polish)
 [if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
+audit_polish_output              → detect candidate/count/structure drift
+repair_before_final_contract     → final conservative locked-entity restoration
 ground_article_recommendations   → extract recs from final article; match to evidence; update summary
 check_draft_candidate_compliance → verify draft used allowed candidates (new — see below)
 recommendation_audit             → compare article recs to validated candidate table
@@ -116,6 +125,43 @@ package_article                  → assemble ArticlePackage (with SEO fields)
 build_final_answer_contract      → canonical post-polish count/status arbiter (see below)
 compute_publish_ready_status     → uses FinalAnswerContract as primary authority
 ```
+
+---
+
+## Structured Agent Handoffs
+
+Article-producing stages do not communicate through autonomous free-form chat. The
+deterministic orchestrator creates and validates typed artifacts:
+
+```text
+QueryContract
+→ EntityCandidateLedger
+→ CandidatePack
+→ WriterHandoff
+→ WriterOutput
+→ ReviewPacket
+→ RevisionPlan
+→ RevisionOutput
+→ PolishHandoff
+→ PolishOutput
+→ LockedRepair
+→ FinalAnswerContract
+```
+
+`CandidatePack` is narrower than the candidate ledger: it is deduplicated and contains
+only the items the final article must deliver. Every later count/audit uses this locked
+set. `WriterOutputAudit`, `RevisionOutputAudit`, and `PolishOutputAudit` are deterministic
+proofs that IDs, display names, Quick Picks, detail sections, count mode, and source URLs
+survived each stage.
+
+The locked recommendation skeleton fixes article shape before prose generation. The LLM
+may write inside that shape but may not choose the recommendation set. The repair tool can
+rebuild Quick Picks, restore missing candidate sections, and correct the H1 count using
+only CandidatePack evidence. It never upgrades a below-minimum report to publish-ready.
+
+Tone profiles are a separate voice contract. They can influence rhythm, warmth,
+vocabulary, and editorial style, but cannot affect counts, candidate identity, citations,
+evidence rules, financial safety, or publish status.
 
 ---
 

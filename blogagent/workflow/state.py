@@ -110,6 +110,7 @@ class ArticlePackage(BaseModel):
 
 class BlogRunState(BaseModel):
     topic: str
+    tone_profile_id: str | None = None
     research_questions: list[str] = Field(default_factory=list)
     search_results: list[SearchResult] = Field(default_factory=list)
     selected_sources: list[SourcePacket] = Field(default_factory=list)
@@ -206,3 +207,14 @@ class BlogRunState(BaseModel):
     # Final Answer Contract — canonical post-polish publish status
     # (dict-serialized FinalAnswerContract)
     final_answer_contract: Optional[dict] = None
+    # Structured Agent Handoff Protocol artifacts.
+    candidate_pack: Optional[dict] = None
+    writer_handoff: Optional[dict] = None
+    writer_output_audit: Optional[dict] = None
+    review_packet: Optional[dict] = None
+    revision_plan: Optional[dict] = None
+    revision_output_audit: Optional[dict] = None
+    polish_handoff: Optional[dict] = None
+    polish_output_audit: Optional[dict] = None
+    locked_repair_result: Optional[dict] = None
+    tone_profile: Optional[dict] = None

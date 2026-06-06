@@ -38,6 +38,8 @@ class DraftOutput(BaseModel):
     # For recommendation topics: structured list of entities used in the draft.
     # Empty list means model did not return structured entities (fallback: derive from markdown).
     recommended_entities: list[DraftRecommendedEntity] = Field(default_factory=list)
+    locked_entities_used: list[str] = Field(default_factory=list)
+    handoff_notes: list[str] = Field(default_factory=list)
 
 
 class ClaimItem(BaseModel):

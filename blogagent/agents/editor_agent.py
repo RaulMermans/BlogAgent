@@ -17,6 +17,7 @@ evidence table passed in as arguments.
 
 from __future__ import annotations
 
+import json
 import os
 
 from blogagent.agents import prompts
@@ -131,6 +132,9 @@ def generate_outline(
     source_scores: list[SourceScore],
     is_recommendation: bool = False,
     skill_briefs: str = "",
+    writer_handoff: dict | None = None,
+    locked_skeleton: str = "",
+    tone_profile: dict | None = None,
 ) -> LLMResult:
     """Return a structured blog outline grounded in the evidence table."""
     if not _use_llm():
@@ -141,10 +145,18 @@ def generate_outline(
         system_prompt = prompts.RECOMMENDATION_OUTLINE_PROMPT.format(
             topic=topic, evidence_table=evidence_summary
         )
+        if writer_handoff:
+            system_prompt += "\n\nSTRUCTURED WRITER HANDOFF:\n" + json.dumps(
+                writer_handoff, indent=2
+            )
+        if locked_skeleton:
+            system_prompt += f"\n\nLOCKED ARTICLE SKELETON:\n{locked_skeleton}"
     else:
         system_prompt = prompts.OUTLINE_PROMPT.format(topic=topic, evidence_table=evidence_summary)
     if skill_briefs:
         system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
+    if tone_profile:
+        system_prompt += _format_tone_profile_prompt(tone_profile)
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
@@ -204,6 +216,10 @@ def write_article_draft(
     rejected_candidates: list[dict] | None = None,
     evidence_limited_mode: bool = False,
     source_quality_scores: list[dict] | None = None,
+    writer_handoff: dict | None = None,
+    candidate_pack: dict | None = None,
+    locked_skeleton: str = "",
+    tone_profile: dict | None = None,
 ) -> LLMResult:
     """Write a full article draft grounded in the evidence table.
 
@@ -222,6 +238,7 @@ def write_article_draft(
                 allowed_recommendations=allowed_recommendations or [],
                 query_contract=query_contract or {},
                 evidence_limited_mode=evidence_limited_mode,
+                candidate_pack=candidate_pack,
             )
         )
 
@@ -239,6 +256,14 @@ def write_article_draft(
             evidence_limited_mode,
             source_quality_scores or [],
         )
+        if writer_handoff:
+            system_prompt += "\n\nSTRUCTURED WRITER HANDOFF:\n" + json.dumps(
+                writer_handoff, indent=2
+            )
+        if locked_skeleton:
+            system_prompt += (
+                "\n\nLOCKED ARTICLE SKELETON — write inside this structure:\n" + locked_skeleton
+            )
         if is_financial:
             system_prompt += prompts.FINANCIAL_DRAFT_ADDENDUM
     else:
@@ -252,12 +277,15 @@ def write_article_draft(
 
     if skill_briefs:
         system_prompt += f"\n\nActive editorial skills:\n{skill_briefs}"
+    if tone_profile:
+        system_prompt += _format_tone_profile_prompt(tone_profile)
 
     result = llm_client.generate_structured(
         system_prompt=system_prompt,
         user_prompt=(
             "Write the full article as a JSON object with "
-            "article_markdown, meta_description, and seo_keywords."
+            "article_markdown, meta_description, seo_keywords, recommended_entities, "
+            "locked_entities_used, and handoff_notes."
         ),
         output_model=DraftOutput,
     )
@@ -272,6 +300,7 @@ def write_article_draft(
                 allowed_recommendations=allowed_recommendations or [],
                 query_contract=query_contract or {},
                 evidence_limited_mode=evidence_limited_mode,
+                candidate_pack=candidate_pack,
             ),
             result,
         )
@@ -287,6 +316,7 @@ def _mock_draft(
     allowed_recommendations: list[dict] | None = None,
     query_contract: dict | None = None,
     evidence_limited_mode: bool = False,
+    candidate_pack: dict | None = None,
 ) -> DraftOutput:
     """Generate substantive mock prose using the outline and evidence."""
     if is_recommendation:
@@ -298,6 +328,7 @@ def _mock_draft(
             allowed_recommendations=allowed_recommendations or [],
             query_contract=query_contract or {},
             evidence_limited_mode=evidence_limited_mode,
+            candidate_pack=candidate_pack,
         )
 
     lines: list[str] = [f"# {outline.title}", ""]
@@ -370,12 +401,15 @@ def _mock_recommendation_draft(
     allowed_recommendations: list[dict] | None = None,
     query_contract: dict | None = None,
     evidence_limited_mode: bool = False,
+    candidate_pack: dict | None = None,
 ) -> DraftOutput:
     """Mock draft for recommendation-style topics.
 
     Does NOT invent product names. If real source facts are available they are
     referenced; otherwise the article states that real search is needed.
     """
+    if candidate_pack:
+        return _mock_candidate_locked_draft(topic, candidate_pack, is_financial)
     allowed_recommendations = allowed_recommendations or []
     query_contract = query_contract or {}
     requested_count = query_contract.get("requested_count")
@@ -417,10 +451,7 @@ def _mock_recommendation_draft(
         for cand in draft_candidates:
             # Support EntityCandidate (canonical_name) and RecommendationCandidate (name) dicts
             cand_name = (
-                cand.get("canonical_name")
-                or cand.get("name")
-                or cand.get("raw_mention")
-                or ""
+                cand.get("canonical_name") or cand.get("name") or cand.get("raw_mention") or ""
             ).strip()
             context = cand.get("supported_context") or cand.get("evidence_terms") or []
             context_text = f" — best for {context[0]}" if context else ""
@@ -468,15 +499,10 @@ def _mock_recommendation_draft(
         if has_allowed and section.lower().startswith("best"):
             for cand in draft_candidates:
                 cand_name = (
-                    cand.get("canonical_name")
-                    or cand.get("name")
-                    or cand.get("raw_mention")
-                    or ""
+                    cand.get("canonical_name") or cand.get("name") or cand.get("raw_mention") or ""
                 ).strip()
                 terms = cand.get("evidence_terms") or cand.get("supported_context") or []
-                best_for = (
-                    ", ".join(terms[:2]) if terms else "source-backed consideration"
-                )
+                best_for = ", ".join(terms[:2]) if terms else "source-backed consideration"
                 urls = cand.get("source_urls") or []
                 title_ref = (cand.get("source_titles") or ["source evidence"])[0]
                 citation = f" [{title_ref}]({urls[0]})" if urls else ""
@@ -532,23 +558,135 @@ def _mock_recommendation_draft(
         recommended_entities=[
             {
                 "candidate_id": c.get("candidate_id", ""),
-                "name": (
-                    c.get("canonical_name")
-                    or c.get("name")
-                    or c.get("raw_mention")
-                    or ""
-                ),
+                "name": (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""),
                 "section_heading": (
-                    c.get("canonical_name")
-                    or c.get("name")
-                    or c.get("raw_mention")
-                    or None
+                    c.get("canonical_name") or c.get("name") or c.get("raw_mention") or None
                 ),
                 "source_url": (c.get("source_urls") or [None])[0],
             }
             for c in (draft_candidates if has_allowed else [])
             if (c.get("canonical_name") or c.get("name") or c.get("raw_mention"))
         ],
+        locked_entities_used=[
+            c.get("candidate_id", "")
+            for c in (draft_candidates if has_allowed else [])
+            if c.get("candidate_id")
+        ],
+    )
+
+
+def _mock_candidate_locked_draft(
+    topic: str,
+    candidate_pack: dict,
+    is_financial: bool,
+) -> DraftOutput:
+    """Produce a deterministic article that exactly follows CandidatePack."""
+    from blogagent.tools.candidate_pack import CandidatePack  # noqa: PLC0415
+    from blogagent.tools.recommendation_article_skeleton import (  # noqa: PLC0415
+        build_candidate_locked_recommendation_skeleton,
+    )
+
+    pack = CandidatePack.model_validate(candidate_pack)
+    if pack.mode == "below_minimum":
+        markdown = build_candidate_locked_recommendation_skeleton(
+            {"task_type": "recommendation"},
+            pack,
+            topic,
+        )
+        return DraftOutput(
+            article_markdown=markdown,
+            meta_description=f"Draft-only evidence report for {topic}.",
+            seo_keywords=[word.lower() for word in topic.split()[:4]],
+            handoff_notes=["CandidatePack was below the minimum publishable count."],
+        )
+
+    lines = [f"# {pack.final_target_count} Source-Backed Picks for {topic}", ""]
+    if is_financial:
+        lines.extend(
+            [
+                "> **Disclaimer**: This article is for educational purposes only and does "
+                "not constitute financial advice.",
+                "",
+            ]
+        )
+    if pack.mode == "evidence_limited":
+        lines.extend(
+            [
+                (
+                    f"The available evidence supported {pack.final_target_count} validated "
+                    f"options, rather than the {pack.requested_count} originally requested."
+                ),
+                "",
+            ]
+        )
+    lines.extend(["## Quick Picks", ""])
+    for item in pack.items:
+        citation = (
+            f" ([{item.source_title or item.display_name}]({item.source_url}))"
+            if item.source_url
+            else ""
+        )
+        lines.append(f"- {item.display_name}{citation}")
+    lines.extend(
+        [
+            "",
+            "## How We Chose",
+            "",
+            "Each pick passed the candidate cleanliness gate and has source evidence "
+            "attached to the locked candidate record.",
+            "",
+        ]
+    )
+    for index, item in enumerate(pack.items, start=1):
+        context = ", ".join(item.supported_context[:2] or item.evidence_terms[:2])
+        evidence = (
+            item.evidence_spans[0]
+            if item.evidence_spans
+            else ("The available source identifies this as a validated candidate.")
+        )
+        citation = (
+            f" [{item.source_title or 'Source'}]({item.source_url})" if item.source_url else ""
+        )
+        lines.extend(
+            [
+                f"## {index}. {item.section_heading}",
+                "",
+                f"**Best for:** {context or 'the source-supported use case'}",
+                "",
+                f"{evidence}{citation}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Buying or Choosing Tips",
+            "",
+            "Compare the source-backed use case, evidence quality, and stated caveats "
+            "before choosing among these options.",
+            "",
+            "## Final Takeaway",
+            "",
+            "The locked list above reflects the candidates supported by the available evidence.",
+        ]
+    )
+    return DraftOutput(
+        article_markdown="\n".join(lines),
+        meta_description=(
+            f"Compare {pack.final_target_count} source-backed options for {topic}, "
+            "with evidence-linked use cases and practical choosing guidance."
+        )[:160],
+        seo_keywords=[word.lower() for word in topic.split()[:4]],
+        recommended_entities=[
+            {
+                "candidate_id": item.candidate_id,
+                "name": item.display_name,
+                "section_heading": item.section_heading,
+                "source_url": item.source_url,
+            }
+            for item in pack.items
+        ],
+        locked_entities_used=list(pack.locked_candidate_ids),
+        handoff_notes=["Candidate list and structure were generated from CandidatePack."],
     )
 
 
@@ -563,9 +701,7 @@ def _format_query_contract_prompt(
     allowed_lines = []
     for c in allowed_recommendations[:20]:
         # Support both EntityCandidate dicts and RecommendationCandidate dicts
-        cand_name = (
-            c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""
-        ).strip()
+        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
         cand_id = c.get("candidate_id", "")
         terms = c.get("evidence_terms") or c.get("supported_context") or []
         urls = c.get("source_urls") or []
@@ -578,12 +714,8 @@ def _format_query_contract_prompt(
     rejected_lines = []
     for c in rejected_candidates[:20]:
         reason = c.get("rejection_reason") or c.get("reason")
-        cand_name = (
-            c.get("canonical_name") or c.get("name") or c.get("raw_mention") or ""
-        ).strip()
-        rejected_lines.append(
-            f"- {cand_name} | type={c.get('entity_type')} | reason={reason}"
-        )
+        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
+        rejected_lines.append(f"- {cand_name} | type={c.get('entity_type')} | reason={reason}")
     quality_counts = {
         "high": sum(1 for s in source_quality_scores if s.get("quality") == "high"),
         "medium": sum(1 for s in source_quality_scores if s.get("quality") == "medium"),
@@ -633,6 +765,13 @@ def _format_query_contract_prompt(
         "- For fragrance posts include notes/mood/occasion only if present in the terms above.\n"
         "- If you cannot find enough allowed candidates for the requested count, "
         "state this clearly in the title and body.\n"
+    )
+
+
+def _format_tone_profile_prompt(tone_profile: dict) -> str:
+    return (
+        "\n\nTONE PROFILE — voice only; never change count, candidates, citations, "
+        "evidence rules, safety constraints, or status:\n" + json.dumps(tone_profile, indent=2)
     )
 
 

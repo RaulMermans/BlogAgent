@@ -165,6 +165,9 @@ RECOMMENDATION_DRAFT_PROMPT = """\
 You are a blog writer. Given an outline and evidence table, write a recommendation-style
 blog post in Markdown.
 
+The candidate list is locked. Your task is to write inside the structure, not decide the
+recommendation set.
+
 Source-grounding rules — MANDATORY:
 - You MAY ONLY name specific products, brands, or entities that appear in the evidence table.
 - Do NOT invent product names, brand names, or recommendations.
@@ -249,6 +252,10 @@ Fact-check blocking issues:
 
 QUALITY_REVISION_PROMPT = """\
 You are a senior editor revising a blog post based on a quality evaluation report.
+
+When a structured ReviewPacket and RevisionPlan are supplied, they are the revision contract.
+Resolve listed defects, preserve every locked candidate, and report unresolved defects rather
+than deleting candidates.
 
 Quality defects to fix:
 {defects}

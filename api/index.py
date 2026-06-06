@@ -45,6 +45,7 @@ app = FastAPI(title="BlogAgent API", version="0.1.0")
 class RunRequest(BaseModel):
     topic: str
     worker_secret: str = ""
+    tone_profile_id: str | None = None
 
 
 class AuthVerifyRequest(BaseModel):
@@ -107,6 +108,15 @@ class RunResponse(BaseModel):
     draft_recommended_entities: list[dict[str, Any]] = []
     # Final Answer Contract — canonical post-polish publish status
     final_answer_contract: dict[str, Any] = {}
+    # Structured Agent Handoff Protocol
+    candidate_pack: dict[str, Any] = {}
+    writer_output_audit: dict[str, Any] = {}
+    review_packet: dict[str, Any] = {}
+    revision_plan: dict[str, Any] = {}
+    revision_output_audit: dict[str, Any] = {}
+    polish_output_audit: dict[str, Any] = {}
+    locked_repair_result: dict[str, Any] = {}
+    tone_profile: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +216,7 @@ def run_get(
     request: Request,
     topic: str | None = None,
     worker_secret: str = "",
+    tone_profile_id: str | None = None,
 ) -> Any:
     if not topic or not topic.strip():
         return JSONResponse(
@@ -216,7 +227,7 @@ def run_get(
             }
         )
     _check_worker_secret(request, query_secret=worker_secret)
-    return _run_topic(topic.strip())
+    return _run_topic(topic.strip(), tone_profile_id=tone_profile_id)
 
 
 @app.post("/run", response_model=RunResponse)
@@ -225,7 +236,7 @@ def run(request: Request, body: RunRequest) -> Any:
     if not topic:
         raise HTTPException(status_code=400, detail="topic must be a non-empty string")
     _check_worker_secret(request, body_secret=body.worker_secret)
-    return _run_topic(topic)
+    return _run_topic(topic, tone_profile_id=body.tone_profile_id)
 
 
 # ---------------------------------------------------------------------------
@@ -233,12 +244,12 @@ def run(request: Request, body: RunRequest) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _run_topic(topic: str) -> RunResponse:
+def _run_topic(topic: str, tone_profile_id: str | None = None) -> RunResponse:
     _ensure_mock_safe_defaults()
 
     from blogagent.workflow.graph import run_pipeline  # noqa: PLC0415
 
-    state = run_pipeline(topic)
+    state = run_pipeline(topic, tone_profile_id=tone_profile_id)
 
     if state.blocked:
         return RunResponse(
@@ -330,6 +341,22 @@ def _run_topic(topic: str) -> RunResponse:
         final_answer_contract=dict(state.final_answer_contract)
         if state.final_answer_contract
         else {},
+        candidate_pack=dict(state.candidate_pack) if state.candidate_pack else {},
+        writer_output_audit=dict(state.writer_output_audit)
+        if state.writer_output_audit
+        else {},
+        review_packet=dict(state.review_packet) if state.review_packet else {},
+        revision_plan=dict(state.revision_plan) if state.revision_plan else {},
+        revision_output_audit=dict(state.revision_output_audit)
+        if state.revision_output_audit
+        else {},
+        polish_output_audit=dict(state.polish_output_audit)
+        if state.polish_output_audit
+        else {},
+        locked_repair_result=dict(state.locked_repair_result)
+        if state.locked_repair_result
+        else {},
+        tone_profile=dict(state.tone_profile) if state.tone_profile else {},
     )
 
 
@@ -366,7 +393,7 @@ def _build_app_html() -> str:
       margin-bottom: 1.5rem;
     }
     label { display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.9rem; }
-    input[type="text"], input[type="password"], textarea {
+    input[type="text"], input[type="password"], textarea, select {
       width: 100%;
       padding: 0.6rem 0.8rem;
       border: 1px solid #ccc;
@@ -377,7 +404,7 @@ def _build_app_html() -> str:
       background: #fafafa;
     }
     textarea { min-height: 80px; resize: vertical; }
-    input:focus, textarea:focus { outline: 2px solid #2563eb; border-color: #2563eb; background: #fff; }
+    input:focus, textarea:focus, select:focus { outline: 2px solid #2563eb; border-color: #2563eb; background: #fff; }
     button {
       padding: 0.65rem 1.6rem;
       background: #2563eb;
@@ -623,6 +650,16 @@ def _build_app_html() -> str:
     <div class="form-card">
       <label for="topic">Topic</label>
       <textarea id="topic" placeholder="e.g. Why elephants are the heaviest land animals"></textarea>
+      <label for="tone-profile">Tone</label>
+      <select id="tone-profile">
+        <option value="">Auto</option>
+        <option value="editorial_magazine">Editorial Magazine</option>
+        <option value="practical_buying_guide">Practical Buying Guide</option>
+        <option value="expert_analyst">Expert Analyst</option>
+        <option value="personal_blog">Personal Blog</option>
+        <option value="luxury_premium">Luxury / Premium</option>
+        <option value="seo_neutral">SEO Neutral</option>
+      </select>
       <button type="button" id="generateButton">Generate Blog Post</button>
     </div>
 
@@ -1070,6 +1107,7 @@ def _build_app_html() -> str:
   async function generate() {
     const secret = sessionStorage.getItem(SECRET_KEY) || '';
     const topic = document.getElementById('topic').value.trim();
+    const toneProfileId = document.getElementById('tone-profile').value || null;
     if (!topic) { showError('Please enter a topic'); return; }
 
     clearOutput();
@@ -1092,7 +1130,7 @@ def _build_app_html() -> str:
           'Content-Type': 'application/json',
           'X-BlogAgent-Secret': secret
         },
-        body: JSON.stringify({topic})
+        body: JSON.stringify({topic, tone_profile_id: toneProfileId})
       });
 
       debugInfo.status = resp.status;
@@ -1172,6 +1210,7 @@ def _build_app_html() -> str:
     const sourceQualityScores = data.source_quality_scores || [];
     const runTrace = data.run_trace || [];
     const qualityEval = data.quality_evaluation || {};
+    const toneProfile = data.tone_profile || {};
 
     if (data.blocked) {
       showError('Request blocked: ' + (data.block_reason || 'publishing requests are not allowed.'));
@@ -1202,6 +1241,7 @@ def _build_app_html() -> str:
     if (claimStatusCounts.unsupported) addStat(statsRow, claimStatusCounts.unsupported + ' unsupported', 'danger');
     addStat(statsRow, (data.revision_count || 0) + ' revision' + ((data.revision_count || 0) !== 1 ? 's' : ''), 'ok');
     addStat(statsRow, executionMode || 'mock', 'ok');
+    if (toneProfile.label) addStat(statsRow, 'tone: ' + toneProfile.label, 'ok');
     if (qualityEval && qualityEval.score !== undefined) {
       const qType = qualityEval.passes ? 'ok' : 'warn';
       addStat(statsRow, 'quality ' + qualityEval.score + '/100', qType);
