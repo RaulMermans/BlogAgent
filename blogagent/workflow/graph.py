@@ -60,6 +60,16 @@ from blogagent.workflow.state import BlogRunState
 
 _MAX_REVISIONS = 1
 
+_TELEMETRY_NODE_IDS = {
+    "intake_topic": "intake_request_parsing",
+    "run_web_search": "topic_product_research",
+    "generate_outline": "outline_generation",
+    "write_draft": "draft_writing",
+    "evaluate_quality": "reviewer_critic_pass",
+    "run_editorial_polish": "seo_optimization",
+    "package_article": "final_article_packaging",
+}
+
 
 def _compute_execution_mode(state: BlogRunState) -> str:
     """Derive execution_mode from what providers actually ran.
@@ -141,7 +151,7 @@ def run_pipeline(topic: str, tone_profile_id: str | None = None) -> BlogRunState
 
     with use_client(telemetry):
         telemetry.start_run(
-            input_summary=topic,
+            input_summary=f"Generate a source-grounded blog article about: {topic}",
             metadata={"topic_length": len(topic), "execution_mode": "pending"},
         )
         try:
@@ -284,7 +294,10 @@ def run_pipeline(topic: str, tone_profile_id: str | None = None) -> BlogRunState
 
             _emit_final_observability(state)
             telemetry.complete_run(
-                output_summary=state.publish_ready_status or "completed",
+                output_summary=(
+                    f"Blog article completed for: {state.topic}. "
+                    f"Status: {state.publish_ready_status or 'completed'}"
+                ),
                 metadata={
                     "execution_mode": state.execution_mode,
                     "blocked": state.blocked,
@@ -304,7 +317,8 @@ def _execute_step(
     *,
     timing_name: str | None = None,
 ) -> BlogRunState:
-    node_id = timing_name or step.__name__
+    timing_id = timing_name or step.__name__
+    node_id = _TELEMETRY_NODE_IDS.get(step.__name__, timing_id)
     client = current_client()
     if client:
         client.node_started(node_id, metadata={"step": step.__name__})
@@ -312,7 +326,7 @@ def _execute_step(
     try:
         with use_node(node_id):
             new_state = step(state)
-        new_state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+        new_state.stage_timings[timing_id] = round(time.monotonic() - t0, 3)
         if client:
             client.node_completed(
                 node_id,
@@ -321,7 +335,7 @@ def _execute_step(
             )
         return new_state
     except Exception as exc:  # noqa: BLE001
-        state.stage_timings[node_id] = round(time.monotonic() - t0, 3)
+        state.stage_timings[timing_id] = round(time.monotonic() - t0, 3)
         if client:
             client.emit_event(
                 "node_failed",

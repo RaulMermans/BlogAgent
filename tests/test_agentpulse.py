@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from blogagent.observability.agentpulse_client import (
@@ -10,8 +12,14 @@ from blogagent.observability.agentpulse_smoke_test import run_smoke_test
 
 
 class _OKResponse:
+    def __init__(self, payload: dict | None = None) -> None:
+        self.payload = payload or {}
+
     def raise_for_status(self) -> None:
         return None
+
+    def json(self) -> dict:
+        return self.payload
 
 
 def _enable_agentpulse(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,42 +83,64 @@ def test_agentpulse_redacts_sensitive_metadata():
 
 def test_agentpulse_event_payload_includes_required_fields(monkeypatch):
     _enable_agentpulse(monkeypatch)
-    payloads = []
+    requests = []
 
-    def capture_post(*args, **kwargs):
-        payloads.append(kwargs["json"])
-        return _OKResponse()
+    def capture_post(url, **kwargs):
+        requests.append((url, kwargs["json"]))
+        if url.endswith("/api/runs/start"):
+            return _OKResponse({"run_id": kwargs["json"]["run_id"]})
+        return _OKResponse({"accepted": 1, "rejected": 0, "errors": []})
 
     monkeypatch.setattr("httpx.post", capture_post)
     client = AgentPulseClient.from_env(run_id="run_test")
     assert client.start_run(input_summary="test")
-    payload = payloads[0]
+    assert client.node_started("intake_request_parsing")
+
+    start_payload = next(body for url, body in requests if url.endswith("/api/runs/start"))
+    assert start_payload["project_id"] == "blog-agent"
+    assert start_payload["project_name"] == "Blog Agent"
+    assert start_payload["workflow_id"] == "blog-agent-v1"
+    assert start_payload["run_id"] == "run_test"
+    assert start_payload["summary"] == "test"
+
+    trace_body = next(body for url, body in requests if url.endswith("/api/traces/events"))
+    assert list(trace_body) == ["events"]
+    payload = trace_body["events"][0]
     assert payload["project_id"] == "blog-agent"
     assert payload["project_name"] == "Blog Agent"
     assert payload["workflow_id"] == "blog-agent-v1"
     assert payload["run_id"] == "run_test"
-    assert payload["event_type"] == "run_started"
+    assert payload["event_type"] == "node_started"
     assert payload["event_id"].startswith("evt_")
     assert payload["timestamp"]
 
 
 def test_agentpulse_smoke_test_emits_safe_events(monkeypatch):
     _enable_agentpulse(monkeypatch)
-    payloads = []
+    requests = []
 
-    def capture_post(*args, **kwargs):
-        payloads.append(kwargs["json"])
+    def capture_post(url, **kwargs):
+        requests.append((url, kwargs["json"]))
+        if url.endswith("/api/runs/start"):
+            return _OKResponse({"run_id": kwargs["json"]["run_id"]})
+        if url.endswith("/api/traces/events"):
+            return _OKResponse({"accepted": 1, "rejected": 0, "errors": []})
         return _OKResponse()
 
     monkeypatch.setattr("httpx.post", capture_post)
     assert run_smoke_test() is True
-    event_types = [p["event_type"] for p in payloads]
-    assert "run_started" in event_types
+    event_types = [
+        event["event_type"]
+        for url, body in requests
+        if url.endswith("/api/traces/events")
+        for event in body["events"]
+    ]
+    assert any(url.endswith("/api/runs/start") for url, _ in requests)
     assert "model_call_started" in event_types
     assert "model_call_completed" in event_types
     assert "eval_completed" in event_types
     assert "artifact_created" in event_types
-    assert "run_completed" in event_types
+    assert any(url.endswith("/api/runs/complete") for url, _ in requests)
 
 
 def test_model_wrapper_emits_started_and_completed(monkeypatch):
@@ -120,17 +150,23 @@ def test_model_wrapper_emits_started_and_completed(monkeypatch):
 
     _enable_agentpulse(monkeypatch)
     monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
-    payloads = []
+    requests = []
 
-    def capture_post(*args, **kwargs):
-        payloads.append(kwargs["json"])
-        return _OKResponse()
+    def capture_post(url, **kwargs):
+        requests.append((url, kwargs["json"]))
+        return _OKResponse({"accepted": 1, "rejected": 0, "errors": []})
 
     monkeypatch.setattr("httpx.post", capture_post)
     client = AgentPulseClient.from_env(run_id="run_model")
     with use_client(client), use_node("editor_agent"):
         result = generate_structured("system", "user", ResearchPlanOutput)
     assert result.is_mock is True
+    payloads = [
+        event
+        for url, body in requests
+        if url.endswith("/api/traces/events")
+        for event in body["events"]
+    ]
     event_types = [p["event_type"] for p in payloads]
     assert "model_call_started" in event_types
     assert "model_call_completed" in event_types
@@ -141,10 +177,12 @@ def test_model_wrapper_emits_started_and_completed(monkeypatch):
 
 def test_failed_pipeline_emits_run_failed(monkeypatch):
     _enable_agentpulse(monkeypatch)
-    payloads = []
+    requests = []
 
-    def capture_post(*args, **kwargs):
-        payloads.append(kwargs["json"])
+    def capture_post(url, **kwargs):
+        requests.append((url, kwargs["json"]))
+        if url.endswith("/api/runs/start"):
+            return _OKResponse({"run_id": kwargs["json"]["run_id"]})
         return _OKResponse()
 
     def boom(state):
@@ -156,5 +194,72 @@ def test_failed_pipeline_emits_run_failed(monkeypatch):
     monkeypatch.setattr(graph, "_PRE_FACTCHECK", [boom])
     with pytest.raises(RuntimeError, match="forced failure"):
         graph.run_pipeline("Telemetry failure test")
-    event_types = [p["event_type"] for p in payloads]
-    assert "run_failed" in event_types
+    fail_payload = next(body for url, body in requests if url.endswith("/api/runs/fail"))
+    assert fail_payload["error_summary"] == "RuntimeError: forced failure"
+
+
+def test_real_pipeline_emits_agentpulse_run_and_trace(monkeypatch, caplog):
+    _enable_agentpulse(monkeypatch)
+    monkeypatch.setenv("BLOGAGENT_LLM_PROVIDER", "mock")
+    requests = []
+
+    def capture_post(url, **kwargs):
+        requests.append((url, kwargs["json"]))
+        if url.endswith("/api/runs/start"):
+            return _OKResponse({"run_id": kwargs["json"]["run_id"]})
+        if url.endswith("/api/traces/events"):
+            return _OKResponse(
+                {
+                    "accepted": len(kwargs["json"]["events"]),
+                    "rejected": 0,
+                    "errors": [],
+                }
+            )
+        return _OKResponse()
+
+    monkeypatch.setattr("httpx.post", capture_post)
+    caplog.set_level(logging.INFO, logger="blogagent.observability.agentpulse_client")
+
+    from blogagent.workflow.graph import run_pipeline
+
+    state = run_pipeline("How photosynthesis works")
+
+    start_payload = next(body for url, body in requests if url.endswith("/api/runs/start"))
+    assert start_payload["project_id"] == "blog-agent"
+    assert start_payload["workflow_id"] == "blog-agent-v1"
+    assert not start_payload["run_id"].startswith("test-run_")
+    assert "photosynthesis" in start_payload["summary"].lower()
+    assert start_payload["run_id"] == state.run_id
+
+    events = [
+        event
+        for url, body in requests
+        if url.endswith("/api/traces/events")
+        for event in body["events"]
+    ]
+    event_types = {event["event_type"] for event in events}
+    node_ids = {event.get("node_id") for event in events}
+    assert "node_started" in event_types
+    assert "model_call_started" in event_types
+    assert "model_call_completed" in event_types
+    assert {
+        "intake_request_parsing",
+        "topic_product_research",
+        "outline_generation",
+        "draft_writing",
+        "reviewer_critic_pass",
+        "seo_optimization",
+        "final_article_packaging",
+    } <= node_ids
+
+    complete_payload = next(
+        body for url, body in requests if url.endswith("/api/runs/complete")
+    )
+    assert complete_payload["run_id"] == state.run_id
+    assert "photosynthesis" in complete_payload["summary"].lower()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(message.startswith("AgentPulse enabled") for message in messages)
+    assert any("AgentPulse startRun created run_id=" in message for message in messages)
+    assert any("AgentPulse event sent:" in message for message in messages)
+    assert any("AgentPulse completeRun sent" in message for message in messages)

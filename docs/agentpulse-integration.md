@@ -20,9 +20,8 @@ Optional:
 AGENTPULSE_DEBUG=false
 ```
 
-Telemetry is disabled unless `AGENTPULSE_ENABLED` is exactly `true` and both
-`AGENTPULSE_URL` and `AGENTPULSE_INGEST_KEY` are present. Disabled telemetry is
-silent unless debug mode is enabled.
+Telemetry is disabled unless `AGENTPULSE_ENABLED` is truthy (`true`, `1`, `yes`,
+or `on`) and both `AGENTPULSE_URL` and `AGENTPULSE_INGEST_KEY` are present.
 
 ## Smoke Test
 
@@ -59,6 +58,10 @@ BLOGAGENT_USE_LLM_EDITOR=true \
 GOOGLE_API_KEY=your_google_key \
 uv run python -m blogagent.cli run "Why elephants are the heaviest land animals" --show-trace
 ```
+
+The production runner creates the durable AgentPulse run through
+`POST /api/runs/start`, sends stage events through `POST /api/traces/events`,
+and finalizes it through `POST /api/runs/complete` or `POST /api/runs/fail`.
 
 ## Where To Check
 
