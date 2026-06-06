@@ -231,6 +231,33 @@ class GenericProductAdapter(DomainAdapter):
     def get_known_brands_or_entities(self) -> list[str]:
         return sorted(_KNOWN_BRANDS | _KNOWN_PRODUCT_NAMES)
 
+    def get_known_recommendation_entities(
+        self, query_contract: "QueryContract"
+    ) -> list[str]:
+        by_subtype = {
+            "watch": (
+                "Tissot PRX Quartz",
+                "Seiko 5 Sports",
+                "Hamilton Khaki Field Mechanical",
+                "Orient Bambino",
+                "Citizen Tsuyosa",
+                "Longines Conquest",
+            ),
+            "headphone": (
+                "Sony WH-1000XM5",
+                "Bose QuietComfort Ultra",
+                "Apple AirPods Pro",
+            ),
+            "luggage": (
+                "Samsonite Freeform",
+                "Away Bigger Carry-On",
+                "Travelpro Platinum Elite",
+            ),
+            "camera": ("Fujifilm X-T30 II", "Canon EOS R50"),
+            "office_chair": ("Herman Miller Aeron", "Steelcase Series 1"),
+        }
+        return list(by_subtype.get(query_contract.entity_subtype or "", ()))
+
     def _is_sale_or_nav(self, lower: str) -> bool:
         return any(
             phrase in lower

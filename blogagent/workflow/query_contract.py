@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from blogagent.tools.recommendation_policy import (
+    EvidenceMode,
+    ExactCountPolicy,
+    RecommendationStrictness,
+    evidence_policy_for_domain,
+)
 
 TaskType = Literal["recommendation", "explainer", "how_to", "comparison", "analysis", "unknown"]
 Domain = Literal[
@@ -34,7 +41,32 @@ class QueryContract(BaseModel):
     minimum_publishable_items: int = 1
     evidence_limited_allowed: bool = False
     exact_count_required: bool = False
+    recommendation_strictness: RecommendationStrictness = "standard"
+    evidence_mode: EvidenceMode = "source_aware"
+    grounding_required: bool = False
+    exact_count_policy: ExactCountPolicy = "prefer_requested_count"
+    allow_editorial_discretion: bool = False
+    publishable_with_warnings_allowed: bool = True
     safety_constraints: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_policy_fields(cls, value):
+        """Populate policy fields on legacy or manually constructed contracts."""
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        policy = evidence_policy_for_domain(data.get("domain", "general"))
+        data.setdefault("recommendation_strictness", policy.strictness_level)
+        data.setdefault("evidence_mode", policy.evidence_mode)
+        data.setdefault("grounding_required", policy.grounding_required)
+        data.setdefault("exact_count_policy", policy.exact_count_policy)
+        data.setdefault("allow_editorial_discretion", policy.allow_editorial_discretion)
+        data.setdefault(
+            "publishable_with_warnings_allowed",
+            policy.publishable_with_warnings_allowed,
+        )
+        return data
 
 
 _FRAGRANCE_TERMS = (
@@ -130,6 +162,16 @@ def build_query_contract(
     else:
         domain = "general"
 
+    policy = evidence_policy_for_domain(domain)
+    policy_fields = {
+        "recommendation_strictness": policy.strictness_level,
+        "evidence_mode": policy.evidence_mode,
+        "grounding_required": policy.grounding_required,
+        "exact_count_policy": policy.exact_count_policy,
+        "allow_editorial_discretion": policy.allow_editorial_discretion,
+        "publishable_with_warnings_allowed": policy.publishable_with_warnings_allowed,
+    }
+
     if domain == "beauty_fragrance" and task_type == "recommendation":
         asks_for_brands = any(t in lower for t in _BRAND_QUERY_TERMS)
         return QueryContract(
@@ -141,7 +183,7 @@ def build_query_contract(
             valid_item_rules=[
                 "must be a specific perfume/fragrance/parfum/cologne product",
                 "must not be a brand-only name unless prompt explicitly asks for brands",
-                "must have source evidence",
+                "must be a real, specific product",
                 "should include summer/date/festival/use-case rationale when applicable",
             ],
             invalid_item_rules=[
@@ -164,6 +206,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
         )
 
     if domain == "beauty_makeup" and task_type == "recommendation":
@@ -183,7 +226,7 @@ def build_query_contract(
             valid_item_rules=[
                 "must be a specific makeup product or named product line",
                 "product category allowed if prompt asks for essentials/basics/kit",
-                "must have source evidence",
+                "must be a real, specific product or valid requested category",
             ],
             invalid_item_rules=[
                 "brand-only names do not count unless prompt asks for brands",
@@ -195,6 +238,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
         )
 
     if domain == "fashion_lifestyle" and task_type == "recommendation":
@@ -217,6 +261,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
         )
 
     if domain == "software_tools" and task_type == "recommendation":
@@ -240,6 +285,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
         )
 
     if domain == "finance" and task_type == "recommendation":
@@ -264,6 +310,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
             safety_constraints=[
                 "educational only",
                 "not financial advice",
@@ -286,7 +333,7 @@ def build_query_contract(
                 "brand-only names do not count when specific products are required",
                 "product categories count only when the prompt explicitly asks for "
                 "categories/types/essentials",
-                "must have source evidence",
+                "must be a real, specific named product, model, or product line",
             ],
             invalid_item_rules=[
                 "generic category phrases do not count as product recommendations",
@@ -306,6 +353,7 @@ def build_query_contract(
             minimum_publishable_items=3,
             evidence_limited_allowed=True,
             exact_count_required=requested_count is not None,
+            **policy_fields,
         )
 
     return QueryContract(
@@ -319,6 +367,7 @@ def build_query_contract(
         minimum_publishable_items=1,
         evidence_limited_allowed=False,
         exact_count_required=False,
+        **policy_fields,
     )
 
 

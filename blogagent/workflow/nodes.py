@@ -462,10 +462,11 @@ def build_candidate_pack_node(state: BlogRunState) -> BlogRunState:
         return state
     pack = build_candidate_pack(contract, state.entity_candidate_ledger)
     state.candidate_pack = pack.model_dump()
-    state.evidence_limited_mode = pack.mode in {"evidence_limited", "below_minimum"}
+    state.evidence_limited_mode = pack.status in {"evidence_limited", "below_minimum"}
     _event(
         state,
-        f"candidate_pack: mode={pack.mode} locked={pack.final_target_count} "
+        f"candidate_pack: mode={pack.mode} status={pack.status} "
+        f"locked={pack.final_target_count} "
         f"allowed={pack.allowed_count} requested={pack.requested_count}",
     )
     return state
@@ -612,6 +613,9 @@ def _candidate_pack_allowed_candidates(state: BlogRunState) -> list[dict]:
             "evidence_spans": list(item.evidence_spans),
             "evidence_terms": list(item.evidence_terms),
             "supported_context": list(item.supported_context),
+            "candidate_confidence": item.candidate_confidence,
+            "candidate_basis": item.candidate_basis,
+            "needs_review": item.needs_review,
             "usable": True,
         }
         for item in pack.items
@@ -897,7 +901,7 @@ def evaluate_quality(state: BlogRunState) -> BlogRunState:
     if state.candidate_pack:
         pack = CandidatePack.model_validate(state.candidate_pack)
         target_count = pack.final_target_count
-        quality_is_recommendation = state.is_recommendation and pack.mode != "below_minimum"
+        quality_is_recommendation = state.is_recommendation and pack.status != "below_minimum"
     result = _evaluate(
         topic=state.topic,
         draft=state.draft,
@@ -1062,7 +1066,7 @@ def final_validate_quality(state: BlogRunState) -> BlogRunState:
     evidence_limited = False
     below_minimum = bool(
         state.candidate_pack
-        and CandidatePack.model_validate(state.candidate_pack).mode == "below_minimum"
+        and CandidatePack.model_validate(state.candidate_pack).status == "below_minimum"
     )
     if state.is_recommendation and state.requested_count is not None and not below_minimum:
         # Try rich extractor first; fall back to simple counter
@@ -1756,6 +1760,11 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         answer_count_snapshot=state.answer_count_snapshot or None,
         draft_candidate_compliance=state.draft_candidate_compliance or None,
         candidate_ledger_summary=state.candidate_ledger_summary or None,
+        unsupported_high_importance_claims=(
+            list(state.fact_check_report.blocking_issues)
+            if state.fact_check_report
+            else None
+        ),
     )
     state.publish_contract = result.model_dump()
     _event(
@@ -1799,9 +1808,9 @@ def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
         candidate_summary["usable_count"] = pack.final_target_count
         candidate_summary["table_quality"] = (
             "failed"
-            if pack.mode == "below_minimum"
+            if pack.status == "below_minimum"
             else "limited"
-            if pack.mode == "evidence_limited"
+            if pack.status == "evidence_limited"
             else "strong"
         )
     contract = build_final_answer_contract(
@@ -1814,6 +1823,7 @@ def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
         publish_contract=state.publish_contract or None,
         minimum_publishable_items=min_publishable,
         is_recommendation=state.is_recommendation,
+        recommendation_audit=state.recommendation_audit or None,
     )
     state.final_answer_contract = contract.model_dump()
     _event(
@@ -1843,7 +1853,7 @@ def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
     Priority order (highest to lowest):
     1. FinalAnswerContract.publish_status — canonical post-polish count arbiter.
        Enforces the invariant that count_status=failed cannot produce
-       publish_ready_with_warnings, and that title/quick-picks/grounding mismatches
+       publish_ready_with_editorial_review, and that title/quick-picks/grounding mismatches
        are caught regardless of what earlier checks reported.
     2. PublishContractResult.status — earlier deterministic hard-fail layer.
     3. Final-validation hard-fail override — if final_validation_status=failed,
@@ -1860,6 +1870,7 @@ def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
         # Ensure valid literal
         _VALID_STATUSES = {
             "publish_ready",
+            "publish_ready_with_editorial_review",
             "publish_ready_with_warnings",
             "draft_only_not_publish_ready",
         }
@@ -1885,7 +1896,7 @@ def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
     pub_eval = state.publishability_evaluation
     if pub_eval is None:
         if fv_status == "passed_with_warnings" or state.final_validation_warnings:
-            state.publish_ready_status = "publish_ready_with_warnings"
+            state.publish_ready_status = "publish_ready_with_editorial_review"
         else:
             state.publish_ready_status = "publish_ready"
         return state
@@ -1901,7 +1912,7 @@ def compute_publish_ready_status(state: BlogRunState) -> BlogRunState:
         or state.evidence_limited_count_accepted
         or score < 80
     ):
-        state.publish_ready_status = "publish_ready_with_warnings"
+        state.publish_ready_status = "publish_ready_with_editorial_review"
     else:
         state.publish_ready_status = "publish_ready"
 

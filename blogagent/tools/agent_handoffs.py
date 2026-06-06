@@ -99,7 +99,7 @@ def build_writer_handoff(
         if isinstance(candidate_pack, CandidatePack)
         else CandidatePack.model_validate(candidate_pack)
     )
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         required_structure = [
             "What was searched",
             "Validated candidates found",
@@ -123,24 +123,34 @@ def build_writer_handoff(
         "change the count mode",
         "invent evidence, citations, statistics, or quotes",
     ]
-    if pack.mode == "evidence_limited":
+    if pack.status == "evidence_limited":
         forbidden.append("claim the originally requested count in the title or body")
+    strictness = str(query_contract.get("recommendation_strictness", "standard"))
+    evidence_policy = (
+        "Use source evidence as support and inspiration. Editorial judgment is allowed for "
+        "clean, real candidates. Never invent prices, specs, awards, reviews, quotes, "
+        "or capabilities."
+        if strictness == "editorial"
+        else (
+            "Every recommendation must be directly grounded in its attached evidence."
+            if strictness == "strict"
+            else "Use attached evidence or known-product validation; flag weak support."
+        )
+    )
     return WriterHandoff(
         query_contract=query_contract,
         candidate_pack=pack.model_dump(),
         tone_profile=tone_profile,
         required_structure=required_structure,
         forbidden_actions=forbidden,
-        evidence_policy=(
-            "Use only evidence attached to CandidatePack items. Preserve source URLs and "
-            "state uncertainty when evidence is thin."
-        ),
+        evidence_policy=evidence_policy,
         output_contract={
             "candidate_list_locked": True,
             "required_candidate_ids": pack.locked_candidate_ids,
             "final_target_count": pack.final_target_count,
             "mode": pack.mode,
-            "recommended_entities_required": pack.mode != "below_minimum",
+            "status": pack.status,
+            "recommended_entities_required": pack.status != "below_minimum",
         },
     )
 

@@ -353,6 +353,9 @@ _PRODUCT_SIGNAL_TERMS: frozenset[str] = frozenset(
         "gioia",
         "wood sage",
         "sea salt",
+        "replica",
+        "beach walk",
+        "philosykos",
     }
 )
 
@@ -463,6 +466,7 @@ _NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
     "under $",
     "what was searched",
     "validated candidates found",
+    "candidates found",
     "not publish-ready",
     "what evidence is missing",
     "suggested next search",
@@ -1282,7 +1286,7 @@ def audit_article_recommendations(
             else:
                 unsupported.append(rec.name)
                 continue
-        if is_grounded or is_allowed:
+        if is_grounded:
             grounded_count += 1
 
     passes = (
@@ -1380,7 +1384,7 @@ def _is_category_phrase(name: str) -> bool:
 def _looks_like_specific_fragrance_product(name: str) -> bool:
     lower = normalize_recommendation_name(name)
     words = lower.split()
-    if len(words) < 2 or len(words) > 8:
+    if len(words) < 2 or len(words) > 10:
         return False
     if lower in _BRAND_ONLY_NAMES:
         return False

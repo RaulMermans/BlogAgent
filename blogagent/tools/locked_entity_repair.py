@@ -33,9 +33,9 @@ def repair_locked_recommendation_article(
         if isinstance(query_contract, QueryContract)
         else QueryContract.model_validate(query_contract)
     )
-    if contract.task_type != "recommendation" or pack.mode == "not_applicable":
+    if contract.task_type != "recommendation" or pack.status == "not_applicable":
         return RepairResult(repaired_markdown=article_markdown, repair_applied=False)
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         return _repair_below_minimum(article_markdown, pack)
 
     original = article_markdown
@@ -53,7 +53,11 @@ def repair_locked_recommendation_article(
         summaries.append("Rebuilt Quick Picks from the locked CandidatePack.")
         restored.extend(cid for cid in pack.locked_candidate_ids if cid not in old_quick_ids)
 
-    if pack.mode == "evidence_limited" and not _has_limited_explanation(repaired):
+    if (
+        pack.status == "evidence_limited"
+        and contract.recommendation_strictness != "editorial"
+        and not _has_limited_explanation(repaired)
+    ):
         explanation = (
             f"The available evidence supported {pack.final_target_count} validated options, "
             f"rather than the {pack.requested_count} originally requested."
@@ -115,8 +119,13 @@ def _repair_h1(markdown: str, pack: CandidatePack) -> tuple[str, bool]:
         current,
         flags=re.IGNORECASE,
     ).strip()
-    topic_text = topic_text or "Source-Backed Picks"
-    desired = f"# {pack.final_target_count} Source-Backed Picks for {topic_text}"
+    topic_text = topic_text or "Standout Options"
+    label = (
+        "Our Picks"
+        if pack.recommendation_strictness == "editorial"
+        else "Recommended Options"
+    )
+    desired = f"# {pack.final_target_count} {label} for {topic_text}"
     if match:
         existing_line = match.group(0)
         if _declared_count(existing_line) == pack.final_target_count:
@@ -152,7 +161,7 @@ def _candidate_line(item: CandidatePackItem) -> str:
 
 def _append_detail_section(markdown: str, item: CandidatePackItem, index: int) -> str:
     context = ", ".join(item.supported_context[:2] or item.evidence_terms[:2])
-    best_for = context or "the source-supported use case"
+    best_for = context or "a clear use case"
     evidence = _short_evidence(item)
     citation = (
         f" [{item.source_title or 'Source'}]({item.source_url})"
@@ -163,7 +172,11 @@ def _append_detail_section(markdown: str, item: CandidatePackItem, index: int) -
         f"\n\n## {index}. {item.section_heading}\n\n"
         f"**Best for:** {best_for}\n\n"
         f"{evidence}{citation}\n\n"
-        "Evidence is presented conservatively; verify the cited source before publication."
+        + (
+            "This is an editorial pick; verify any objective details before publication."
+            if item.candidate_basis in {"editorial_discretion", "weak_signal"}
+            else "Check the linked source for additional context."
+        )
     )
     final_match = re.search(r"^##\s+Final\s+Takeaway.*$", markdown, re.IGNORECASE | re.MULTILINE)
     if final_match:
@@ -197,7 +210,11 @@ def _remaining_issues(markdown: str, pack: CandidatePack) -> list[str]:
         issues.append("Missing detail sections: " + ", ".join(missing))
     if _declared_count(markdown) != pack.final_target_count:
         issues.append("H1 count does not match CandidatePack.final_target_count.")
-    if pack.mode == "evidence_limited" and not _has_limited_explanation(markdown):
+    if (
+        pack.status == "evidence_limited"
+        and pack.recommendation_strictness != "editorial"
+        and not _has_limited_explanation(markdown)
+    ):
         issues.append("Evidence-limited explanation is missing.")
     return issues
 

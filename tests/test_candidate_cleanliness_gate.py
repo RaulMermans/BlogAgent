@@ -208,17 +208,19 @@ class TestEntityCandidateCleanlinessGate:
         assert result.usable is False
         assert "clean_name_score" in (result.rejection_reason or "")
 
-    def test_low_evidence_score_rejects(self):
+    def test_low_evidence_score_is_reviewable_in_editorial_mode(self):
         cand = self._make_candidate("Dior Sauvage", evidence_score=0.5)
         result = _apply_cleanliness_gate_v2(cand, self.contract)
-        assert result.usable is False
-        assert "evidence_score" in (result.rejection_reason or "")
+        assert result.usable is True
+        assert result.candidate_confidence == "low"
+        assert result.needs_review is True
 
-    def test_empty_evidence_spans_rejects(self):
+    def test_empty_evidence_spans_are_reviewable_in_editorial_mode(self):
         cand = self._make_candidate("Chanel No 5", evidence_spans=[])
         result = _apply_cleanliness_gate_v2(cand, self.contract)
-        assert result.usable is False
-        assert "evidence span" in (result.rejection_reason or "")
+        assert result.usable is True
+        assert result.candidate_confidence == "low"
+        assert result.needs_review is True
 
     def test_clean_candidate_with_spans_passes(self):
         cand = self._make_candidate(
@@ -402,7 +404,7 @@ class TestLedgerQualityGateClean:
         assert result.table_quality != "strong", (
             "Expected non-strong because all candidates have empty evidence_spans"
         )
-        assert any("evidence_spans" in issue for issue in result.quality_issues)
+        assert any("light source coverage" in issue for issue in result.quality_issues)
 
     def test_ledger_with_3_candidates_for_7_requested_is_limited(self):
         candidates = [

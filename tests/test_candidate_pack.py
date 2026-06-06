@@ -57,7 +57,8 @@ def test_requested_seven_allowed_six_is_evidence_limited():
     pack = build_candidate_pack(
         _contract(7), _ledger([_candidate(f"Perfume {i}", i) for i in range(6)])
     )
-    assert pack.mode == "evidence_limited"
+    assert pack.mode == "editorial_shortlist"
+    assert pack.status == "evidence_limited"
     assert pack.final_target_count == 6
     assert len(pack.locked_candidate_ids) == 6
 
@@ -65,7 +66,8 @@ def test_requested_seven_allowed_six_is_evidence_limited():
 def test_requested_five_allowed_five_is_exact():
     candidates = [_candidate(f"Perfume {i}", i) for i in range(5)]
     pack = build_candidate_pack(_contract(5), _ledger(candidates))
-    assert pack.mode == "exact"
+    assert pack.mode == "editorial_shortlist"
+    assert pack.status == "exact"
     assert pack.final_target_count == 5
 
 
@@ -73,7 +75,8 @@ def test_allowed_below_minimum_is_below_minimum():
     pack = build_candidate_pack(
         _contract(7), _ledger([_candidate("Perfume One", 1), _candidate("Perfume Two", 2)])
     )
-    assert pack.mode == "below_minimum"
+    assert pack.mode == "editorial_shortlist"
+    assert pack.status == "below_minimum"
     assert pack.final_target_count == 2
 
 

@@ -116,6 +116,7 @@ class TestPipelineNewFields:
         state = run_pipeline("top 5 best perfumes for a date")
         assert state.publish_ready_status in (
             "publish_ready",
+            "publish_ready_with_editorial_review",
             "publish_ready_with_warnings",
             "draft_only_not_publish_ready",
         )
@@ -312,6 +313,7 @@ class TestAPINewFields:
         assert hasattr(resp, "publish_ready_status")
         assert resp.publish_ready_status in (
             "publish_ready",
+            "publish_ready_with_editorial_review",
             "publish_ready_with_warnings",
             "draft_only_not_publish_ready",
             "",  # blocked responses may have empty status

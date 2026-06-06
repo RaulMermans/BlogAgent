@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from blogagent.agents import prompts
 from blogagent.llm import client as llm_client
@@ -413,9 +414,14 @@ def _mock_recommendation_draft(
     allowed_recommendations = allowed_recommendations or []
     query_contract = query_contract or {}
     requested_count = query_contract.get("requested_count")
+    editorial = query_contract.get("recommendation_strictness") == "editorial"
     has_allowed = bool(allowed_recommendations)
     if evidence_limited_mode and requested_count and has_allowed:
-        title = f"{len(allowed_recommendations)} Source-Backed Picks for {topic}"
+        title = (
+            f"{len(allowed_recommendations)} Our Picks for {_recommendation_subject(topic)}"
+            if editorial
+            else f"{len(allowed_recommendations)} Source-Backed Picks for {topic}"
+        )
     else:
         title = outline.title
     lines: list[str] = [f"# {title}", ""]
@@ -441,13 +447,19 @@ def _mock_recommendation_draft(
         draft_candidates = allowed_recommendations[:target_count]
 
         if requested_count and len(draft_candidates) < requested_count:
-            lines.append(
-                f"We set out to find {requested_count} recommendations, but the available "
-                f"sources only supported {len(draft_candidates)} specific products "
-                "with confidence. This draft lists only validated candidates."
-            )
+            if editorial:
+                lines.append(
+                    f"We narrowed this to {len(draft_candidates)} standout options, "
+                    "each with a clear reason to make the list."
+                )
+            else:
+                lines.append(
+                    f"We set out to find {requested_count} recommendations, but the available "
+                    f"sources only supported {len(draft_candidates)} specific products "
+                    "with confidence."
+                )
             lines.append("")
-        lines.append("Based on the validated candidate table, the source-backed picks are:")
+        lines.append("Our picks:" if editorial else "The supported picks are:")
         for cand in draft_candidates:
             # Support EntityCandidate (canonical_name) and RecommendationCandidate (name) dicts
             cand_name = (
@@ -502,7 +514,7 @@ def _mock_recommendation_draft(
                     cand.get("canonical_name") or cand.get("name") or cand.get("raw_mention") or ""
                 ).strip()
                 terms = cand.get("evidence_terms") or cand.get("supported_context") or []
-                best_for = ", ".join(terms[:2]) if terms else "source-backed consideration"
+                best_for = ", ".join(terms[:2]) if terms else "a clear use case"
                 urls = cand.get("source_urls") or []
                 title_ref = (cand.get("source_titles") or ["source evidence"])[0]
                 citation = f" [{title_ref}]({urls[0]})" if urls else ""
@@ -511,19 +523,36 @@ def _mock_recommendation_draft(
                 lines.append(f"- **Name**: {cand_name}")
                 lines.append(f"- **Best for**: {best_for}")
                 lines.append(
-                    "- **Why it works**: The validated sources mention this product "
-                    f"in the context of {topic}.{citation}"
+                    (
+                        f"- **Why we like it**: It is a specific option that fits "
+                        f"{topic}.{citation}"
+                        if editorial
+                        else "- **Why it works**: The sources mention this product "
+                        f"in the context of {topic}.{citation}"
+                    )
                 )
                 if cand.get("confidence") != "high":
                     lines.append(
-                        "- **Caveat**: Source support is limited; review before publishing."
+                        (
+                            "- **Editorial note**: Confirm current availability and any "
+                            "objective product details before publishing."
+                            if editorial
+                            else (
+                                "- **Caveat**: Source support is limited; "
+                                "review before publishing."
+                            )
+                        )
                     )
                 lines.append("")
         elif section == "Final Takeaway":
             lines.append(
-                f"For a complete, source-grounded list of specific recommendations on {topic}, "
-                "connect a real search provider and a real LLM provider. "
-                "Mock mode produces structural output only — no named products are invented."
+                (
+                    f"Use this shortlist as a starting point for {topic}, then choose "
+                    "the option that best fits your priorities."
+                    if editorial
+                    else f"For a complete sourced list of specific recommendations on {topic}, "
+                    "connect a real search provider and a real LLM provider."
+                )
             )
         elif section == "Buying or Choosing Tips":
             lines.append(
@@ -548,8 +577,9 @@ def _mock_recommendation_draft(
     article_md = "\n".join(lines).strip()
     keywords = list(outline.seo_keywords) or [topic.lower()]
     meta = (
-        f"A source-grounded guide to the best options for {topic}. "
-        "Specific recommendations require real search data."
+        f"Explore our standout picks for {topic}, with clear use cases and choosing tips."
+        if editorial
+        else f"A sourced guide to the best options for {topic}."
     )
     return DraftOutput(
         article_markdown=article_md,
@@ -587,7 +617,8 @@ def _mock_candidate_locked_draft(
     )
 
     pack = CandidatePack.model_validate(candidate_pack)
-    if pack.mode == "below_minimum":
+    editorial = pack.recommendation_strictness == "editorial"
+    if pack.status == "below_minimum":
         markdown = build_candidate_locked_recommendation_skeleton(
             {"task_type": "recommendation"},
             pack,
@@ -600,7 +631,12 @@ def _mock_candidate_locked_draft(
             handoff_notes=["CandidatePack was below the minimum publishable count."],
         )
 
-    lines = [f"# {pack.final_target_count} Source-Backed Picks for {topic}", ""]
+    title = (
+        _editorial_recommendation_title(pack.final_target_count, topic)
+        if editorial
+        else _standard_recommendation_title(pack.final_target_count, topic)
+    )
+    lines = [f"# {title}", ""]
     if is_financial:
         lines.extend(
             [
@@ -609,7 +645,7 @@ def _mock_candidate_locked_draft(
                 "",
             ]
         )
-    if pack.mode == "evidence_limited":
+    if pack.status == "evidence_limited" and not editorial:
         lines.extend(
             [
                 (
@@ -632,8 +668,12 @@ def _mock_candidate_locked_draft(
             "",
             "## How We Chose",
             "",
-            "Each pick passed the candidate cleanliness gate and has source evidence "
-            "attached to the locked candidate record.",
+            (
+                "We looked for specific, credible options with a clear reason to belong "
+                "on the list, then matched each one to a distinct use case."
+                if editorial
+                else "Each pick passed candidate validation and has source evidence attached."
+            ),
             "",
         ]
     )
@@ -642,7 +682,11 @@ def _mock_candidate_locked_draft(
         evidence = (
             item.evidence_spans[0]
             if item.evidence_spans
-            else ("The available source identifies this as a validated candidate.")
+            else (
+                "It stands out as a clean, topic-appropriate option worth considering."
+                if editorial
+                else "The available source identifies this as a validated candidate."
+            )
         )
         citation = (
             f" [{item.source_title or 'Source'}]({item.source_url})" if item.source_url else ""
@@ -651,9 +695,14 @@ def _mock_candidate_locked_draft(
             [
                 f"## {index}. {item.section_heading}",
                 "",
-                f"**Best for:** {context or 'the source-supported use case'}",
+                f"**Best for:** {context or 'a clear use case'}",
                 "",
-                f"{evidence}{citation}",
+                f"**Why we like it:** {evidence}{citation}",
+                "",
+                (
+                    "Before choosing, compare how it fits your workflow, priorities, "
+                    "and the alternatives on this list."
+                ),
                 "",
             ]
         )
@@ -661,19 +710,31 @@ def _mock_candidate_locked_draft(
         [
             "## Buying or Choosing Tips",
             "",
-            "Compare the source-backed use case, evidence quality, and stated caveats "
-            "before choosing among these options.",
+            (
+                "Compare the fit, feel, intended use, and practical tradeoffs before choosing."
+                if editorial
+                else "Compare the supported use case, evidence quality, and stated caveats."
+            ),
             "",
             "## Final Takeaway",
             "",
-            "The locked list above reflects the candidates supported by the available evidence.",
+            (
+                "The best choice is the one that fits your taste, context, and priorities."
+                if editorial
+                else "The list above reflects the candidates supported by available evidence."
+            ),
         ]
     )
     return DraftOutput(
         article_markdown="\n".join(lines),
         meta_description=(
-            f"Compare {pack.final_target_count} source-backed options for {topic}, "
-            "with evidence-linked use cases and practical choosing guidance."
+            (
+                f"Explore {pack.final_target_count} standout options for "
+                f"{_recommendation_subject(topic)}, with clear use cases and choosing tips."
+                if editorial
+                else f"Compare {pack.final_target_count} sourced options for {topic}, "
+                "with evidence-linked use cases and practical choosing guidance."
+            )
         )[:160],
         seo_keywords=[word.lower() for word in topic.split()[:4]],
         recommended_entities=[
@@ -725,12 +786,20 @@ def _format_query_contract_prompt(
     allowed_count = len(allowed_recommendations)
     enough_candidates = allowed_count >= (requested_count or 0) if requested_count else True
 
+    strictness = query_contract.get("recommendation_strictness", "standard")
+    editorial = strictness == "editorial"
     count_rule = ""
     if requested_count and enough_candidates:
         count_rule = (
             f"- You have {allowed_count} allowed candidates and {requested_count} were requested.\n"
             f"- You MUST include exactly {requested_count} recommendations from the ALLOWED list.\n"
             "- Using fewer is a compliance failure, not evidence-limited.\n"
+        )
+    elif requested_count and not enough_candidates and editorial:
+        count_rule = (
+            f"- Use all {allowed_count} clean candidates as a tighter shortlist.\n"
+            f"- Retitle the article to the delivered count of {allowed_count}.\n"
+            "- Do not expose internal evidence or validation language in the article.\n"
         )
     elif requested_count and not enough_candidates:
         count_rule = (
@@ -745,6 +814,8 @@ def _format_query_contract_prompt(
         f"- domain: {query_contract.get('domain')}\n"
         f"- requested_count: {requested_count}\n"
         f"- answer_entity_type: {query_contract.get('answer_entity_type')}\n"
+        f"- recommendation_strictness: {strictness}\n"
+        f"- evidence_mode: {query_contract.get('evidence_mode')}\n"
         f"- minimum_publishable_items: {query_contract.get('minimum_publishable_items')}\n"
         f"- evidence_limited_mode: {evidence_limited_mode}\n"
         f"- source_quality: {quality_counts['high']} high, "
@@ -760,12 +831,45 @@ def _format_query_contract_prompt(
         "- Do not turn section headings or source titles into recommendations.\n"
         + count_rule
         + "- For each recommendation include: name, best for, why it works, "
-        "source-backed context, and caveat if evidence is thin.\n"
+        "and useful experience or use-case detail.\n"
         "- Include a Quick Picks section listing all recommendations.\n"
         "- For fragrance posts include notes/mood/occasion only if present in the terms above.\n"
-        "- If you cannot find enough allowed candidates for the requested count, "
-        "state this clearly in the title and body.\n"
+        + (
+            "- For editorial/lifestyle topics, prioritize usefulness, readability, taste, "
+            "and clear selection logic. Use natural framing such as 'our picks', "
+            "'standouts', 'worth considering', and 'why we like it'.\n"
+            "- Do not write 'source-backed recommendations', 'evidence-limited', "
+            "'validated candidates', 'available evidence supported', or 'rigorous evidence'.\n"
+            if editorial
+            else "- If the candidate count is lower than requested, state the limitation "
+            "without inventing additional entities.\n"
+        )
     )
+
+
+def _recommendation_subject(topic: str) -> str:
+    """Remove a leading list count/qualifier to avoid duplicated editorial titles."""
+    subject = re.sub(
+        r"^\s*(?:top\s+)?\d+\s+(?:best\s+)?",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    ).strip()
+    return subject or topic
+
+
+def _editorial_recommendation_title(count: int, topic: str) -> str:
+    subject = _recommendation_subject(topic)
+    if subject.lower().startswith("best "):
+        subject = subject[5:].strip()
+    return f"{count} Best {subject.title()}: Our Picks"
+
+
+def _standard_recommendation_title(count: int, topic: str) -> str:
+    subject = _recommendation_subject(topic)
+    if subject.lower().startswith("best "):
+        subject = subject[5:].strip()
+    return f"{count} Best {subject}"
 
 
 def _format_tone_profile_prompt(tone_profile: dict) -> str:

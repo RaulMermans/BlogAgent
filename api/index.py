@@ -172,7 +172,7 @@ def info() -> dict[str, Any]:
     return {
         "service": "BlogAgent",
         "status": "ok",
-        "description": "Source-grounded editorial agent API",
+        "description": "Source-aware editorial agent API",
         "endpoints": {
             "health": "GET /health",
             "app": "GET / or GET /app",
@@ -623,7 +623,7 @@ def _build_app_html() -> str:
 <body>
 <div class="container">
   <h1>BlogAgent</h1>
-  <p class="subtitle">Source-grounded blog post generator</p>
+  <p class="subtitle">Source-aware editorial blog post generator</p>
 
   <!-- access-screen: visible by default; hidden after successful auth -->
   <div id="access-screen" class="form-card">
@@ -658,7 +658,10 @@ def _build_app_html() -> str:
         <option value="expert_analyst">Expert Analyst</option>
         <option value="personal_blog">Personal Blog</option>
         <option value="luxury_premium">Luxury / Premium</option>
+        <option value="luxury_editorial">Luxury Editorial</option>
         <option value="seo_neutral">SEO Neutral</option>
+        <option value="seo_practical">SEO Practical</option>
+        <option value="minimalist">Minimalist</option>
       </select>
       <button type="button" id="generateButton">Generate Blog Post</button>
     </div>
@@ -965,6 +968,8 @@ def _build_app_html() -> str:
     if (!data) return;
     const ol = document.getElementById('workflow-steps');
     const steps = ol.querySelectorAll('.workflow-step');
+    const recommendationStrictness =
+      (data.query_contract || {}).recommendation_strictness || 'standard';
 
     // Step 7 (index 7): evidence sufficiency
     const es = data.evidence_sufficiency || {};
@@ -1042,7 +1047,12 @@ def _build_app_html() -> str:
         fvStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
         const evLimited = data.evidence_limited_count_accepted;
-        if (txt) txt.textContent = 'Final validation — ' + (evLimited ? 'evidence-limited count accepted' : 'passed with warnings');
+        if (txt) {
+          txt.textContent = 'Final validation — ' +
+            (evLimited && recommendationStrictness !== 'editorial'
+              ? 'source coverage reviewed'
+              : 'passed with warnings');
+        }
       } else {
         if (txt) txt.textContent = 'Final validation — passed';
       }
@@ -1088,10 +1098,14 @@ def _build_app_html() -> str:
       const icon = pkgStep.querySelector('.step-icon');
       if (pcData.status === 'publish_ready') {
         if (txt) txt.textContent = 'Packaging blog post — publish ready';
-      } else if (pcData.status === 'publish_ready_with_warnings') {
+      } else if (pcData.status === 'publish_ready_with_editorial_review' || pcData.status === 'publish_ready_with_warnings') {
         pkgStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
-        if (txt) txt.textContent = 'Packaging blog post — publish ready with warnings';
+        if (txt) {
+          txt.textContent = pcData.status === 'publish_ready_with_editorial_review'
+            ? 'Packaging blog post — ready with editorial review'
+            : 'Packaging blog post — publish ready with warnings';
+        }
       } else {
         pkgStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
@@ -1249,6 +1263,8 @@ def _build_app_html() -> str:
 
     // Publishability score
     const publishabilityEval = data.publishability_evaluation || {};
+    const queryContract = data.query_contract || {};
+    const recommendationStrictness = queryContract.recommendation_strictness || 'standard';
     const publishScore = data.publishability_score || publishabilityEval.score;
     const pubStatus = data.publish_ready_status || '';
     const pubContract = data.publish_contract || {};
@@ -1264,8 +1280,8 @@ def _build_app_html() -> str:
     const facStatus = fac.publish_status || contractStatus || pubStatus;
     if (facStatus === 'publish_ready') {
       addStat(statsRow, '✓ publish ready', 'ok');
-    } else if (facStatus === 'publish_ready_with_warnings') {
-      addStat(statsRow, '⚠ publish ready with warnings', 'warn');
+    } else if (facStatus === 'publish_ready_with_editorial_review' || facStatus === 'publish_ready_with_warnings') {
+      addStat(statsRow, 'ready with editorial review', 'warn');
     } else if (facStatus === 'draft_only_not_publish_ready') {
       addStat(statsRow, '✗ draft only', 'danger');
     }
@@ -1274,6 +1290,14 @@ def _build_app_html() -> str:
       addStat(statsRow, 'count: ' + fac.final_count_mode, modeColor);
     } else if (pubContract.status) {
       addStat(statsRow, 'final contract: ' + (pubContract.passes ? 'passed' : 'failed'), pubContract.passes ? 'ok' : 'danger');
+    }
+    if (recommendationStrictness === 'editorial') {
+      addStat(statsRow, 'content-first', 'ok');
+      addStat(statsRow, 'editorial picks', 'ok');
+      addStat(statsRow, 'source-aware', 'warn');
+      if (facStatus === 'publish_ready_with_editorial_review') {
+        addStat(statsRow, 'review recommended', 'warn');
+      }
     }
 
     // Research depth badge
@@ -1322,7 +1346,6 @@ def _build_app_html() -> str:
     }
 
     // Recommendation candidates summary
-    const queryContract = data.query_contract || {};
     if (queryContract.task_type) {
       const qcDiv = document.createElement('div');
       qcDiv.style.marginBottom = '0.8rem';
@@ -1424,7 +1447,7 @@ def _build_app_html() -> str:
       const facCard = document.createElement('div');
       facCard.className = 'dynamic-banner';
       const isReady = facData.publish_status === 'publish_ready';
-      const isWarn = facData.publish_status === 'publish_ready_with_warnings';
+      const isWarn = facData.publish_status === 'publish_ready_with_editorial_review' || facData.publish_status === 'publish_ready_with_warnings';
       const isDraft = facData.publish_status === 'draft_only_not_publish_ready';
       let cardStyle = '';
       let headerText = '';
@@ -1433,7 +1456,9 @@ def _build_app_html() -> str:
         headerText = '✓ Final Answer Contract: Publish Ready';
       } else if (isWarn) {
         cardStyle = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;';
-        headerText = '⚠ Final Answer Contract: Publish Ready with Warnings';
+        headerText = recommendationStrictness === 'editorial'
+          ? 'Ready with editorial review'
+          : 'Publish Ready with Review';
       } else {
         cardStyle = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;';
         headerText = '✗ Final Answer Contract: Draft Only — Not Publish Ready';
@@ -1492,11 +1517,13 @@ def _build_app_html() -> str:
       const contractMsg = highContractDefects.length > 0 ? highContractDefects.map(d => d.message).slice(0, 2).join(' | ') : 'Article needs additional evidence or editorial review before publishing.';
       draftBanner.textContent = 'Draft only: this article does not satisfy the query contract. Reason: ' + contractMsg;
       document.getElementById('output-section').insertBefore(draftBanner, document.getElementById('output-section').firstChild);
-    } else if (effectiveStatus === 'publish_ready_with_warnings') {
+    } else if (effectiveStatus === 'publish_ready_with_editorial_review' || effectiveStatus === 'publish_ready_with_warnings') {
       const warnBanner = document.createElement('div');
       warnBanner.className = 'dynamic-banner';
       warnBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
-      warnBanner.textContent = '⚠ Publish ready with warnings — review before publishing.';
+      warnBanner.textContent = recommendationStrictness === 'editorial'
+        ? 'Needs editorial review: light source coverage.'
+        : 'Review recommended before publishing.';
       document.getElementById('output-section').insertBefore(warnBanner, document.getElementById('output-section').firstChild);
     }
 
@@ -1529,7 +1556,9 @@ def _build_app_html() -> str:
       const evBanner = document.createElement('div');
       evBanner.className = 'dynamic-banner';
       evBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
-      evBanner.textContent = 'Evidence-limited: only ' + snapAllowed + ' allowed candidates found for ' + (snapRequested || '?') + ' requested.';
+      evBanner.textContent = recommendationStrictness === 'editorial'
+        ? 'A tighter shortlist: ' + snapAllowed + ' clean picks for ' + (snapRequested || '?') + ' requested.'
+        : 'Source coverage supports ' + snapAllowed + ' candidates for ' + (snapRequested || '?') + ' requested.';
       document.getElementById('output-section').insertBefore(evBanner, document.getElementById('output-section').firstChild);
     }
 
@@ -1545,7 +1574,11 @@ def _build_app_html() -> str:
       fvBanner.textContent = '⚠ Generated with unresolved quality issues: ' + msgs;
       document.getElementById('output-section').insertBefore(fvBanner, document.getElementById('output-section').firstChild);
     } else if (fvStatus === 'passed_with_warnings' && data.evidence_limited_count_accepted) {
-      addStat(statsRow, 'evidence-limited count', 'warn');
+      addStat(
+        statsRow,
+        recommendationStrictness === 'editorial' ? 'tighter shortlist' : 'source coverage reviewed',
+        'warn'
+      );
     }
 
     const revisionSummary = data.revision_summary || '';

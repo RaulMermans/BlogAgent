@@ -134,7 +134,11 @@ class TestPublishContractRecommendationPosts:
             source_quality_scores=[_HIGH_QUALITY_SOURCE] * 5,
         )
         assert isinstance(result, PublishContractResult)
-        assert result.status in ("publish_ready", "publish_ready_with_warnings")
+        assert result.status in (
+            "publish_ready",
+            "publish_ready_with_editorial_review",
+            "publish_ready_with_warnings",
+        )
 
     def test_thin_2_pick_article_is_draft_only(self):
         """2 picks for a requested 7 without valid framing → draft_only."""
@@ -167,7 +171,7 @@ class TestPublishContractRecommendationPosts:
             source_quality_scores=[_HIGH_QUALITY_SOURCE] * 3,
         )
         # 5 >= 3 min, explanation present, title does not falsely claim 7
-        assert result.status in ("publish_ready_with_warnings", "publish_ready")
+        assert result.status in ("publish_ready_with_editorial_review", "publish_ready")
         # The unmet count defect should be medium (not high) since explanation is present
         high_unmet = [
             d for d in result.defects if d.type == "unmet_requested_count" and d.severity == "high"
@@ -445,7 +449,11 @@ class TestPublishContractRecommendationGrounding:
         ]
         msgs = [d.message for d in result.defects]
         assert len(high_unmet) == 0, f"Unexpected high defects: {msgs}"
-        assert result.status in ("publish_ready", "publish_ready_with_warnings")
+        assert result.status in (
+            "publish_ready",
+            "publish_ready_with_editorial_review",
+            "publish_ready_with_warnings",
+        )
 
     def test_0_grounded_of_7_fails_contract(self):
         """When 7 article recs exist but 0 are grounded, contract should flag it."""
@@ -558,5 +566,10 @@ class TestPublishContractRecommendationGrounding:
             },
         )
         # Both should pass (same strong article); grounding should not make things worse
-        assert result_no_grounding.status in ("publish_ready", "publish_ready_with_warnings")
-        assert result_with_grounding.status in ("publish_ready", "publish_ready_with_warnings")
+        accepted = (
+            "publish_ready",
+            "publish_ready_with_editorial_review",
+            "publish_ready_with_warnings",
+        )
+        assert result_no_grounding.status in accepted
+        assert result_with_grounding.status in accepted

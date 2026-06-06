@@ -23,7 +23,7 @@ def audit_writer_output(
     query_contract: QueryContract | dict,
 ) -> WriterOutputAudit:
     pack = _pack(candidate_pack)
-    _contract(query_contract)
+    contract = _contract(query_contract)
     used_ids = _used_candidate_ids(article_markdown, draft_output, pack)
     missing = [cid for cid in pack.locked_candidate_ids if cid not in used_ids]
     unknown = _unknown_candidate_names(article_markdown, draft_output, pack)
@@ -32,7 +32,7 @@ def audit_writer_output(
     detail_count = _detail_sections_count(article_markdown, pack)
     explanation = _has_evidence_limited_explanation(article_markdown)
 
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         passes = (
             "not publish-ready" in article_markdown.lower()
             or "not publish ready" in article_markdown.lower()
@@ -44,7 +44,11 @@ def audit_writer_output(
             and quick_count == pack.final_target_count
             and detail_count == pack.final_target_count
             and (declared in (None, pack.final_target_count))
-            and (pack.mode != "evidence_limited" or explanation)
+            and (
+                pack.status != "evidence_limited"
+                or contract.recommendation_strictness == "editorial"
+                or explanation
+            )
         )
     return WriterOutputAudit(
         used_candidate_ids=used_ids,
@@ -72,7 +76,7 @@ def build_review_packet(
         else WriterOutputAudit.model_validate(writer_audit)
     )
     pack = _pack(candidate_pack)
-    _contract(query_contract)
+    contract = _contract(query_contract)
     defects: list[ReviewDefect] = []
 
     def add(
@@ -116,7 +120,7 @@ def build_review_packet(
             "Remove the unknown recommendation without removing locked candidates.",
             "candidate",
         )
-    if pack.mode != "below_minimum" and audit.quick_picks_count != pack.final_target_count:
+    if pack.status != "below_minimum" and audit.quick_picks_count != pack.final_target_count:
         add(
             "quick_picks_count_mismatch",
             "high",
@@ -125,7 +129,7 @@ def build_review_packet(
             "Rebuild Quick Picks from CandidatePack in locked order.",
             "structure",
         )
-    if pack.mode != "below_minimum" and audit.detail_sections_count != pack.final_target_count:
+    if pack.status != "below_minimum" and audit.detail_sections_count != pack.final_target_count:
         add(
             "detail_sections_count_mismatch",
             "high",
@@ -135,7 +139,7 @@ def build_review_packet(
             "structure",
         )
     if (
-        pack.mode != "below_minimum"
+        pack.status != "below_minimum"
         and audit.declared_count is not None
         and audit.declared_count != pack.final_target_count
     ):
@@ -147,7 +151,11 @@ def build_review_packet(
             "Rewrite the H1 to declare CandidatePack.final_target_count.",
             "metadata",
         )
-    if pack.mode == "evidence_limited" and not audit.evidence_limited_explanation_present:
+    if (
+        pack.status == "evidence_limited"
+        and contract.recommendation_strictness != "editorial"
+        and not audit.evidence_limited_explanation_present
+    ):
         add(
             "missing_evidence_limited_explanation",
             "medium",
@@ -161,7 +169,7 @@ def build_review_packet(
     for name in unsupported:
         add(
             "unsupported_entity",
-            "high",
+            "medium" if contract.recommendation_strictness == "editorial" else "high",
             "source-grounded candidate",
             name,
             "Remove the unsupported entity and preserve the locked set.",
@@ -169,9 +177,15 @@ def build_review_packet(
         )
     snapshot_status = _read_value(answer_count_snapshot, "count_status")
     if snapshot_status == "failed" and not any(d.type.endswith("mismatch") for d in defects):
+        failure_reason = str(_read_value(answer_count_snapshot, "failure_reason") or "")
         add(
             "answer_count_failed",
-            "high",
+            (
+                "medium"
+                if contract.recommendation_strictness == "editorial"
+                and "grounded count" in failure_reason.lower()
+                else "high"
+            ),
             pack.final_target_count,
             _read_value(answer_count_snapshot, "article_entities_count"),
             "Restore count coherence before editorial changes.",
@@ -181,7 +195,7 @@ def build_review_packet(
     contract_defects = [d for d in defects if d.fix_scope != "style"]
     contract_passes = not any(d.severity == "high" for d in contract_defects)
     editorial_passes = not any(d.fix_scope == "style" and d.severity == "high" for d in defects)
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         revision_mode = "draft_only"
     elif not defects:
         revision_mode = "none"
@@ -289,7 +303,7 @@ def audit_polish_output(
     )
     pack = _pack(candidate_pack)
     count_changed = (
-        pack.mode != "below_minimum"
+        pack.status != "below_minimum"
         and (
             audit.quick_picks_count != pack.final_target_count
             or audit.detail_sections_count != pack.final_target_count
@@ -341,7 +355,7 @@ def _used_candidate_ids(
 def _unknown_candidate_names(
     markdown: str, structured_output: object | None, pack: CandidatePack
 ) -> list[str]:
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         return []
     allowed_ids = set(pack.locked_candidate_ids)
     allowed_names = {_norm(item.display_name) for item in pack.items}

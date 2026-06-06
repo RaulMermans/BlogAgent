@@ -172,7 +172,8 @@ class BlogRunState(BaseModel):
     # Publishability score 0-100 (extracted from publishability_evaluation for convenience)
     publishability_score: int = 0
     # Final publish readiness:
-    # "publish_ready" | "publish_ready_with_warnings" | "draft_only_not_publish_ready"
+    # "publish_ready" | "publish_ready_with_editorial_review" |
+    # "draft_only_not_publish_ready"
     publish_ready_status: str = ""
     # Extracted recommendation candidates (list of RecommendationCandidate dicts)
     recommendation_candidates: list[dict] = Field(default_factory=list)

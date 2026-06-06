@@ -183,7 +183,7 @@ def test_run_generic_product_recommendation_uses_consumer_products_contract(monk
     assert contract["requested_count"] == 5
     assert ledger["table_quality"] != "not_required"
     assert final_contract["final_count_mode"] != "not_applicable"
-    assert final_contract["publish_status"] == "draft_only_not_publish_ready"
+    assert final_contract["publish_status"] == "publish_ready_with_editorial_review"
 
 
 def test_run_response_does_not_include_raw_source_text(monkeypatch):

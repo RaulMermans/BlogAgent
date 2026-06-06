@@ -230,14 +230,17 @@ def test_recommendation_topic_mock_search_is_not_fully_blocked():
     assert state.final_article_package is not None
 
 
-def test_recommendation_topic_mock_draft_does_not_invent_products():
-    """Mock draft for recommendation topic must not invent product names."""
+def test_recommendation_topic_mock_draft_uses_curated_known_products():
+    """Editorial mock drafts may use the adapter's curated known-entity universe."""
     state = run_pipeline("Best parfums for summer")
     assert state.final_article_package is not None
     article = state.final_article_package.article_markdown
-    assert "Evidence Report" in article
-    assert "Why Not Publish-Ready" in article
-    assert "No candidates passed validation" in article
+    assert "Our Picks" in article
+    assert state.publish_ready_status == "publish_ready_with_editorial_review"
+    assert all(
+        candidate["candidate_basis"] == "known_entity"
+        for candidate in state.allowed_candidates
+    )
 
 
 def test_recommendation_topic_below_minimum_uses_evidence_report_structure():
@@ -246,7 +249,7 @@ def test_recommendation_topic_below_minimum_uses_evidence_report_structure():
     assert state.final_article_package is not None
     article = state.final_article_package.article_markdown
     assert "Evidence Report" in article
-    assert "Validated Candidates Found" in article
+    assert "Candidates Found" in article
     assert "Quick Picks" not in article
     assert state.publish_ready_status == "draft_only_not_publish_ready"
 

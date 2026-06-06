@@ -26,32 +26,34 @@ def build_candidate_locked_recommendation_skeleton(
     if tone_profile:
         tone_note = f"\n<!-- Tone: {tone_profile.get('label', tone_profile.get('id', 'Auto'))} -->"
 
-    if pack.mode == "below_minimum":
+    if pack.status == "below_minimum":
         return (
             f"# Evidence Report: {topic}\n"
             f"{tone_note}\n\n"
             "## What Was Searched\n\n[Summarize the bounded research scope.]\n\n"
-            "## Validated Candidates Found\n\n"
+            "## Candidates Found\n\n"
             + (
                 "\n".join(f"- {item.display_name}" for item in pack.items)
                 or "- No candidates passed validation."
             )
             + "\n\n## Why Not Publish-Ready\n\n"
-            f"Only {pack.final_target_count} validated candidates were found; "
+            f"Only {pack.final_target_count} clean candidates were found; "
             f"the minimum is {pack.minimum_publishable_items}.\n\n"
             "## What Evidence Is Missing\n\n[Describe the missing source support.]\n\n"
             "## Suggested Next Search or Refinement\n\n"
             "[Suggest a narrower query or stronger source coverage.]"
         )
 
+    editorial = contract.recommendation_strictness == "editorial"
+    title_label = "Our Picks" if editorial else "Recommended Options"
     lines = [
-        f"# {pack.final_target_count} Source-Backed Recommendations for {topic}",
+        f"# {pack.final_target_count} {title_label} for {topic}",
         tone_note,
         "",
         "[Intro. Keep the locked count and candidate set unchanged.]",
         "",
     ]
-    if pack.mode == "evidence_limited":
+    if pack.status == "evidence_limited" and not editorial:
         lines.extend(
             [
                 (
@@ -65,15 +67,25 @@ def build_candidate_locked_recommendation_skeleton(
     for item in pack.items:
         citation = f" ([{item.source_title}]({item.source_url}))" if item.source_url else ""
         lines.append(f"- {item.display_name}{citation}")
-    lines.extend(["", "## How We Chose", "", "[Explain source-bound selection criteria.]", ""])
+    selection_prompt = (
+        "[Explain the editorial selection logic, use cases, and what made each option stand out.]"
+        if editorial
+        else "[Explain source-bound selection criteria.]"
+    )
+    lines.extend(["", "## How We Chose", "", selection_prompt, ""])
     for index, item in enumerate(pack.items, start=1):
         lines.extend(
             [
                 f"## {index}. {item.section_heading}",
                 "",
-                f"**Best for:** {', '.join(item.supported_context[:2]) or 'validated use case'}",
+                f"**Best for:** {', '.join(item.supported_context[:2]) or 'a clear use case'}",
                 "",
-                "[Write a conservative evidence-grounded explanation.]",
+                (
+                    "[Explain why we like it without inventing prices, specs, awards, "
+                    "reviews, quotes, or objective claims.]"
+                    if editorial
+                    else "[Write a conservative evidence-grounded explanation.]"
+                ),
                 "",
             ]
         )
@@ -81,7 +93,11 @@ def build_candidate_locked_recommendation_skeleton(
         [
             "## Buying or Choosing Tips",
             "",
-            "[Add source-grounded choosing guidance.]",
+            (
+                "[Add practical choosing guidance.]"
+                if editorial
+                else "[Add source-grounded choosing guidance.]"
+            ),
             "",
             "## Final Takeaway",
             "",

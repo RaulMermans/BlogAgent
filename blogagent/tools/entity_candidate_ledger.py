@@ -20,6 +20,11 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from blogagent.tools.domain_adapters import get_adapter
+from blogagent.tools.recommendation_policy import (
+    CandidateBasis,
+    CandidateConfidence,
+    split_compound_candidate_name,
+)
 from blogagent.workflow.query_contract import QueryContract, requires_candidate_ledger
 from blogagent.workflow.state import EvidenceItem
 
@@ -54,7 +59,7 @@ _PROSE_VERBS: frozenset[str] = frozenset(
     {
         "will", "always", "went", "down", "rabbit", "can't", "won't", "didn't",
         "is", "was", "are", "were", "have", "has", "had", "said", "says",
-        "loved", "love", "likes", "liked", "hated", "hate", "tried", "try",
+        "loved", "love", "likes", "liked", "hated", "hate", "tried", "try", "reviewed",
         "smells", "smelled", "wore", "wears", "wearing", "bought", "buy",
         "got", "get", "found", "find", "think", "thought", "feel", "felt",
         "never", "always", "still", "just", "only", "very", "really",
@@ -126,6 +131,9 @@ class EntityCandidate(BaseModel):
     supported_context: list[str] = []
     clean_name_score: float = 0.0
     evidence_score: float = 0.0
+    candidate_confidence: CandidateConfidence = "medium"
+    candidate_basis: CandidateBasis = "weak_signal"
+    needs_review: bool = False
     usable: bool = False
     rejection_reason: Optional[str] = None
 
@@ -156,6 +164,31 @@ class CandidateLedger(BaseModel):
             "quality_issues": list(self.quality_issues),
             "usable_names": list(self.usable_names[:10]),
             "rejected_examples": list(self.rejected_examples[:5]),
+            "candidate_confidence_counts": {
+                confidence: sum(
+                    1
+                    for candidate in self.allowed_candidates
+                    if candidate.candidate_confidence == confidence
+                )
+                for confidence in ("high", "medium", "low")
+            },
+            "candidate_basis_counts": {
+                basis: sum(
+                    1
+                    for candidate in self.allowed_candidates
+                    if candidate.candidate_basis == basis
+                )
+                for basis in (
+                    "source_exact",
+                    "source_title",
+                    "known_entity",
+                    "editorial_discretion",
+                    "weak_signal",
+                )
+            },
+            "needs_review_count": sum(
+                1 for candidate in self.allowed_candidates if candidate.needs_review
+            ),
         }
 
 
@@ -209,6 +242,7 @@ def build_candidate_ledger(
         if url:
             source_type_map[url] = sq.get("source_type", "unknown")
 
+    raw_candidates = _split_raw_compound_candidates(raw_candidates, query_contract)
     candidates = [
         _to_entity_candidate(
             c, query_contract, source_type_map, sources, evidence_table
@@ -218,6 +252,9 @@ def build_candidate_ledger(
 
     # Apply Cleanliness Gate v2 — re-check each allowed candidate against strict rules
     candidates = [_apply_cleanliness_gate_v2(c, query_contract) for c in candidates]
+    candidates = _reject_duplicate_candidates(candidates)
+    candidates = _supplement_known_entities(candidates, query_contract)
+    candidates = _reject_duplicate_candidates(candidates)
 
     allowed = [c for c in candidates if c.usable]
     rejected = [c for c in candidates if not c.usable]
@@ -299,13 +336,16 @@ def evaluate_candidate_ledger_quality(
             )
 
     # Cleanliness v2 checks on allowed candidates
-    empty_spans_count = sum(
-        1 for c in ledger.allowed_candidates if not c.evidence_spans
-    )
+    empty_spans_count = sum(1 for c in ledger.allowed_candidates if not c.evidence_spans)
     if empty_spans_count > 0:
-        quality_issues.append(
-            f"{empty_spans_count} allowed candidate(s) have empty evidence_spans"
-        )
+        if query_contract.recommendation_strictness == "editorial":
+            quality_issues.append(
+                f"{empty_spans_count} editorial candidate(s) have light source coverage"
+            )
+        else:
+            quality_issues.append(
+                f"{empty_spans_count} allowed candidate(s) have empty evidence_spans"
+            )
 
     unknown_source_type_count = sum(
         1 for c in ledger.allowed_candidates if c.source_type == "unknown"
@@ -327,7 +367,7 @@ def evaluate_candidate_ledger_quality(
                 f"Average clean_name_score of allowed candidates is "
                 f"{avg_clean:.2f} (threshold 0.85)"
             )
-        if avg_evidence < 0.70:
+        if avg_evidence < 0.70 and query_contract.recommendation_strictness != "editorial":
             quality_issues.append(
                 f"Average evidence_score of allowed candidates is "
                 f"{avg_evidence:.2f} (threshold 0.70)"
@@ -351,9 +391,18 @@ def evaluate_candidate_ledger_quality(
     else:
         # For strong: also require no quality issues from cleanliness gate
         cleanliness_issues = [
-            i for i in quality_issues
-            if "evidence_spans" in i or "clean_name_score" in i or "evidence_score" in i
+            i
+            for i in quality_issues
+            if "clean_name_score" in i
+            or (
+                query_contract.recommendation_strictness != "editorial"
+                and ("evidence_spans" in i or "evidence_score" in i)
+            )
         ]
+        if query_contract.recommendation_strictness == "editorial":
+            cleanliness_issues.extend(
+                issue for issue in quality_issues if "light source coverage" in issue
+            )
         if cleanliness_issues:
             table_quality = "limited"
         else:
@@ -394,8 +443,8 @@ def _apply_cleanliness_gate_v2(
     if not requires_candidate_ledger(query_contract):
         return candidate
 
-    # Already rejected — keep rejection reason
-    if not candidate.usable:
+    # Invalid identities remain rejected in every policy mode.
+    if not candidate.usable and query_contract.recommendation_strictness != "editorial":
         return candidate
 
     name = candidate.canonical_name or candidate.raw_mention
@@ -413,7 +462,10 @@ def _apply_cleanliness_gate_v2(
         )
 
     # --- Evidence score threshold ---
-    if candidate.evidence_score < 0.65:
+    if (
+        candidate.evidence_score < 0.65
+        and query_contract.recommendation_strictness != "editorial"
+    ):
         return candidate.model_copy(
             update={
                 "usable": False,
@@ -425,7 +477,7 @@ def _apply_cleanliness_gate_v2(
         )
 
     # --- Evidence spans required for recommendation topics ---
-    if not candidate.evidence_spans:
+    if not candidate.evidence_spans and query_contract.recommendation_strictness != "editorial":
         # Cap evidence_score and reject
         return candidate.model_copy(
             update={
@@ -446,7 +498,157 @@ def _apply_cleanliness_gate_v2(
             }
         )
 
+    if query_contract.recommendation_strictness == "editorial":
+        adapter = get_adapter(query_contract.domain)
+        rejection = adapter.get_rejection_reason(name, query_contract)
+        if rejection:
+            return candidate.model_copy(
+                update={"usable": False, "rejection_reason": rejection}
+            )
+        confidence = candidate.candidate_confidence
+        if (
+            candidate.candidate_basis == "weak_signal"
+            or candidate.evidence_score < 0.65
+            or not candidate.evidence_spans
+        ):
+            confidence = "low"
+        return candidate.model_copy(
+            update={
+                "usable": True,
+                "rejection_reason": None,
+                "candidate_confidence": confidence,
+                "needs_review": confidence == "low",
+            }
+        )
+
     return candidate
+
+
+def _reject_duplicate_candidates(
+    candidates: list[EntityCandidate],
+) -> list[EntityCandidate]:
+    """Keep one usable record per canonical identity."""
+    best_indexes: list[int] = []
+    output = list(candidates)
+    for index, candidate in enumerate(output):
+        if not candidate.usable:
+            continue
+        existing_index = next(
+            (
+                best_index
+                for best_index in best_indexes
+                if _same_candidate_identity(output[best_index], candidate)
+            ),
+            None,
+        )
+        if existing_index is None:
+            best_indexes.append(index)
+            continue
+        existing = output[existing_index]
+        existing_rank = (
+            len(existing.canonical_name or existing.raw_mention),
+            len(existing.evidence_spans),
+            existing.evidence_score,
+            len(existing.source_urls),
+        )
+        candidate_rank = (
+            len(candidate.canonical_name or candidate.raw_mention),
+            len(candidate.evidence_spans),
+            candidate.evidence_score,
+            len(candidate.source_urls),
+        )
+        reject_index = index
+        if candidate_rank > existing_rank:
+            reject_index = existing_index
+            best_indexes.remove(existing_index)
+            best_indexes.append(index)
+        output[reject_index] = output[reject_index].model_copy(
+            update={"usable": False, "rejection_reason": "duplicate candidate alias"}
+        )
+    return output
+
+
+def _supplement_known_entities(
+    candidates: list[EntityCandidate],
+    query_contract: QueryContract,
+) -> list[EntityCandidate]:
+    """Fill a non-strict shortlist from the adapter's curated entity universe."""
+    if query_contract.recommendation_strictness == "strict":
+        return candidates
+    adapter = get_adapter(query_contract.domain)
+    known_entities = adapter.get_known_recommendation_entities(query_contract)
+    if not known_entities:
+        return candidates
+    target = query_contract.requested_count or max(
+        query_contract.minimum_publishable_items, 5
+    )
+    usable_count = sum(1 for candidate in candidates if candidate.usable)
+    if usable_count >= target:
+        return candidates
+    existing = {
+        re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            (candidate.canonical_name or candidate.raw_mention).lower(),
+        ).strip()
+        for candidate in candidates
+        if candidate.usable
+    }
+    output = list(candidates)
+    for name in known_entities:
+        if usable_count >= target:
+            break
+        canonical = adapter.canonicalize(name)
+        normalized = re.sub(r"[^a-z0-9]+", " ", canonical.lower()).strip()
+        if normalized in existing or not adapter.is_valid_entity(name, query_contract):
+            continue
+        output.append(
+            EntityCandidate(
+                candidate_id=_make_candidate_id(canonical, "known-entity"),
+                raw_mention=name,
+                canonical_name=canonical,
+                name=canonical,
+                entity_type=adapter.classify_entity_type(name, query_contract),
+                domain=query_contract.domain,
+                entity_subtype=query_contract.entity_subtype,
+                source_quality="medium",
+                source_type="known_entity",
+                supported_context=["editorial fit"],
+                clean_name_score=score_clean_candidate_name(name),
+                evidence_score=0.6,
+                candidate_confidence="medium",
+                candidate_basis="known_entity",
+                needs_review=query_contract.recommendation_strictness == "editorial",
+                usable=True,
+            )
+        )
+        existing.add(normalized)
+        usable_count += 1
+    return output
+
+
+def _same_candidate_identity(
+    left: EntityCandidate, right: EntityCandidate
+) -> bool:
+    def tokens(candidate: EntityCandidate) -> set[str]:
+        value = candidate.canonical_name or candidate.raw_mention
+        return set(re.sub(r"[^a-z0-9]+", " ", value.lower()).split())
+
+    left_tokens = tokens(left)
+    right_tokens = tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens == right_tokens:
+        return True
+    shorter, longer = (
+        (left_tokens, right_tokens)
+        if len(left_tokens) <= len(right_tokens)
+        else (right_tokens, left_tokens)
+    )
+    if len(shorter) < 2 or not shorter.issubset(longer):
+        return False
+    spans = " ".join(left.evidence_spans + right.evidence_spans).lower()
+    return all(token in spans for token in longer)
 
 
 def _detect_prose_fragment(name: str) -> str | None:
@@ -552,6 +754,21 @@ def _to_entity_candidate(
 
     # Strip price from canonical name (e.g. "Diptyque Philosykos Eau de Parfum $260")
     canonical = _strip_price_from_name(canonical)
+    candidate_basis = _classify_candidate_basis(
+        canonical,
+        candidate,
+        evidence_spans,
+        query_contract,
+        sources or [],
+        evidence_table or [],
+    )
+    candidate_confidence = _candidate_confidence(candidate_basis, evidence_score)
+    if (
+        query_contract.recommendation_strictness == "editorial"
+        and rejection_reason is None
+        and adapter.is_valid_entity(canonical, query_contract)
+    ):
+        usable = True
 
     # Build stable candidate_id
     primary_url = candidate.source_urls[0] if candidate.source_urls else ""
@@ -574,9 +791,92 @@ def _to_entity_candidate(
         supported_context=list(candidate.supported_context),
         clean_name_score=clean_score,
         evidence_score=evidence_score,
+        candidate_confidence=candidate_confidence,
+        candidate_basis=candidate_basis,
+        needs_review=candidate_confidence == "low",
         usable=usable,
         rejection_reason=rejection_reason,
     )
+
+
+def _split_raw_compound_candidates(candidates: list, query_contract: QueryContract) -> list:
+    """Split valid explicit compounds before candidate conversion."""
+    adapter = get_adapter(query_contract.domain)
+    expanded: list = []
+    for candidate in candidates:
+        parts = split_compound_candidate_name(candidate.name)
+        if len(parts) == 1:
+            expanded.append(candidate)
+            continue
+        valid_parts = [part for part in parts if adapter.is_valid_entity(part, query_contract)]
+        if len(valid_parts) != len(parts):
+            expanded.append(
+                candidate.model_copy(
+                    update={
+                        "usable": False,
+                        "rejection_reason": "compound candidate could not be split confidently",
+                    }
+                )
+            )
+            continue
+        for part in valid_parts:
+            expanded.append(
+                candidate.model_copy(
+                    update={
+                        "name": part,
+                        "normalized_name": re.sub(
+                            r"[^a-z0-9]+", " ", part.lower()
+                        ).strip(),
+                    }
+                )
+            )
+    return expanded
+
+
+def _classify_candidate_basis(
+    canonical_name: str,
+    candidate,
+    evidence_spans: list[str],
+    query_contract: QueryContract,
+    sources: list,
+    evidence_table: list,
+) -> CandidateBasis:
+    normalized = canonical_name.lower()
+    body_texts = [
+        getattr(source, "extracted_text", "")
+        if not isinstance(source, dict)
+        else source.get("extracted_text", "")
+        for source in sources
+    ]
+    body_texts.extend(
+        getattr(item, "fact", "") if not isinstance(item, dict) else item.get("fact", "")
+        for item in evidence_table
+    )
+    if evidence_spans and any(normalized in text.lower() for text in body_texts if text):
+        return "source_exact"
+    if any(normalized in title.lower() for title in candidate.source_titles if title):
+        return "source_title"
+    adapter = get_adapter(query_contract.domain)
+    known = {
+        re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+        for value in adapter.get_known_brands_or_entities()
+    }
+    normalized_key = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+    if normalized_key in known:
+        return "known_entity"
+    if candidate.source_urls:
+        return "editorial_discretion"
+    return "weak_signal"
+
+
+def _candidate_confidence(
+    basis: CandidateBasis, evidence_score: float
+) -> CandidateConfidence:
+    if basis == "source_exact" and evidence_score >= 0.70:
+        return "high"
+    if basis in {"source_exact", "source_title", "known_entity", "editorial_discretion"}:
+        return "medium"
+    return "low"
 
 
 def _make_candidate_id(canonical_name: str, primary_url: str) -> str:

@@ -8,8 +8,7 @@ and editorial polish. It is the last gate before publish_ready_status is set.
 
 Status levels:
   publish_ready                — score >= 85, no high defects, all hard checks pass
-  publish_ready_with_warnings  — score >= 75, no high defects, evidence-limited
-                                  framing accepted
+  publish_ready_with_editorial_review — score >= 75, no high defects, review advised
   draft_only_not_publish_ready — score < 75 or any high defect remains
 """
 
@@ -20,12 +19,15 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from blogagent.tools.recommendation_policy import evidence_policy_for_domain
+
 # ---------------------------------------------------------------------------
 # Output schema
 # ---------------------------------------------------------------------------
 
 ContractStatus = Literal[
     "publish_ready",
+    "publish_ready_with_editorial_review",
     "publish_ready_with_warnings",
     "draft_only_not_publish_ready",
 ]
@@ -96,6 +98,7 @@ def check_publish_contract(
     answer_count_snapshot: Optional[dict] = None,
     draft_candidate_compliance: Optional[dict] = None,
     candidate_ledger_summary: Optional[dict] = None,
+    unsupported_high_importance_claims: Optional[list[str]] = None,
 ) -> PublishContractResult:
     """Run hard-fail publish contract checks.
 
@@ -114,6 +117,15 @@ def check_publish_contract(
     defects: list[ContractDefect] = []
     score = publishability_score
     topic_lower = topic.lower()
+    for issue in unsupported_high_importance_claims or []:
+        defects.append(
+            ContractDefect(
+                type="unsupported_high_importance_claim",
+                severity="high",
+                message=issue,
+                fixable=True,
+            )
+        )
 
     is_fragrance = any(
         kw in topic_lower for kw in ("perfume", "parfum", "fragrance", "cologne", "scent", "eau de")
@@ -129,6 +141,8 @@ def check_publish_contract(
         grounding_grounded_count = recommendation_grounding.get("grounded_recommendations_count")
         grounding_unmatched = recommendation_grounding.get("unmatched_names", [])
     contract = query_contract or {}
+    policy = evidence_policy_for_domain(contract.get("domain", "general"))
+    strictness = contract.get("recommendation_strictness", policy.strictness_level)
     min_publishable = int(contract.get("minimum_publishable_items") or 3)
     answer_entity_type = contract.get("answer_entity_type", "")
     entity_subtype = contract.get("entity_subtype", "")
@@ -307,7 +321,11 @@ def check_publish_contract(
                 title_falsely_claims = _title_falsely_claims_count(
                     article_markdown, requested_count
                 )
-                if has_explanation and not title_falsely_claims and actual_count >= min_publishable:
+                if (
+                    (has_explanation or strictness == "editorial")
+                    and not title_falsely_claims
+                    and actual_count >= min_publishable
+                ):
                     # Evidence-limited framing is acceptable
                     evidence_limited_accepted = True
                     defects.append(
@@ -374,7 +392,15 @@ def check_publish_contract(
             defects.append(
                 ContractDefect(
                     type="unsupported_recommendations",
-                    severity="high" if grounded_allowed < min_publishable else "medium",
+                    severity=(
+                        "high"
+                        if strictness == "strict"
+                        or (
+                            strictness == "standard"
+                            and grounded_allowed < min_publishable
+                        )
+                        else "medium"
+                    ),
                     message=(
                         "Article includes recommendations outside the allowed candidate table: "
                         f"{', '.join(unsupported_names[:3])}."
@@ -394,7 +420,7 @@ def check_publish_contract(
                     fixable=True,
                 )
             )
-        if grounded_allowed < min_publishable:
+        if grounded_allowed < min_publishable and strictness != "editorial":
             defects.append(
                 ContractDefect(
                     type="insufficient_recommendations",
@@ -414,7 +440,11 @@ def check_publish_contract(
         and grounding_article_count > 0
     ):
         unmatched_count = grounding_article_count - grounding_grounded_count
-        if unmatched_count > 0 and grounding_grounded_count < min_publishable:
+        if (
+            unmatched_count > 0
+            and grounding_grounded_count < min_publishable
+            and strictness != "editorial"
+        ):
             # Too few grounded recommendations to be publishable
             names_str = ", ".join(grounding_unmatched[:3])
             defects.append(
@@ -468,7 +498,7 @@ def check_publish_contract(
             defects.append(
                 ContractDefect(
                     type="weak_sensory_detail",
-                    severity="high",
+                    severity="medium" if strictness == "editorial" else "high",
                     message=(
                         f"Fragrance article mentions only {sensory_count} sensory term(s). "
                         "Include scent families, notes, or mood descriptions where "
@@ -546,7 +576,12 @@ def check_publish_contract(
         defects.append(
             ContractDefect(
                 type="count_status_failed",
-                severity="high",
+                severity=(
+                    "medium"
+                    if strictness == "editorial"
+                    and "grounded count" in snap_failure.lower()
+                    else "high"
+                ),
                 message=f"Answer count snapshot failed: {snap_failure}",
                 fixable=True,
             )
@@ -582,8 +617,8 @@ def check_publish_contract(
     if high_defects or effective_score < _PUBLISH_READY_WITH_WARNINGS_SCORE:
         status: ContractStatus = "draft_only_not_publish_ready"
         passes = False
-    elif effective_score < _PUBLISH_READY_SCORE or evidence_limited_accepted:
-        status = "publish_ready_with_warnings"
+    elif effective_score < _PUBLISH_READY_SCORE or evidence_limited_accepted or defects:
+        status = "publish_ready_with_editorial_review"
         passes = True
     else:
         status = "publish_ready"

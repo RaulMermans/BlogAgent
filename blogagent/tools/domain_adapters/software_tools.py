@@ -290,6 +290,11 @@ class SoftwareToolsAdapter(DomainAdapter):
     def get_known_brands_or_entities(self) -> list[str]:
         return sorted(_KNOWN_SOFTWARE_PRODUCTS)
 
+    def get_known_recommendation_entities(
+        self, query_contract: "QueryContract"
+    ) -> list[str]:
+        return ["ChatGPT", "Notion AI", "Perplexity", "Grammarly", "Quizlet"]
+
     def _is_software_heading(self, lower: str) -> bool:
         """Return True if the text is a section heading, not a product name."""
         return any(sub in lower for sub in _SOFTWARE_HEADING_SUBSTRINGS)

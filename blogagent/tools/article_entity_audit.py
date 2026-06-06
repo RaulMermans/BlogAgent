@@ -228,10 +228,22 @@ def build_answer_count_snapshot(
                 failure_reason = (
                     f"article count mismatch: article has {article_count}/{requested_count}"
                 )
-            elif grounded_count != requested_count:
+            elif (
+                query_contract.recommendation_strictness == "strict"
+                and grounded_count != requested_count
+            ):
                 count_status = "failed"
                 failure_reason = (
                     f"grounded count mismatch: grounded {grounded_count}/{requested_count}"
+                )
+            elif (
+                query_contract.recommendation_strictness == "standard"
+                and grounded_count < minimum_publishable_items
+            ):
+                count_status = "failed"
+                failure_reason = (
+                    f"grounded count {grounded_count} is below minimum publishable "
+                    f"{minimum_publishable_items}"
                 )
             else:
                 count_status = "satisfied"
@@ -247,7 +259,10 @@ def build_answer_count_snapshot(
             elif (
                 recommended_count == allowed_count
                 and article_count == allowed_count
-                and grounded_count >= minimum_publishable_items
+                and (
+                    query_contract.recommendation_strictness == "editorial"
+                    or grounded_count >= minimum_publishable_items
+                )
                 and compliance_passes
             ):
                 count_status = "evidence_limited"

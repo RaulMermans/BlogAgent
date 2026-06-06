@@ -102,8 +102,10 @@ Polish rules (MANDATORY):
 4. Make recommendations specific: include "best for" context and practical advice.
 5. Improve conclusion — end with an editorial recommendation or memorable insight.
 6. Remove content-mill phrasing ("comprehensive guide", "look no further", "dive in").
-7. If evidence-limited (fewer items than requested): frame the reduced count elegantly.
-   Example: "We found five fragrances with enough source coverage to recommend with confidence."
+7. For lifestyle/editorial topics, never expose internal compliance language such as
+   "source-backed recommendations", "evidence-limited", "validated candidates",
+   "available evidence supported", or "rigorous evidence". Use natural framing such as
+   "our picks", "standouts", "worth considering", or "a tighter shortlist".
 8. Preserve all citations and inline links — do not remove or change URLs.
 9. Preserve financial disclaimers if present.
 10. Do not add new factual claims not present in the original article.

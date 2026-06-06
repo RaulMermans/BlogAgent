@@ -823,9 +823,12 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
         cap_note = f" (score capped at {score_cap})" if score_cap else ""
         if contract_status == "publish_ready":
             trace.append(f"✓ Publish contract: passed{cap_note}")
-        elif contract_status == "publish_ready_with_warnings":
+        elif contract_status in {
+            "publish_ready_with_editorial_review",
+            "publish_ready_with_warnings",
+        }:
             trace.append(
-                "⚠ Publish contract: publish_ready_with_warnings — "
+                f"⚠ Publish contract: {contract_status} — "
                 f"{n_defects} issue(s){cap_note}"
             )
         else:
@@ -852,8 +855,11 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
     pub_status = state.publish_ready_status
     if pub_status == "publish_ready":
         trace.append("✓ Final status: publish_ready")
-    elif pub_status == "publish_ready_with_warnings":
-        trace.append("⚠ Final status: publish_ready_with_warnings")
+    elif pub_status in {
+        "publish_ready_with_editorial_review",
+        "publish_ready_with_warnings",
+    }:
+        trace.append(f"⚠ Final status: {pub_status}")
     elif pub_status == "draft_only_not_publish_ready":
         trace.append("⚠ Final status: draft_only_not_publish_ready")
 

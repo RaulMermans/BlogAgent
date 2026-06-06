@@ -131,7 +131,7 @@ def test_final_contract_accepts_repaired_six_of_seven_with_warning():
     )
     repaired = repair_locked_recommendation_article(collapsed, pack, _contract())
     contract = _final_contract(repaired.repaired_markdown, 6, 6, "evidence_limited")
-    assert contract.publish_status == "publish_ready_with_warnings"
+    assert contract.publish_status == "publish_ready_with_editorial_review"
     assert contract.final_article_count == contract.quick_picks_count == 6
     assert contract.detail_sections_count == 6
 

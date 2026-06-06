@@ -52,6 +52,7 @@ _SECTION_HEADING_PHRASES: frozenset[str] = frozenset(
         "top picks",
         "our picks",
         "best options",
+        "candidates found",
     }
 )
 
@@ -72,6 +73,7 @@ _SECTION_HEADING_SUBSTRINGS: tuple[str, ...] = (
     "best options",
     "top picks",
     "our picks",
+    "candidates found",
     # Editorial heading patterns that appear as H2/H3 in recommendation articles
     "navigating",
     "spotlight on",
@@ -161,6 +163,10 @@ class DomainAdapter:
         matched = sum(1 for brand in brands if brand.lower() in lower)
         return matched >= 3
 
+    def looks_like_compound_candidate(self, text: str) -> bool:
+        """Return True for explicit ``A or B``/``A and B`` recommendation names."""
+        return bool(re.search(r"\s+(?:or|and)\s+", text, re.IGNORECASE))
+
     def looks_like_catalog_nav(self, text: str) -> bool:
         """Return True if text looks like navigation/catalog copy."""
         lower = _normalize(text)
@@ -206,6 +212,8 @@ class DomainAdapter:
             return False
         if self.looks_like_entity_cluster(name):
             return False
+        if self.looks_like_compound_candidate(name):
+            return False
         return True
 
     def get_rejection_reason(self, name: str, query_contract: "QueryContract") -> str | None:
@@ -220,6 +228,8 @@ class DomainAdapter:
             return "catalog navigation text"
         if self.looks_like_entity_cluster(name):
             return "entity cluster — multiple brands in one string"
+        if self.looks_like_compound_candidate(name):
+            return "compound candidate must be split into specific entities"
         return None
 
     def classify_entity_type(self, name: str, query_contract: "QueryContract") -> str:
@@ -229,6 +239,8 @@ class DomainAdapter:
         if self.looks_like_url_or_citation(name):
             return "unknown"
         if self.looks_like_entity_cluster(name):
+            return "brand_cluster"
+        if self.looks_like_compound_candidate(name):
             return "brand_cluster"
         return "unknown"
 
@@ -256,6 +268,12 @@ class DomainAdapter:
 
     def get_known_brands_or_entities(self) -> list[str]:
         """Return known brands or entity names for this domain."""
+        return []
+
+    def get_known_recommendation_entities(
+        self, query_contract: "QueryContract"
+    ) -> list[str]:
+        """Return a small curated fallback universe of valid recommendation entities."""
         return []
 
 

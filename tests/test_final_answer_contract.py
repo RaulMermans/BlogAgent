@@ -221,7 +221,7 @@ class TestEvidenceLimitedPass:
             ),
             candidate_ledger_summary=_ledger(5),
         )
-        assert fac.publish_status == "publish_ready_with_warnings"
+        assert fac.publish_status == "publish_ready_with_editorial_review"
         assert fac.final_count_mode == "evidence_limited"
         assert fac.failure_reasons == []
         assert len(fac.warning_reasons) >= 1
@@ -264,7 +264,7 @@ class TestEvidenceLimitedPass:
             candidate_ledger_summary=_ledger_quality(3, "limited"),
             query_contract=_consumer_query_contract(5),
         )
-        assert fac.publish_status == "publish_ready_with_warnings"
+        assert fac.publish_status == "publish_ready_with_editorial_review"
         assert fac.final_count_mode == "evidence_limited"
 
 
@@ -451,7 +451,7 @@ class TestTitleMismatch:
             ),
             candidate_ledger_summary=_ledger(5),
         )
-        assert fac.publish_status == "publish_ready_with_warnings"
+        assert fac.publish_status == "publish_ready_with_editorial_review"
         assert fac.title_declared_count == 5
         assert fac.failure_reasons == []
 

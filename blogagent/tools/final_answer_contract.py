@@ -24,9 +24,15 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from blogagent.tools.recommendation_policy import (
+    RecommendationStrictness,
+    evidence_policy_for_domain,
+)
+
 FinalCountMode = Literal["exact", "evidence_limited", "failed", "not_applicable"]
 PublishStatus = Literal[
     "publish_ready",
+    "publish_ready_with_editorial_review",
     "publish_ready_with_warnings",
     "draft_only_not_publish_ready",
 ]
@@ -50,6 +56,8 @@ class FinalAnswerContract(BaseModel):
     title_declared_count: Optional[int]
     meta_declared_count: Optional[int]
     final_count_mode: FinalCountMode
+    recommendation_strictness: RecommendationStrictness = "standard"
+    evidence_mode: str = "source_aware"
     publish_status: PublishStatus
     failure_reasons: list[str]
     warning_reasons: list[str]
@@ -70,19 +78,18 @@ def build_final_answer_contract(
     publish_contract: Optional[dict],
     minimum_publishable_items: int = 3,
     is_recommendation: bool = False,
+    recommendation_audit: Optional[dict] = None,
 ) -> FinalAnswerContract:
-    """Build the canonical post-polish publish contract.
-
-    Uses candidate_ledger_summary.usable_count as the authoritative source of
-    allowed recommendations.  Never uses recommendation_candidates_summary
-    (which can over-count via broad evidence extraction that pre-dates the
-    Cleanliness Gate v2).
-    """
+    """Build the canonical risk-tiered post-polish publish contract."""
     contract_cfg = query_contract or {}
     task_type = contract_cfg.get("task_type", "unknown")
     answer_entity_type = contract_cfg.get("answer_entity_type", "general_answer")
     contract_requested_count = contract_cfg.get("requested_count")
-
+    policy = evidence_policy_for_domain(contract_cfg.get("domain", "general"))
+    strictness: RecommendationStrictness = contract_cfg.get(
+        "recommendation_strictness", policy.strictness_level
+    )
+    evidence_mode = contract_cfg.get("evidence_mode", policy.evidence_mode)
     requires_count_checking = (
         is_recommendation
         and task_type == "recommendation"
@@ -92,24 +99,16 @@ def build_final_answer_contract(
         )
     )
 
-    # --- Extract counts from snapshot ---
     snap = answer_count_snapshot or {}
     requested_count: Optional[int] = snap.get("requested_count")
-    count_status: str = snap.get("count_status", "")
-    draft_recommended_count: int = int(snap.get("recommended_entities_count") or 0)
-    final_article_count: int = int(snap.get("article_entities_count") or 0)
-    grounded_count: int = int(snap.get("grounded_entities_count") or 0)
-
-    # Allowed count: prefer candidate_ledger_summary (Cleanliness Gate v2).
-    # Never use recommendation_candidates_summary.usable_count (broad extraction).
-    allowed_count: int = 0
-    if candidate_ledger_summary:
-        allowed_count = int(candidate_ledger_summary.get("usable_count") or 0)
+    count_status = str(snap.get("count_status", ""))
+    draft_recommended_count = int(snap.get("recommended_entities_count") or 0)
+    final_article_count = int(snap.get("article_entities_count") or 0)
+    grounded_count = int(snap.get("grounded_entities_count") or 0)
+    allowed_count = int((candidate_ledger_summary or {}).get("usable_count") or 0)
     if allowed_count == 0:
-        # Fall back to snapshot (which is sourced from the ledger anyway)
         allowed_count = int(snap.get("allowed_candidates_count") or 0)
 
-    # --- Extract article structure ---
     quick_picks_count = _count_quick_picks(article_markdown)
     detail_sections_count = _count_detail_sections(article_markdown)
     title_declared_count = (
@@ -121,37 +120,46 @@ def build_final_answer_contract(
         _extract_count_from_text(meta_description) if meta_description else None
     )
 
-    # --- not_applicable early return ---
+    common = {
+        "requested_count": requested_count,
+        "allowed_count": allowed_count,
+        "draft_recommended_count": draft_recommended_count,
+        "final_article_count": final_article_count,
+        "grounded_count": grounded_count,
+        "quick_picks_count": quick_picks_count,
+        "detail_sections_count": detail_sections_count,
+        "title_declared_count": title_declared_count,
+        "meta_declared_count": meta_declared_count,
+        "recommendation_strictness": strictness,
+        "evidence_mode": evidence_mode,
+    }
     if not requires_count_checking:
-        pc_status = _sanitise_status(
-            (publish_contract or {}).get("status", "publish_ready")
-        )
         return FinalAnswerContract(
-            requested_count=requested_count,
-            allowed_count=allowed_count,
-            draft_recommended_count=draft_recommended_count,
-            final_article_count=final_article_count,
-            grounded_count=grounded_count,
-            quick_picks_count=quick_picks_count,
-            detail_sections_count=detail_sections_count,
-            title_declared_count=title_declared_count,
-            meta_declared_count=meta_declared_count,
+            **common,
             final_count_mode="not_applicable",
-            publish_status=pc_status,
+            publish_status=_sanitise_status(
+                (publish_contract or {}).get("status", "publish_ready")
+            ),
             failure_reasons=[],
             warning_reasons=[],
         )
 
-    # --- Collect failure reasons ---
     failure_reasons: list[str] = []
     warning_reasons: list[str] = []
-
-    # 1. Snapshot count_status=failed is always a failure.
+    snap_reason = snap.get("failure_reason") or "answer_count_snapshot.count_status=failed"
     if count_status == "failed":
-        snap_reason = snap.get("failure_reason") or "answer_count_snapshot.count_status=failed"
-        failure_reasons.append(snap_reason)
+        grounding_only = "grounded count" in snap_reason.lower()
+        if strictness == "editorial" and grounding_only:
+            warning_reasons.append("Needs editorial review: light source coverage")
+        elif (
+            strictness == "standard"
+            and grounding_only
+            and grounded_count >= minimum_publishable_items
+        ):
+            warning_reasons.append("Some recommendations have light source coverage")
+        else:
+            failure_reasons.append(snap_reason)
 
-    # 1b. Counted/concrete recommendation queries must have a candidate ledger.
     ledger_quality = (candidate_ledger_summary or {}).get("table_quality", "")
     if requested_count is not None and ledger_quality == "not_required":
         failure_reasons.append(
@@ -165,42 +173,62 @@ def build_final_answer_contract(
         )
     if ledger_quality == "failed":
         failure_reasons.append("candidate ledger failed")
-
-    # 2. allowed=0 with article>0 is an impossible state.
     if allowed_count == 0 and final_article_count > 0:
         failure_reasons.append(
-            f"allowed_count=0 but article has {final_article_count} recommendations — "
-            "impossible state: no allowed candidates but article contains recommendations"
+            f"allowed_count=0 but article has {final_article_count} recommendations"
         )
 
-    # 3. Article used fewer items than allowed (includes the regression case:
-    #    requested=7, allowed=5, article=3 → final_article_count(3) < allowed_count(5)).
     if allowed_count > 0 and 0 < final_article_count < allowed_count:
-        failure_reasons.append(
-            f"Final article used {final_article_count} of {allowed_count} allowed candidates. "
-            "Article must use all allowed candidates."
-        )
+        reason = f"Final article used {final_article_count} of {allowed_count} clean candidates"
+        if strictness == "editorial":
+            warning_reasons.append(reason)
+        else:
+            failure_reasons.append(reason)
 
-    # 4. Not all article recommendations are grounded.
     if final_article_count > 0 and grounded_count < final_article_count:
-        failure_reasons.append(
-            f"grounded_count ({grounded_count}) < final_article_count ({final_article_count}): "
-            "not all article recommendations are grounded in source evidence"
+        if strictness == "strict":
+            failure_reasons.append(
+                f"grounded_count ({grounded_count}) < final_article_count "
+                f"({final_article_count}): strict recommendations require direct grounding"
+            )
+        elif strictness == "standard" and grounded_count < minimum_publishable_items:
+            failure_reasons.append(
+                f"grounded_count ({grounded_count}) below minimum publishable "
+                f"({minimum_publishable_items})"
+            )
+        else:
+            warning_reasons.append(
+                f"{final_article_count - grounded_count} recommendation(s) have "
+                "light direct source coverage"
+            )
+    basis_counts = (candidate_ledger_summary or {}).get("candidate_basis_counts", {})
+    review_candidate_count = int(
+        (candidate_ledger_summary or {}).get("needs_review_count") or 0
+    )
+    review_candidate_count = max(
+        review_candidate_count,
+        int(basis_counts.get("known_entity") or 0)
+        + int(basis_counts.get("editorial_discretion") or 0)
+        + int(basis_counts.get("weak_signal") or 0),
+    )
+    if strictness == "editorial" and review_candidate_count > 0:
+        warning_reasons.append(
+            f"{review_candidate_count} editorial pick(s) should receive a final human review"
+        )
+    elif strictness == "standard" and int(basis_counts.get("known_entity") or 0) > 0:
+        warning_reasons.append(
+            f"{int(basis_counts.get('known_entity') or 0)} recommendation(s) use "
+            "known-product validation"
         )
 
-    # 5. Quick Picks missing or mismatched with article count.
     if final_article_count > 0:
         if quick_picks_count == 0:
-            failure_reasons.append(
-                "Quick Picks section missing from recommendation article"
-            )
+            failure_reasons.append("Quick Picks section missing from recommendation article")
         elif quick_picks_count != final_article_count:
             failure_reasons.append(
                 f"Quick Picks has {quick_picks_count} items but article has "
                 f"{final_article_count} recommendations"
             )
-
-    # 5b. Detail sections mismatch with Quick Picks (structural incoherence).
     if (
         quick_picks_count > 0
         and detail_sections_count > 0
@@ -208,110 +236,110 @@ def build_final_answer_contract(
     ):
         failure_reasons.append(
             f"Quick Picks has {quick_picks_count} items but {detail_sections_count} "
-            "detail sections exist — structural mismatch"
+            "detail sections exist"
         )
-
-    # 6. Title declares a count different from what the article delivers.
-    if title_declared_count is not None and final_article_count > 0:
-        if title_declared_count != final_article_count:
-            failure_reasons.append(
-                f"Title declares {title_declared_count} items but article has "
-                f"{final_article_count} recommendations — title must match final count"
-            )
-
-    # 7. Below minimum publishable items.
+    if (
+        title_declared_count is not None
+        and final_article_count > 0
+        and title_declared_count != final_article_count
+    ):
+        failure_reasons.append(
+            f"Title declares {title_declared_count} items but article has "
+            f"{final_article_count} recommendations"
+        )
     if final_article_count < minimum_publishable_items:
         failure_reasons.append(
             f"final_article_count ({final_article_count}) below minimum publishable "
             f"({minimum_publishable_items})"
         )
+    if (
+        requested_count is not None
+        and final_article_count > 0
+        and requested_count != final_article_count
+    ):
+        reason = f"Article delivers {final_article_count} of {requested_count} requested items"
+        if strictness == "strict":
+            failure_reasons.append(reason)
+        elif title_declared_count in (None, final_article_count):
+            warning_reasons.append(reason + "; the article was intentionally retitled")
 
-    # --- Determine mode ---
-    final_count_mode: FinalCountMode
+    for defect in (publish_contract or {}).get("defects", []):
+        if defect.get("severity") != "high":
+            continue
+        defect_type = defect.get("type", "")
+        message = defect.get("message") or defect_type or "publish contract failed"
+        if defect_type == "unsupported_recommendations" and strictness != "strict":
+            warning_reasons.append(message)
+        elif message not in failure_reasons:
+            failure_reasons.append(message)
+    invalid_recommendations = list(
+        (recommendation_audit or {}).get("invalid_recommendations", [])
+    )
+    invalid_recommendations += (recommendation_audit or {}).get(
+        "brand_only_recommendations", []
+    )
+    invalid_recommendations += (recommendation_audit or {}).get(
+        "section_heading_false_positives", []
+    )
+    if invalid_recommendations:
+        failure_reasons.append(
+            "Invalid or malformed recommendations: "
+            + ", ".join(dict.fromkeys(invalid_recommendations[:3]))
+        )
 
     if failure_reasons:
-        final_count_mode = "failed"
+        final_count_mode: FinalCountMode = "failed"
     elif count_status == "not_applicable":
-        # Pipeline said not applicable for this contract shape — defer to publish contract.
-        pc_status = _sanitise_status(
-            (publish_contract or {}).get("status", "publish_ready")
-        )
         return FinalAnswerContract(
-            requested_count=requested_count,
-            allowed_count=allowed_count,
-            draft_recommended_count=draft_recommended_count,
-            final_article_count=final_article_count,
-            grounded_count=grounded_count,
-            quick_picks_count=quick_picks_count,
-            detail_sections_count=detail_sections_count,
-            title_declared_count=title_declared_count,
-            meta_declared_count=meta_declared_count,
+            **common,
             final_count_mode="not_applicable",
-            publish_status=pc_status,
+            publish_status=_sanitise_status(
+                (publish_contract or {}).get("status", "publish_ready")
+            ),
             failure_reasons=[],
-            warning_reasons=[],
+            warning_reasons=warning_reasons,
         )
-    elif count_status == "satisfied":
-        final_count_mode = "exact"
-    elif count_status == "evidence_limited":
-        final_count_mode = "evidence_limited"
-        warning_reasons.append(
-            f"Evidence-limited: {final_article_count} of "
-            f"{requested_count if requested_count is not None else 'unspecified'} requested "
-            f"({allowed_count} allowed candidates found)"
+    elif count_status in {"satisfied", "evidence_limited"}:
+        final_count_mode = (
+            "evidence_limited"
+            if count_status == "evidence_limited"
+            or (
+                requested_count is not None
+                and requested_count != final_article_count
+            )
+            else "exact"
         )
+        if count_status == "evidence_limited":
+            warning_reasons.append(
+                f"A tighter shortlist: {final_article_count} of "
+                f"{requested_count if requested_count is not None else 'unspecified'} requested"
+            )
     elif count_status == "":
-        # Snapshot not built (very early failure or non-recommendation edge case).
-        pc_status = _sanitise_status(
-            (publish_contract or {}).get("status", "draft_only_not_publish_ready")
-        )
         return FinalAnswerContract(
-            requested_count=requested_count,
-            allowed_count=allowed_count,
-            draft_recommended_count=draft_recommended_count,
-            final_article_count=final_article_count,
-            grounded_count=grounded_count,
-            quick_picks_count=quick_picks_count,
-            detail_sections_count=detail_sections_count,
-            title_declared_count=title_declared_count,
-            meta_declared_count=meta_declared_count,
+            **common,
             final_count_mode="not_applicable",
-            publish_status=pc_status,
+            publish_status=_sanitise_status(
+                (publish_contract or {}).get("status", "draft_only_not_publish_ready")
+            ),
             failure_reasons=[],
-            warning_reasons=[],
+            warning_reasons=warning_reasons,
         )
     else:
-        # Unknown count_status — flag as failure.
-        failure_reasons.append(
-            f"count_status={count_status!r}: unresolvable publish status "
-            f"(article={final_article_count}, allowed={allowed_count}, "
-            f"requested={requested_count})"
-        )
+        failure_reasons.append(f"count_status={count_status!r}: unresolvable publish status")
         final_count_mode = "failed"
 
-    # --- Determine publish_status ---
-    publish_status: PublishStatus
-    if final_count_mode == "exact":
-        publish_status = "publish_ready"
-    elif final_count_mode == "evidence_limited":
-        publish_status = "publish_ready_with_warnings"
+    if final_count_mode == "exact" and not warning_reasons:
+        publish_status: PublishStatus = "publish_ready"
+    elif final_count_mode in {"exact", "evidence_limited"}:
+        publish_status = "publish_ready_with_editorial_review"
     else:
         publish_status = "draft_only_not_publish_ready"
-
     return FinalAnswerContract(
-        requested_count=requested_count,
-        allowed_count=allowed_count,
-        draft_recommended_count=draft_recommended_count,
-        final_article_count=final_article_count,
-        grounded_count=grounded_count,
-        quick_picks_count=quick_picks_count,
-        detail_sections_count=detail_sections_count,
-        title_declared_count=title_declared_count,
-        meta_declared_count=meta_declared_count,
+        **common,
         final_count_mode=final_count_mode,
         publish_status=publish_status,
         failure_reasons=failure_reasons,
-        warning_reasons=warning_reasons,
+        warning_reasons=list(dict.fromkeys(warning_reasons)),
     )
 
 
@@ -323,6 +351,7 @@ def build_final_answer_contract(
 def _sanitise_status(status: str) -> PublishStatus:
     _VALID: set[str] = {
         "publish_ready",
+        "publish_ready_with_editorial_review",
         "publish_ready_with_warnings",
         "draft_only_not_publish_ready",
     }

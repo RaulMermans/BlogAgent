@@ -105,6 +105,8 @@ _PRODUCT_SIGNAL_TERMS: frozenset[str] = frozenset(
         "portofino",
         "soleil",
         "daisy",
+        "paris-biarritz",
+        "paris-riviera",
     }
 )
 
@@ -189,6 +191,16 @@ _BRAND_PREFIXES: tuple[str, ...] = (
     "ouai",
     "viktor & rolf",
     "creed",
+)
+
+_KNOWN_FRAGRANCE_PRODUCTS: tuple[str, ...] = (
+    "Dolce & Gabbana Light Blue Eau de Toilette",
+    "Tom Ford Soleil Blanc",
+    "Jo Malone London Wood Sage & Sea Salt Cologne",
+    "Chanel Chance Eau Tendre Eau de Toilette",
+    "Guerlain Aqua Allegoria Mandarine Basilic",
+    "Maison Margiela Replica Beach Walk",
+    "Diptyque Philosykos Eau de Toilette",
 )
 
 
@@ -281,6 +293,13 @@ class BeautyFragranceAdapter(DomainAdapter):
     def get_known_brands_or_entities(self) -> list[str]:
         return list(_BRAND_PREFIXES)
 
+    def get_known_recommendation_entities(
+        self, query_contract: "QueryContract"
+    ) -> list[str]:
+        if query_contract.answer_entity_type == "fragrance_brand":
+            return []
+        return list(_KNOWN_FRAGRANCE_PRODUCTS)
+
     # ---------------------------------------------------------------------------
     # Internal helpers
     # ---------------------------------------------------------------------------
@@ -304,7 +323,9 @@ class BeautyFragranceAdapter(DomainAdapter):
 
     def _looks_like_specific_fragrance_product(self, lower: str) -> bool:
         words = lower.split()
-        if len(words) < 2 or len(words) > 8:
+        if len(words) > 10:
+            return False
+        if len(words) < 2 and lower not in {"paris-biarritz", "paris-riviera"}:
             return False
         if lower in _BRAND_ONLY_NAMES:
             return False

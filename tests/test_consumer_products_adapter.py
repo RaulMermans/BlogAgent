@@ -100,7 +100,7 @@ class TestConsumerProductLedger:
         assert ledger.usable_count == 5
         assert "Tissot PRX Quartz" in ledger.usable_names
 
-    def test_ledger_with_generic_category_phrases_is_failed(self):
+    def test_ledger_rejects_generic_phrases_and_uses_known_editorial_entities(self):
         text = (
             "**Affordable Luxury Watches** and **Best Luxury Watches** are headings. "
             "**Watch Brands** and **Under $500** are not specific products."
@@ -129,8 +129,12 @@ class TestConsumerProductLedger:
             source_quality_scores=_quality(source.url),
         )
 
-        assert ledger.table_quality == "failed"
-        assert ledger.usable_count == 0
+        assert ledger.table_quality == "limited"
+        assert ledger.usable_count == 5
+        assert all(
+            candidate.candidate_basis == "known_entity"
+            for candidate in ledger.allowed_candidates
+        )
 
     def test_ledger_with_three_clean_candidates_for_requested_five_is_limited(self):
         text = (
@@ -162,7 +166,11 @@ class TestConsumerProductLedger:
         )
 
         assert ledger.table_quality == "limited"
-        assert ledger.usable_count == 3
+        assert ledger.usable_count == 5
+        assert sum(
+            candidate.candidate_basis == "known_entity"
+            for candidate in ledger.allowed_candidates
+        ) == 2
 
     def test_counted_recommendation_empty_ledger_is_not_not_required(self):
         ledger = build_candidate_ledger(
@@ -172,4 +180,5 @@ class TestConsumerProductLedger:
             source_quality_scores=[],
         )
 
-        assert ledger.table_quality == "failed"
+        assert ledger.table_quality == "limited"
+        assert ledger.usable_count == 5

@@ -51,7 +51,7 @@ def test_skeleton_contains_locked_count_quick_picks_and_detail_sections():
     assert skeleton.count("\n## 1. Perfume 1") == 1
     assert "\n## 2. Perfume 2" in skeleton
     assert "\n## 3. Perfume 3" in skeleton
-    assert "rather than the 7 originally requested" in skeleton
+    assert "validated candidates" not in skeleton.lower()
 
 
 def test_below_minimum_skeleton_is_evidence_report_not_best_list():

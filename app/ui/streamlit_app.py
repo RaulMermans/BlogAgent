@@ -5,7 +5,7 @@ from blogagent.workflow.graph import run_pipeline, validate_final_state
 st.set_page_config(page_title="BlogAgent", layout="wide")
 st.title("BlogAgent")
 st.caption(
-    "Source-grounded editorial agent. "
+    "Source-aware editorial agent. "
     "Mock mode is default — no API keys required. "
     "Optional Tavily search: set BLOGAGENT_SEARCH_PROVIDER=tavily + TAVILY_API_KEY. "
     "Optional LLM calls: set BLOGAGENT_LLM_PROVIDER=anthropic or openai + API key, "
@@ -23,7 +23,10 @@ tone_label = st.selectbox(
         "Expert Analyst",
         "Personal Blog",
         "Luxury / Premium",
+        "Luxury Editorial",
         "SEO Neutral",
+        "SEO Practical",
+        "Minimalist",
     ],
 )
 tone_ids = {
@@ -33,7 +36,10 @@ tone_ids = {
     "Expert Analyst": "expert_analyst",
     "Personal Blog": "personal_blog",
     "Luxury / Premium": "luxury_premium",
+    "Luxury Editorial": "luxury_editorial",
     "SEO Neutral": "seo_neutral",
+    "SEO Practical": "seo_practical",
+    "Minimalist": "minimalist",
 }
 
 if st.button("Run pipeline") and topic.strip():
@@ -49,6 +55,10 @@ if st.button("Run pipeline") and topic.strip():
         st.success(f"Pipeline complete. Run ID: `{pkg.run_id}`")
         if state.tone_profile:
             st.caption(f"Tone: {state.tone_profile.get('label', 'Auto')}")
+        if state.publish_ready_status == "publish_ready_with_editorial_review":
+            st.warning("Ready with editorial review: light source coverage.")
+        elif state.publish_ready_status == "draft_only_not_publish_ready":
+            st.error("Draft only: the article has unresolved contract issues.")
 
         col1, col2 = st.columns([2, 1])
 
