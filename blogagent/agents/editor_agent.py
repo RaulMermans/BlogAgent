@@ -538,8 +538,7 @@ def _mock_recommendation_draft(
                             "objective product details before publishing."
                             if editorial
                             else (
-                                "- **Caveat**: Source support is limited; "
-                                "review before publishing."
+                                "- **Caveat**: Source support is limited; review before publishing."
                             )
                         )
                     )
@@ -678,16 +677,8 @@ def _mock_candidate_locked_draft(
         ]
     )
     for index, item in enumerate(pack.items, start=1):
-        context = ", ".join(item.supported_context[:2] or item.evidence_terms[:2])
-        evidence = (
-            item.evidence_spans[0]
-            if item.evidence_spans
-            else (
-                "It stands out as a clean, topic-appropriate option worth considering."
-                if editorial
-                else "The available source identifies this as a validated candidate."
-            )
-        )
+        best_for = _differentiated_best_for(index, item, topic)
+        evidence = _differentiated_why_like_it(index, item, topic, editorial)
         citation = (
             f" [{item.source_title or 'Source'}]({item.source_url})" if item.source_url else ""
         )
@@ -695,14 +686,11 @@ def _mock_candidate_locked_draft(
             [
                 f"## {index}. {item.section_heading}",
                 "",
-                f"**Best for:** {context or 'a clear use case'}",
+                f"**Best for:** {best_for}",
                 "",
                 f"**Why we like it:** {evidence}{citation}",
                 "",
-                (
-                    "Before choosing, compare how it fits your workflow, priorities, "
-                    "and the alternatives on this list."
-                ),
+                _differentiated_closing_note(index, item, topic),
                 "",
             ]
         )
@@ -728,13 +716,11 @@ def _mock_candidate_locked_draft(
     return DraftOutput(
         article_markdown="\n".join(lines),
         meta_description=(
-            (
-                f"Explore {pack.final_target_count} standout options for "
-                f"{_recommendation_subject(topic)}, with clear use cases and choosing tips."
-                if editorial
-                else f"Compare {pack.final_target_count} sourced options for {topic}, "
-                "with evidence-linked use cases and practical choosing guidance."
-            )
+            f"Explore {pack.final_target_count} standout options for "
+            f"{_recommendation_subject(topic)}, with clear use cases and choosing tips."
+            if editorial
+            else f"Compare {pack.final_target_count} sourced options for {topic}, "
+            "with evidence-linked use cases and practical choosing guidance."
         )[:160],
         seo_keywords=[word.lower() for word in topic.split()[:4]],
         recommended_entities=[
@@ -751,6 +737,120 @@ def _mock_candidate_locked_draft(
     )
 
 
+# ---------------------------------------------------------------------------
+# Differentiated per-pick copy (avoids duplicate "Best for" / "Why" text when
+# evidence context is sparse — the mock generator must not produce identical
+# boilerplate for every recommendation).
+# ---------------------------------------------------------------------------
+
+_BEST_FOR_ROTATION: tuple[str, ...] = (
+    "everyday use and dependable performance",
+    "readers who want a standout option without overthinking it",
+    "anyone prioritizing value alongside quality",
+    "those who want a distinctive choice that still feels practical",
+    "buyers who care about long-term satisfaction over hype",
+    "readers seeking a dependable option with broad appeal",
+    "those who want something that performs well in most situations",
+    "buyers comparing options on both feel and function",
+    "anyone who wants a well-rounded pick with few compromises",
+    "readers who prioritize a clear, confident choice",
+)
+
+_WHY_LIKE_IT_ROTATION: tuple[str, ...] = (
+    "It consistently comes up as a strong option in this category, and it earns "
+    "that reputation through a combination of solid fundamentals and broad appeal.",
+    "It strikes a balance that's hard to find — the kind of pick that holds up "
+    "well once the initial excitement of a new purchase fades.",
+    "It has a clear identity that sets it apart from more generic alternatives in the same space.",
+    "It punches above its position, offering more than buyers might expect at first glance.",
+    "It rewards a closer look — the details that matter most hold up under scrutiny.",
+    "It has built a loyal following for good reason: it does the fundamentals "
+    "right and adds a little extra on top.",
+    "It's the kind of option that feels considered rather than rushed, "
+    "and that shows in daily use.",
+    "It manages to feel both familiar and distinctive — comfortable to choose, "
+    "but not forgettable.",
+    "It holds its own against pricier or more hyped alternatives, "
+    "which says a lot about where the value really lies.",
+    "It's a confident pick precisely because it doesn't try to be everything "
+    "to everyone — it knows what it's for and delivers on it.",
+)
+
+
+_GENERIC_CONTEXT_PLACEHOLDERS = frozenset({"editorial fit", "general fit", "general use"})
+
+
+def _differentiated_best_for(index: int, item: object, topic: str) -> str:
+    """Return a distinct 'Best for' phrase, preferring real (non-generic) evidence context."""
+    raw_terms = list(getattr(item, "supported_context", []) or []) or list(
+        getattr(item, "evidence_terms", []) or []
+    )
+    real_terms = [t for t in raw_terms if t.strip().lower() not in _GENERIC_CONTEXT_PLACEHOLDERS]
+    if real_terms:
+        return ", ".join(real_terms[:2])
+    return _BEST_FOR_ROTATION[(index - 1) % len(_BEST_FOR_ROTATION)]
+
+
+_WHY_LIKE_IT_LEAD_INS: tuple[str, ...] = (
+    "{name} earns its spot through consistent real-world performance.",
+    "What makes {name} worth a look comes down to the details.",
+    "{name} stands out here for a fairly simple reason.",
+    "The appeal of {name} becomes clear once you spend real time with it.",
+    "{name} holds its place on this list on its own merits.",
+    "There's a straightforward case for {name}.",
+    "{name} earns its spot the old-fashioned way — through performance.",
+    "Spend a little time with {name} and the reasoning becomes obvious.",
+    "{name} belongs here for reasons that go beyond first impressions.",
+    "The case for {name} is simple once you look a little closer.",
+)
+
+
+def _differentiated_why_like_it(index: int, item: object, topic: str, editorial: bool) -> str:
+    """Return a distinct 'Why we like it' reason, preferring real evidence spans.
+
+    When falling back to rotation text (no evidence spans available), both the
+    lead-in clause AND the reasoning are rotated independently by index so no
+    two picks read with the same template shape — a single shared lead-in
+    phrase ("X made the list because...") reads as templated to a human editor
+    even when the trailing reasoning differs.
+    """
+    spans = getattr(item, "evidence_spans", None) or []
+    if spans:
+        return spans[0]
+    # Prefer the reader-facing display form — canonical_name is a lowercased,
+    # normalized form used for internal matching/dedup and reads as broken
+    # prose if it leaks into a sentence (e.g. "dolce & gabbana ... earns its spot").
+    name = (
+        getattr(item, "display_name", "")
+        or getattr(item, "section_heading", "")
+        or getattr(item, "canonical_name", "")
+    )
+    base = _WHY_LIKE_IT_ROTATION[(index - 1) % len(_WHY_LIKE_IT_ROTATION)]
+    if name:
+        lead_in = _WHY_LIKE_IT_LEAD_INS[(index - 1) % len(_WHY_LIKE_IT_LEAD_INS)].format(name=name)
+        return f"{lead_in} {base}"
+    return base
+
+
+_CLOSING_NOTE_ROTATION: tuple[str, ...] = (
+    "If this sounds like the right fit, it's worth a closer look against the rest of the list.",
+    "Weigh it against your specific priorities — the right choice often comes down to fit.",
+    "It's a strong contender, but the best pick always depends on what matters most to you.",
+    "Consider how it stacks up against the alternatives here before making a final call.",
+    "If the points above resonate, this is a pick worth shortlisting seriously.",
+    "Like any choice on this list, it rewards a little extra research before committing.",
+    "It holds up well in comparison — give it real consideration alongside the others.",
+    "The details here matter more than they might seem; take a moment to compare.",
+    "It's earned its spot, but trust your own priorities when making the final decision.",
+    "Take a moment to see how this one lines up with what you're actually looking for.",
+)
+
+
+def _differentiated_closing_note(index: int, item: object, topic: str) -> str:
+    """Return a distinct closing sentence for each pick section."""
+    return _CLOSING_NOTE_ROTATION[(index - 1) % len(_CLOSING_NOTE_ROTATION)]
+
+
 def _format_query_contract_prompt(
     query_contract: dict,
     allowed_recommendations: list[dict],
@@ -759,100 +859,120 @@ def _format_query_contract_prompt(
     source_quality_scores: list[dict],
 ) -> str:
     """Append contract-aware drafting instructions to the recommendation prompt."""
-    allowed_lines = []
-    for c in allowed_recommendations[:20]:
-        # Support both EntityCandidate dicts and RecommendationCandidate dicts
-        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
-        cand_id = c.get("candidate_id", "")
-        terms = c.get("evidence_terms") or c.get("supported_context") or []
-        urls = c.get("source_urls") or []
-        allowed_lines.append(
-            f"- [{cand_id or cand_name}] {cand_name} | "
-            f"quality={c.get('source_quality')} | "
-            f"terms={', '.join(terms[:6]) or 'none'} | "
-            f"sources={', '.join(urls[:2])}"
-        )
-    rejected_lines = []
-    for c in rejected_candidates[:20]:
-        reason = c.get("rejection_reason") or c.get("reason")
-        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
-        rejected_lines.append(f"- {cand_name} | type={c.get('entity_type')} | reason={reason}")
-    quality_counts = {
-        "high": sum(1 for s in source_quality_scores if s.get("quality") == "high"),
-        "medium": sum(1 for s in source_quality_scores if s.get("quality") == "medium"),
-        "low": sum(1 for s in source_quality_scores if s.get("quality") == "low"),
-    }
     requested_count = query_contract.get("requested_count")
     allowed_count = len(allowed_recommendations)
     enough_candidates = allowed_count >= (requested_count or 0) if requested_count else True
-
     strictness = query_contract.get("recommendation_strictness", "standard")
     editorial = strictness == "editorial"
-    count_rule = ""
+
+    # Build approved candidate list in clean, reader-friendly format
+    allowed_lines = []
+    for c in allowed_recommendations[:20]:
+        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
+        terms = c.get("evidence_terms") or c.get("supported_context") or []
+        urls = c.get("source_urls") or []
+        terms_text = ", ".join(terms[:4]) if terms else ""
+        url_text = urls[0] if urls else ""
+        entry = f"- {cand_name}"
+        if terms_text:
+            entry += f" | context: {terms_text}"
+        if url_text:
+            entry += f" | url: {url_text}"
+        allowed_lines.append(entry)
+
+    # Build do-not-use list (name only, no internal field names)
+    rejected_lines = []
+    for c in rejected_candidates[:20]:
+        cand_name = (c.get("canonical_name") or c.get("name") or c.get("raw_mention") or "").strip()
+        if cand_name:
+            rejected_lines.append(f"- {cand_name}")
+
+    # Count instructions
     if requested_count and enough_candidates:
         count_rule = (
-            f"- You have {allowed_count} allowed candidates and {requested_count} were requested.\n"
-            f"- You MUST include exactly {requested_count} recommendations from the ALLOWED list.\n"
-            "- Using fewer is a compliance failure, not evidence-limited.\n"
+            f"- APPROVED LIST has {allowed_count} items; topic requests {requested_count}.\n"
+            f"- You MUST include exactly {requested_count} items from the approved list.\n"
+            "- Including fewer than the requested count is a contract failure.\n"
         )
     elif requested_count and not enough_candidates and editorial:
         count_rule = (
-            f"- Use all {allowed_count} clean candidates as a tighter shortlist.\n"
-            f"- Retitle the article to the delivered count of {allowed_count}.\n"
-            "- Do not expose internal evidence or validation language in the article.\n"
+            f"- Only {allowed_count} picks are available for this topic.\n"
+            f"- Write a focused article around {allowed_count} picks.\n"
+            "- Open naturally: e.g., 'After reviewing the options, these stood out.'\n"
+            "- Do NOT mention counts being reduced or any pipeline language.\n"
         )
     elif requested_count and not enough_candidates:
         count_rule = (
-            f"- Only {allowed_count} candidates available for {requested_count} requested.\n"
-            "- Evidence-limited: include all {allowed_count} candidates with a note "
-            "that the full count could not be sourced.\n"
+            f"- Only {allowed_count} items available (requested: {requested_count}).\n"
+            f"- Include all {allowed_count} items and add one natural sentence explaining "
+            "why the article covers fewer options.\n"
         )
+    else:
+        count_rule = ""
+
+    editorial_voice_rule = (
+        (
+            "- Write in confident, natural editorial voice: 'our picks', 'worth considering',\n"
+            "  'why we like it', 'stands out for'. Avoid clinical language.\n"
+            "- Do NOT write: 'source-backed', 'evidence-limited', 'validated candidates',\n"
+            "  'query contract', 'candidate pack', 'evidence table', 'allowed list',\n"
+            "  'rigorous evidence', 'passage from the source', or 'not explicitly mentioned'.\n"
+            "- If editorial discretion shaped the list, phrase it naturally:\n"
+            "  'Our picks balance reputation, availability, and editorial judgment.'\n"
+        )
+        if editorial
+        else (
+            "- If the count is reduced, state the limitation plainly without pipeline jargon.\n"
+            "- Do NOT write internal field names or QA phrases in the article.\n"
+        )
+    )
 
     return (
-        "\n\nQUERY CONTRACT — MANDATORY:\n"
-        f"- task_type: {query_contract.get('task_type')}\n"
-        f"- domain: {query_contract.get('domain')}\n"
-        f"- requested_count: {requested_count}\n"
-        f"- answer_entity_type: {query_contract.get('answer_entity_type')}\n"
-        f"- recommendation_strictness: {strictness}\n"
-        f"- evidence_mode: {query_contract.get('evidence_mode')}\n"
-        f"- minimum_publishable_items: {query_contract.get('minimum_publishable_items')}\n"
-        f"- evidence_limited_mode: {evidence_limited_mode}\n"
-        f"- source_quality: {quality_counts['high']} high, "
-        f"{quality_counts['medium']} medium, {quality_counts['low']} low\n\n"
-        "ALLOWED RECOMMENDATIONS — you may ONLY recommend items from this locked table:\n"
+        "\n\nAPPROVED PICKS — write ONLY about items from this list:\n"
         + ("\n".join(allowed_lines) if allowed_lines else "- none\n")
-        + "\n\nREJECTED CANDIDATES — do NOT recommend or count these:\n"
+        + "\n\nDO NOT RECOMMEND (excluded from this article):\n"
         + ("\n".join(rejected_lines) if rejected_lines else "- none\n")
-        + "\n\nCandidate-bound drafting rules (STRICT):\n"
-        "- You may ONLY recommend items from ALLOWED RECOMMENDATIONS. No exceptions.\n"
-        "- Do not introduce any product, brand, or fragrance not in the allowed list.\n"
-        "- Do not recommend brand-only names.\n"
-        "- Do not turn section headings or source titles into recommendations.\n"
+        + f"\n\nARTICLE CONTRACT (internal — do not reproduce in article):\n"
+        f"- Approved item count: {allowed_count}\n"
+        f"- Requested count: {requested_count}\n"
+        "\n\nDRAFTING RULES (MANDATORY):\n"
+        "- ONLY recommend items from the APPROVED PICKS list above. No exceptions.\n"
+        "- Do not introduce any product, brand, or entity not in the approved list.\n"
+        "- Do not turn source titles, section headings, or authors into recommendations.\n"
         + count_rule
-        + "- For each recommendation include: name, best for, why it works, "
-        "and useful experience or use-case detail.\n"
-        "- Include a Quick Picks section listing all recommendations.\n"
-        "- For fragrance posts include notes/mood/occasion only if present in the terms above.\n"
-        + (
-            "- For editorial/lifestyle topics, prioritize usefulness, readability, taste, "
-            "and clear selection logic. Use natural framing such as 'our picks', "
-            "'standouts', 'worth considering', and 'why we like it'.\n"
-            "- Do not write 'source-backed recommendations', 'evidence-limited', "
-            "'validated candidates', 'available evidence supported', or 'rigorous evidence'.\n"
-            if editorial
-            else "- If the candidate count is lower than requested, state the limitation "
-            "without inventing additional entities.\n"
-        )
+        + "- Every pick needs: a distinct 'Best for', a clear reason, useful context.\n"
+        "- Include a Quick Picks section listing all approved picks.\n"
+        "- For fragrance/perfume: include notes, mood, or occasion only if in context above.\n"
+        + editorial_voice_rule
     )
 
 
 def _recommendation_subject(topic: str) -> str:
-    """Remove a leading list count/qualifier to avoid duplicated editorial titles."""
+    """Strip framing/count language so the title isn't a doubled-up mess.
+
+    Some topics phrase the count as a leading qualifier ("5 best perfumes"),
+    but others embed it inside a "guide to" framing ("a casual guide to the
+    top 5 summer fragrances"). Naively prefixing "{count} Best {topic}: Our
+    Picks" onto the latter produces nonsense like "5 Best A Casual Guide To
+    The Top 5 Summer Fragrances: Our Picks". Strip both the framing phrase and
+    the embedded count/qualifier so only the bare subject ("summer fragrances")
+    remains, regardless of which style the user wrote in.
+    """
+    subject = topic.strip()
+    # Drop a leading "a/an/the <adjective> guide/roundup/list to/for/on " framing
+    # phrase, exposing whatever count/qualifier sits inside it.
     subject = re.sub(
-        r"^\s*(?:top\s+)?\d+\s+(?:best\s+)?",
+        r"^\s*(?:a|an|the)?\s*[\w-]*\s*"
+        r"(?:guide|roundup|round-up|rundown|list|primer)\s+(?:to|for|on)\s+",
         "",
-        topic,
+        subject,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Drop a leading list count/qualifier — "top 5 ", "5 best ", "the top 5 best ".
+    subject = re.sub(
+        r"^\s*(?:the\s+)?(?:top\s+)?\d+\s+(?:best\s+)?",
+        "",
+        subject,
         flags=re.IGNORECASE,
     ).strip()
     return subject or topic

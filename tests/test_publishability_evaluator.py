@@ -474,3 +474,158 @@ Worth the investment for the summer season.
         if result.publish_ready:
             assert result.score >= 75
             assert len(high_defects) == 0
+
+
+# ---------------------------------------------------------------------------
+# Requirement 9: a perfect (100) score must be impossible with structural defects
+# ---------------------------------------------------------------------------
+
+_MALFORMED_HEADING_ARTICLE = """# Best Tools for Writers
+
+## Quick Picks
+
+- Tool One — best for drafting
+- Tool Two — best for editing
+
+## https://example.com/tool-one
+
+**Best for:** writers who want a clean drafting space
+
+A genuinely useful tool with a thoughtful editor and distraction-free mode for focused work.
+
+## $499
+
+**Best for:** teams who need collaboration features
+
+A solid collaborative option with shared workspaces and version history built in for teams.
+
+## Final Takeaway
+
+Either tool will serve most writers well depending on whether you work solo or on a team.
+"""
+
+_REPEATED_PARAGRAPH_ARTICLE = """# Best Espresso Machines for Home Baristas
+
+Choosing the right espresso machine can transform your morning routine into a small
+daily ritual that you genuinely look forward to each day before anything else happens.
+
+## Quick Picks
+
+- Breville Barista Express — best for built-in grinding
+- Gaggia Classic Pro — best for no-frills simplicity
+
+## Breville Barista Express
+
+Choosing the right espresso machine can transform your morning routine into a small
+daily ritual that you genuinely look forward to each day before anything else happens.
+
+**Best for:** home baristas who want grinding and brewing in one machine.
+
+## Gaggia Classic Pro
+
+A reliable workhorse that has earned cult status among home enthusiasts for its
+simplicity, upgrade potential, and the satisfying ritual of manual operation.
+
+## Final Takeaway
+
+Both machines reward the extra effort with genuinely better espresso at home.
+"""
+
+_LEAKED_PIPELINE_NOTES_ARTICLE = """# Best Running Shoes for Daily Training
+
+## Quick Picks
+
+- Shoe One — best for cushioned long runs
+- Shoe Two — best for speed days
+
+## Shoe One
+
+- **Source**: Not explicitly mentioned
+- A dependable trainer that holds up across varied terrain and weekly mileage.
+
+## Shoe Two
+
+- **Source**: Not explicitly mentioned
+- A lighter option built for tempo runs and race-day efforts when pace matters most.
+
+## Final Takeaway
+
+Either shoe rewards consistent training with reliable comfort and durability over time.
+"""
+
+
+class TestPublishabilityStructuralFloor:
+    """A perfect score must be impossible when the article has structural defects —
+    no amount of strong voice, sensory detail, or POV should mask malformed headings,
+    repeated paragraphs, or leaked internal pipeline notes."""
+
+    def test_malformed_headings_prevent_perfect_score(self):
+        result = evaluate_publishability(
+            article_markdown=_MALFORMED_HEADING_ARTICLE,
+            topic="best tools for writers",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        structural_defects = [d for d in result.defects if d.type == "structural_defect"]
+        assert structural_defects
+        assert structural_defects[0].severity == "high"
+        assert result.score < 100
+        assert result.score <= 75
+        assert result.publish_ready is False
+        assert result.polish_required is True
+
+    def test_repeated_paragraphs_prevent_perfect_score(self):
+        result = evaluate_publishability(
+            article_markdown=_REPEATED_PARAGRAPH_ARTICLE,
+            topic="best espresso machines for home baristas",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        structural_defects = [d for d in result.defects if d.type == "structural_defect"]
+        assert structural_defects
+        assert "repeat" in structural_defects[0].message.lower()
+        assert result.score < 100
+
+    def test_leaked_pipeline_notes_prevent_perfect_score(self):
+        result = evaluate_publishability(
+            article_markdown=_LEAKED_PIPELINE_NOTES_ARTICLE,
+            topic="best running shoes for daily training",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        structural_defects = [d for d in result.defects if d.type == "structural_defect"]
+        assert structural_defects
+        assert "not explicitly mentioned" in structural_defects[0].message.lower()
+        assert result.score < 100
+        assert result.publish_ready is False
+
+    def test_clean_article_has_no_structural_defect(self):
+        """A clean article should not be penalized by the structural floor check."""
+        result = evaluate_publishability(
+            article_markdown=_STRONG_ARTICLE,
+            topic="top 5 best perfumes for a date",
+            is_recommendation=True,
+            selected_skills=["beauty-fragrance-writing"],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        assert not any(d.type == "structural_defect" for d in result.defects)
+
+    def test_structural_defect_forces_high_severity_and_polish(self):
+        """structural_defect must be high severity so it forces polish + blocks publish_ready."""
+        result = evaluate_publishability(
+            article_markdown=_MALFORMED_HEADING_ARTICLE,
+            topic="best tools for writers",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        assert result.polish_required is True
+        assert result.publish_ready is False

@@ -162,56 +162,70 @@ Guidelines:
 """
 
 RECOMMENDATION_DRAFT_PROMPT = """\
-You are a blog writer. Given an outline and evidence table, write a recommendation-style
-blog post in Markdown.
+You are an editorial blog writer producing a recommendation article for a real audience.
+Write in natural, confident prose — not like an internal QA report.
 
-The candidate list is locked. Your task is to write inside the structure, not decide the
-recommendation set.
+WHAT YOU ARE WRITING:
+A reader-ready recommendation article. Your reader wants clear picks with useful context.
+They are not interested in how the research was done, what validation passed, or how evidence
+was scored internally. Keep all of that invisible.
 
-Source-grounding rules — MANDATORY:
-- You MAY ONLY name specific products, brands, or entities that appear in the evidence table.
+NAMING RULES — MANDATORY:
+- You may only name specific products, brands, tools, or entities that appear in the
+  evidence table or the approved candidate list provided below — only those found there.
 - Do NOT invent product names, brand names, or recommendations.
-- If a source mentions a named product, cite it inline: [Source Title](URL).
-- If the evidence table does not contain enough named products, write exactly:
-    "The available sources did not provide enough specific named recommendations."
-  Do NOT invent a list.
+- If evidence exists for a product, cite it inline naturally: [Source](URL).
+- Do not write "Source: Not explicitly mentioned" or any similar phrase.
+- If the evidence table and approved list together did not provide enough specific named
+  options to write the article, say so plainly in one natural sentence (e.g., "We could not
+  find enough clearly named options to fill out this list right now") rather than inventing
+  names or exposing internal pipeline details.
 
 EXACT COUNT RULE — MANDATORY:
-If the topic specifies a number (e.g., "top 10", "best 5"), produce EXACTLY that many
-recommendations in Quick Picks — not one more, not one less.
-If the evidence table contains fewer supported items than requested, produce only what
-the evidence supports and add a sentence at the end explaining why fewer items are listed.
+If the topic specifies a number (e.g., "top 7", "best 5"), produce EXACTLY that many items
+in Quick Picks — not one more, not one less.
+If fewer items are supported than requested, produce only what you have and open with a single
+natural sentence explaining the narrower focus (e.g., "After reviewing the leading options,
+five stood out clearly."). Do NOT write "evidence-limited" or pipeline terminology.
 
 DEDUPLICATION RULES — MANDATORY:
 - No section may repeat the same text, sentence, or information from another section.
 - No source excerpt may appear verbatim in more than one section.
-- Every recommendation must be supported by distinct evidence from a different source excerpt.
+- Every pick must have a distinct "Best for" entry that does not duplicate another pick's.
 
 SOURCE QUALITY RULE:
 Prefer editorial, journalistic, or expert review sources. Do not use Quora, Instagram,
-Reddit, or similar user-generated platforms as primary evidence when stronger sources exist.
+Reddit, or user-generated platforms as primary sources when stronger sources exist.
 
-Required article structure:
+LANGUAGE TO NEVER USE IN THE ARTICLE:
+- "source-backed", "evidence-backed", "evidence-limited", "evidence-limited mode"
+- "validated candidates", "locked candidates", "candidate pack"
+- "query contract", "recommendation strictness", "candidate_id", "evidence_score"
+- "Source: Not explicitly mentioned", "not mentioned in evidence", "provided source excerpts"
+- "allowed recommendations", "rejected candidates"
+- "rigorous evidence", "evidence table", "passage from the source"
+Write naturally. If editorial discretion was used, say: "Our picks balance reputation,
+availability, fit for the use case, and editorial judgment."
+
+Required article structure (use these exact heading names):
 
 ## Quick Picks
-A bullet list of named recommendations (only those found in sources). Obey any explicit
-count stated in the topic (e.g., "top 10" → exactly 10 bullets, not 11).
+A bullet list of named recommendations. Obey the exact count stated in the topic.
 
 ## How We Chose
-Explain the selection criteria based on source evidence.
+A brief paragraph on selection criteria — written for readers, not QA reviewers.
 
-## Best [Category] for [Use Case]
-For each named recommendation found in sources:
-- **Name**: [product/entity name exactly as it appears in source]
-- **Best for**: [specific use case]
-- **Why it works**: [evidence-based reason with citation]
-- **Source**: [inline citation]
-- **Caveat**: [note if evidence is weak or partial]
+## [Number]. [Product/Entity Name] — [brief positioning phrase]
+For each recommendation, write a short section with:
+- **Best for:** [specific, distinct use case — not duplicated from other picks]
+- [Two to four sentences of natural prose on what makes this option worthwhile.]
+- Cite sources inline where relevant: [Source Title](URL)
 
 ## Buying or Choosing Tips
-Practical advice from the sources.
+Three to five practical, domain-relevant tips for readers.
 
 ## Final Takeaway
+A crisp, opinionated closing paragraph.
 
 Topic: {topic}
 

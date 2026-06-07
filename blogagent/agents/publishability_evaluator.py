@@ -31,6 +31,7 @@ PublishabilityDefectType = Literal[
     "insufficient_recommendation_depth",
     "missing_product_context",
     "generic_seo_voice",
+    "structural_defect",
 ]
 
 DefectSeverity = Literal["low", "medium", "high"]
@@ -134,6 +135,27 @@ _LIFESTYLE_CONTEXT_TERMS = (
     "vibe",
 )
 
+# Structural defects that must prevent a perfect (100) score regardless of how
+# strong the prose otherwise reads — these are hard quality-floor checks, not
+# stylistic nitpicks. (Mirrors the structural checks in article_quality_gate,
+# kept independent so each module can be tested and evolve on its own.)
+_MALFORMED_HEADING_RE = re.compile(
+    r"^#{2,3}\s+(?:"
+    r"https?://|"  # URL as heading
+    r"\$\d+|"  # Price as heading
+    r"\d{4}-\d{2}|"  # Date as heading
+    r"[A-Z][a-z]+\s+\d{4}"  # Month Year as heading
+    r")",
+    re.MULTILINE,
+)
+
+_SOURCE_NOT_MENTIONED_RE = re.compile(r"[*_]*Source[*_]*:\s*[Nn]ot\s+explicitly\s+mentioned")
+
+_SOURCE_SECTION_RE = re.compile(
+    r"\n#{1,3}\s*(?:Sources?|References?|Citations?|Further Reading)\s*\n",
+    re.IGNORECASE,
+)
+
 _WEAK_CONCLUSION_PHRASES = (
     "in conclusion",
     "to summarize",
@@ -170,6 +192,38 @@ def evaluate_publishability(
         for kw in ("beauty", "fashion", "lifestyle", "fragrance", "makeup", "skincare", "perfume")
     )
 
+    # --- 0. Structural integrity — a perfect score is impossible with these present ---
+    # These are hard quality-floor defects (malformed headings, repeated paragraphs,
+    # leaked "Source: Not explicitly mentioned" pipeline notes). No amount of strong
+    # voice or sensory detail should let an article with these score 100.
+    structural_issues: list[str] = []
+    bad_headings = _MALFORMED_HEADING_RE.findall(article_markdown)
+    if bad_headings:
+        structural_issues.append(
+            f"{len(bad_headings)} heading(s) contain URL, price, or date debris"
+        )
+    repeated_paragraphs = _find_repeated_paragraphs(article_markdown)
+    if repeated_paragraphs:
+        structural_issues.append(f"{len(repeated_paragraphs)} paragraph(s) repeat verbatim")
+    not_mentioned = _SOURCE_NOT_MENTIONED_RE.findall(article_markdown)
+    if not_mentioned:
+        structural_issues.append(
+            f"{len(not_mentioned)} 'Source: Not explicitly mentioned' line(s) leaked through"
+        )
+    if structural_issues:
+        defects.append(
+            PublishabilityDefect(
+                type="structural_defect",
+                severity="high",
+                message=(
+                    "Structural defects make a perfect score impossible: "
+                    + "; ".join(structural_issues)
+                    + ". Fix these before considering the article publish-ready."
+                ),
+            )
+        )
+        score -= 30
+
     # --- 1. Generic intro check ---
     intro = _extract_intro(article_markdown)
     intro_lower = intro.lower()
@@ -192,8 +246,7 @@ def evaluate_publishability(
                 type="weak_intro",
                 severity="medium",
                 message=(
-                    "Intro contains generic opening phrase. "
-                    "Strengthen with editorial specificity."
+                    "Intro contains generic opening phrase. Strengthen with editorial specificity."
                 ),
             )
         )
@@ -220,8 +273,7 @@ def evaluate_publishability(
                 type="generic_voice",
                 severity="low",
                 message=(
-                    f"Article contains {mill_count} generic/filler phrase(s). "
-                    "Consider removing."
+                    f"Article contains {mill_count} generic/filler phrase(s). Consider removing."
                 ),
             )
         )
@@ -446,6 +498,24 @@ def evaluate_publishability(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _find_repeated_paragraphs(markdown: str) -> list[str]:
+    """Find paragraphs (outside the sources section) that appear more than once."""
+    no_sources = _SOURCE_SECTION_RE.split(markdown)[0]
+    paragraphs = [
+        p.strip()
+        for p in re.split(r"\n\n+", no_sources)
+        if len(p.strip()) > 60 and not p.strip().startswith("#")
+    ]
+    seen: dict[str, int] = {}
+    repeated: list[str] = []
+    for para in paragraphs:
+        key = re.sub(r"\s+", " ", para.lower())
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] == 2:
+            repeated.append(para[:80])
+    return repeated
 
 
 def _extract_intro(markdown: str) -> str:

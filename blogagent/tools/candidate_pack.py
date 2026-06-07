@@ -21,6 +21,43 @@ from blogagent.tools.recommendation_policy import (
 )
 from blogagent.workflow.query_contract import QueryContract
 
+# Heading words that indicate a string is a section label, not a product name
+_HEADING_WORDS: frozenset[str] = frozenset(
+    {
+        "buying",
+        "choosing",
+        "guide",
+        "tips",
+        "introduction",
+        "conclusion",
+        "overview",
+        "summary",
+        "how",
+        "why",
+        "what",
+        "when",
+        "where",
+        "best",
+        "top",
+        "affordable",
+        "luxury",
+    }
+)
+# Navigation / metadata fragments that must not appear in display names
+_NAV_FRAGMENTS: tuple[str, ...] = (
+    "photos",
+    "specs",
+    "review",
+    "click here",
+    "read more",
+    "see all",
+    "source:",
+    "via:",
+    "from:",
+    "article:",
+    "section:",
+)
+
 CandidatePackMode = Literal[
     "evidence_locked",
     "editorial_shortlist",
@@ -30,6 +67,160 @@ CandidatePackMode = Literal[
     "not_applicable",
 ]
 CandidatePackStatus = Literal["exact", "evidence_limited", "below_minimum", "not_applicable"]
+
+CandidatePackQualityMode = Literal["exact", "evidence_limited", "editorial_shortlist", "failed"]
+CandidatePackPublishCeiling = Literal[
+    "publish_ready",
+    "publish_ready_with_editorial_review",
+    "draft_only_not_publish_ready",
+]
+CandidatePackRepairAction = Literal["proceed", "repair_candidates", "enrich_search", "fail_fast"]
+
+
+class CandidatePackQualityReport(BaseModel):
+    """Deterministic gate on CandidatePack quality before drafting begins."""
+
+    passes: bool
+    locked_count: int
+    requested_count: int | None
+    invalid_items: list[str] = Field(default_factory=list)
+    dirty_name_items: list[str] = Field(default_factory=list)
+    light_coverage_items: list[str] = Field(default_factory=list)
+    missing_evidence_items: list[str] = Field(default_factory=list)
+    mode: CandidatePackQualityMode
+    publish_ceiling: CandidatePackPublishCeiling
+    repair_action: CandidatePackRepairAction
+
+
+def build_candidate_pack_quality_report(
+    pack: "CandidatePack",
+    query_contract: QueryContract | dict,
+) -> CandidatePackQualityReport:
+    """Gate the CandidatePack before passing to the writer.
+
+    Rules:
+    - exact mode requires locked_count == requested_count
+    - exact mode cannot include invalid or dirty candidates
+    - editorial_shortlist allows light-coverage candidates but forces editorial_review ceiling
+    - failed pack must produce fail_fast or draft_only
+    """
+    contract = (
+        query_contract
+        if isinstance(query_contract, QueryContract)
+        else QueryContract.model_validate(query_contract)
+    )
+
+    invalid_items: list[str] = []
+    dirty_name_items: list[str] = []
+    light_coverage_items: list[str] = []
+    missing_evidence_items: list[str] = []
+
+    adapter = get_adapter(contract.domain)
+
+    for item in pack.items:
+        name = item.display_name or item.canonical_name or ""
+        # Invalid entity check
+        if not adapter.is_valid_entity(name, contract):
+            invalid_items.append(name)
+            continue
+        # Dirty name check
+        if _is_dirty_display_name(name):
+            dirty_name_items.append(name)
+            continue
+        # Evidence checks
+        if not item.evidence_spans:
+            missing_evidence_items.append(name)
+        elif item.candidate_basis in {"editorial_discretion", "weak_signal"}:
+            light_coverage_items.append(name)
+
+    editorial = contract.recommendation_strictness == "editorial"
+    requested = pack.requested_count
+    locked = pack.final_target_count
+
+    if pack.status == "below_minimum" or pack.mode == "not_applicable":
+        return CandidatePackQualityReport(
+            passes=pack.status == "not_applicable",
+            locked_count=locked,
+            requested_count=requested,
+            invalid_items=invalid_items,
+            dirty_name_items=dirty_name_items,
+            light_coverage_items=light_coverage_items,
+            missing_evidence_items=missing_evidence_items,
+            mode="failed" if pack.status == "below_minimum" else "exact",
+            publish_ceiling="draft_only_not_publish_ready"
+            if pack.status == "below_minimum"
+            else "publish_ready",
+            repair_action="fail_fast" if pack.status == "below_minimum" else "proceed",
+        )
+
+    has_hard_failures = bool(invalid_items or dirty_name_items)
+    has_soft_issues = bool(light_coverage_items or missing_evidence_items)
+
+    if has_hard_failures:
+        mode: CandidatePackQualityMode = "failed"
+        passes = False
+        publish_ceiling: CandidatePackPublishCeiling = "draft_only_not_publish_ready"
+        repair_action: CandidatePackRepairAction = "repair_candidates"
+    elif pack.status == "evidence_limited":
+        mode = "evidence_limited"
+        passes = locked >= (contract.minimum_publishable_items or 3)
+        publish_ceiling = "publish_ready_with_editorial_review"
+        repair_action = "proceed" if passes else "enrich_search"
+    elif editorial:
+        mode = "editorial_shortlist"
+        passes = True
+        publish_ceiling = (
+            "publish_ready_with_editorial_review" if has_soft_issues else "publish_ready"
+        )
+        repair_action = "proceed"
+    elif has_soft_issues:
+        mode = "exact" if requested is None or locked == requested else "evidence_limited"
+        passes = True
+        publish_ceiling = "publish_ready_with_editorial_review"
+        repair_action = "proceed"
+    else:
+        mode = "exact"
+        passes = requested is None or locked == requested
+        publish_ceiling = "publish_ready" if passes else "publish_ready_with_editorial_review"
+        repair_action = "proceed" if passes else "enrich_search"
+
+    return CandidatePackQualityReport(
+        passes=passes,
+        locked_count=locked,
+        requested_count=requested,
+        invalid_items=invalid_items,
+        dirty_name_items=dirty_name_items,
+        light_coverage_items=light_coverage_items,
+        missing_evidence_items=missing_evidence_items,
+        mode=mode,
+        publish_ceiling=publish_ceiling,
+        repair_action=repair_action,
+    )
+
+
+def _is_dirty_display_name(name: str) -> bool:
+    """Return True if the name contains debris that should not appear in a heading."""
+    if not name or not name.strip():
+        return True
+    lower = name.lower().strip()
+    # Price debris
+    if re.search(r"\$\d+|\d+\s*usd|\d+\s*eur", lower):
+        return True
+    # Navigation fragments
+    for frag in _NAV_FRAGMENTS:
+        if frag in lower:
+            return True
+    # Starts with a heading word that implies it's a section, not a product
+    first_word = lower.split()[0].strip(".,;:!?\"'") if lower.split() else ""
+    if first_word in {"how", "why", "what", "guide", "tips", "introduction", "conclusion"}:
+        return True
+    # Contains URL-like debris
+    if "http" in lower or "www." in lower:
+        return True
+    # Too long for a product name (likely a prose fragment)
+    if len(name) > 80:
+        return True
+    return False
 
 
 class CandidatePackItem(BaseModel):
@@ -114,24 +305,18 @@ def build_candidate_pack(
             count_policy="Candidate locking is not applicable to this task.",
         )
 
-    expanded, compound_rejections = _split_compound_candidates(
-        ledger.allowed_candidates, contract
-    )
+    expanded, compound_rejections = _split_compound_candidates(ledger.allowed_candidates, contract)
     deduped = _deduplicate_allowed_candidates(expanded)
     deduped.sort(
         key=lambda candidate: (
-            {"high": 0, "medium": 1, "low": 2}.get(
-                candidate.candidate_confidence, 3
-            ),
+            {"high": 0, "medium": 1, "low": 2}.get(candidate.candidate_confidence, 3),
             -_candidate_richness(candidate)[0],
         )
     )
     allowed_count = len(deduped)
     requested = contract.requested_count
     stronger = [
-        candidate
-        for candidate in deduped
-        if candidate.candidate_confidence in {"high", "medium"}
+        candidate for candidate in deduped if candidate.candidate_confidence in {"high", "medium"}
     ]
 
     if allowed_count < minimum:
@@ -255,11 +440,7 @@ def _deduplicate_allowed_candidates(candidates: list) -> list:
     deduped: list = []
     for candidate in candidates:
         duplicate_index = next(
-            (
-                index
-                for index, existing in enumerate(deduped)
-                if _are_aliases(existing, candidate)
-            ),
+            (index for index, existing in enumerate(deduped) if _are_aliases(existing, candidate)),
             None,
         )
         if duplicate_index is None:
@@ -299,14 +480,13 @@ def _candidate_richness(candidate) -> tuple[int, int, int]:
 
 
 def _to_pack_item(candidate) -> CandidatePackItem:
-    canonical = (
-        candidate.canonical_name or candidate.name or candidate.raw_mention
-    ).strip()
-    display = (
+    canonical = (candidate.canonical_name or candidate.name or candidate.raw_mention).strip()
+    raw_display = (
         candidate.raw_mention.strip()
         if candidate.candidate_basis == "known_entity"
         else _display_name_from_evidence(canonical, candidate.evidence_spans)
     )
+    display = _sanitize_display_name(raw_display, canonical)
     source_url = candidate.source_urls[0] if candidate.source_urls else None
     source_title = candidate.source_titles[0] if candidate.source_titles else None
     return CandidatePackItem(
@@ -332,6 +512,37 @@ def _to_pack_item(candidate) -> CandidatePackItem:
             else None
         ),
     )
+
+
+def _sanitize_display_name(display: str, canonical_fallback: str) -> str:
+    """Strip debris from a display name so it can safely appear as an article heading.
+
+    Falls back to canonical_fallback if the display name is unusable.
+    """
+    name = display.strip()
+    # Strip price debris
+    name = re.sub(r"\$\d+[\d,.]*\s*", "", name).strip()
+    # Strip trailing connectors like " which starts around", " right Photos"
+    name = re.sub(
+        r"\s+(?:which|that|right|photos?|specs?)\b.*$", "", name, flags=re.IGNORECASE
+    ).strip()
+    # Strip navigation fragments
+    for frag in _NAV_FRAGMENTS:
+        idx = name.lower().find(frag)
+        if idx > 0:
+            name = name[:idx].strip()
+    # Strip leading/trailing punctuation
+    name = name.strip(" -–—,;:.")
+    if not name or len(name) < 3:
+        name = canonical_fallback.strip()
+    # Final length guard
+    if len(name) > 80:
+        # Try to truncate to the canonical name if it fits
+        if canonical_fallback and len(canonical_fallback) <= 80:
+            name = canonical_fallback.strip()
+        else:
+            name = name[:80].rsplit(" ", 1)[0].strip()
+    return _smart_title(name) if name else canonical_fallback
 
 
 def _display_name_from_evidence(canonical_name: str, evidence_spans: list[str]) -> str:

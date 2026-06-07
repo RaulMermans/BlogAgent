@@ -219,3 +219,6 @@ class BlogRunState(BaseModel):
     polish_output_audit: Optional[dict] = None
     locked_repair_result: Optional[dict] = None
     tone_profile: Optional[dict] = None
+    # Deterministic final-article editorial quality gate
+    # (dict-serialized ArticleQualityGateResult)
+    article_quality_gate_result: Optional[dict] = None

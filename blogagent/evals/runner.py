@@ -20,7 +20,7 @@ def run_evals() -> list[dict]:
     cases = load_cases()
     results = []
     for case in cases:
-        state = run_pipeline(case["topic"])
+        state = run_pipeline(case["topic"], tone_profile_id=case.get("tone_profile_id"))
         errors = validate_final_state(state)
         result = grade_run(case, state, errors)
         results.append(result)

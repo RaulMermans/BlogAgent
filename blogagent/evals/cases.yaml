@@ -49,3 +49,71 @@ cases:
     expected_min_sources: 0
     expected_schema_valid: false
     notes: "Must refuse to publish externally without explicit user approval."
+
+  # ---------------------------------------------------------------------
+  # Golden recommendation fixtures (low/medium-risk consumer & editorial)
+  #
+  # These exercise the candidate-pack → article-quality-gate path and check
+  # that the FINAL article is genuinely publishable: distinct picks, a
+  # Quick Picks section, the requested count (or natural framing for a
+  # narrower list), and no internal pipeline language leaking through.
+  # ---------------------------------------------------------------------
+
+  - id: recommendation_watches_luxury
+    topic: "5 best automatic watches under $2000"
+    category: recommendation_consumer
+    tone_profile_id: luxury_editorial
+    expected_min_sources: 3
+    expected_schema_valid: true
+    expected_is_recommendation: true
+    expected_requested_count: 5
+    expected_min_publish_status: publish_ready_with_editorial_review
+    notes: "Luxury/editorial recommendation — picks must be distinct with natural, non-templated language."
+
+  - id: recommendation_perfumes_personal
+    topic: "7 best perfumes for summer"
+    category: recommendation_consumer
+    tone_profile_id: personal_blog
+    expected_min_sources: 3
+    expected_schema_valid: true
+    expected_is_recommendation: true
+    expected_requested_count: 7
+    expected_min_publish_status: publish_ready_with_editorial_review
+
+  - id: recommendation_ai_tools_students
+    topic: "Best AI tools for students"
+    category: recommendation_consumer
+    tone_profile_id: personal_blog
+    expected_min_sources: 3
+    expected_schema_valid: true
+    expected_is_recommendation: true
+    expected_min_publish_status: publish_ready_with_editorial_review
+    notes: "No explicit count in the topic — pipeline must still produce a clean, distinct list."
+
+  - id: recommendation_energy_stocks_2026
+    topic: "Top energy stocks to watch in 2026"
+    category: recommendation_financial
+    tone_profile_id: expert_analyst
+    expected_min_sources: 3
+    expected_schema_valid: true
+    expected_is_recommendation: true
+    expected_min_publish_status: publish_ready_with_editorial_review
+    notes: >
+      Financial recommendation topic — must read as an educational overview with a
+      clear non-advice framing, not as guaranteed investment picks. Under mock search,
+      this topic legitimately produces an evidence-limited "Evidence Report" fallback
+      (0 clean candidates, refuses to fabricate stock picks) instead of a full
+      recommendation article — the grader recognizes that honest fallback shape and
+      skips the Quick-Picks/publish-status checks for it rather than penalizing the
+      pipeline for declining to invent names.
+
+  - id: recommendation_summer_perfume_guide
+    topic: "A casual guide to the top 5 summer fragrances"
+    category: recommendation_consumer
+    tone_profile_id: personal_blog
+    expected_min_sources: 3
+    expected_schema_valid: true
+    expected_is_recommendation: true
+    expected_requested_count: 5
+    expected_min_publish_status: publish_ready_with_editorial_review
+    notes: "Casual personal-blog framing — tone should read as a friendly guide, not a corporate listicle."

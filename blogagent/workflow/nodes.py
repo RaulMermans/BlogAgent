@@ -1761,9 +1761,7 @@ def check_publish_contract_node(state: BlogRunState) -> BlogRunState:
         draft_candidate_compliance=state.draft_candidate_compliance or None,
         candidate_ledger_summary=state.candidate_ledger_summary or None,
         unsupported_high_importance_claims=(
-            list(state.fact_check_report.blocking_issues)
-            if state.fact_check_report
-            else None
+            list(state.fact_check_report.blocking_issues) if state.fact_check_report else None
         ),
     )
     state.publish_contract = result.model_dump()
@@ -1839,6 +1837,61 @@ def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
     if contract.failure_reasons:
         for reason in contract.failure_reasons[:2]:
             _warn(state, f"final_answer_contract: {reason}")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Article quality gate (deterministic, runs on the FINAL article)
+# ---------------------------------------------------------------------------
+
+
+_PUBLISH_STATUS_RANK = {
+    "draft_only_not_publish_ready": 0,
+    "publish_ready_with_editorial_review": 1,
+    "publish_ready_with_warnings": 1,
+    "publish_ready": 2,
+}
+
+
+def run_article_quality_gate_node(state: BlogRunState) -> BlogRunState:
+    """Run the deterministic editorial quality gate on the final article.
+
+    Must run AFTER compute_publish_ready_status — its publish_ceiling acts
+    as a hard cap that the computed status cannot exceed. This catches
+    issues earlier scoring layers miss: internal pipeline language,
+    malformed headings, repeated paragraphs, generic filler intros, and
+    (for recommendation articles) missing/duplicate "Best for" entries.
+    """
+    from blogagent.tools.article_quality_gate import run_article_quality_gate  # noqa: PLC0415
+
+    result = run_article_quality_gate(
+        article_markdown=state.draft,
+        is_recommendation=state.is_recommendation,
+        requested_count=state.requested_count,
+        candidate_pack=state.candidate_pack,
+    )
+    state.article_quality_gate_result = result.model_dump()
+    _event(
+        state,
+        f"article_quality_gate: score={result.score} passes={result.passes} "
+        f"ceiling={result.publish_ceiling} defects={len(result.defects)}",
+    )
+    if not result.passes:
+        for defect in result.defects:
+            if defect.severity in ("high", "medium"):
+                _warn(state, f"article_quality_gate: {defect.message}")
+
+    # Apply the ceiling as a hard cap on the already-computed publish status.
+    current = state.publish_ready_status or "draft_only_not_publish_ready"
+    current_rank = _PUBLISH_STATUS_RANK.get(current, 0)
+    ceiling_rank = _PUBLISH_STATUS_RANK.get(result.publish_ceiling, 2)
+    if ceiling_rank < current_rank:
+        _warn(
+            state,
+            f"article_quality_gate: downgraded publish status from {current} "
+            f"to {result.publish_ceiling} ({result.summary})",
+        )
+        state.publish_ready_status = result.publish_ceiling
     return state
 
 
