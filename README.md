@@ -8,6 +8,29 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 
 ---
 
+## About This Project
+
+BlogAgent is an internal editorial drafting workflow for producing copy-paste-ready
+blog drafts — not an autopublishing system. It combines:
+
+- **query contracts** that lock the requested topic, count, and answer type
+  before any drafting begins
+- **tone profiles** that adjust voice without ever changing the underlying
+  contract
+- **source-aware research**, with every factual claim tied back to a scored,
+  extracted source
+- **candidate validation**, so recommendation lists are built from a vetted
+  ledger of real entities rather than free-form generation
+- **reviewer/revision agents** that audit drafts against the locked contract
+  and candidate pack, and can trigger targeted repair or full rewrite
+- **final answer contracts** that are the single source of truth for whether
+  an article is copy-ready, needs light review, or needs revision
+
+The output of a run is always a draft for a human editor to review and adapt —
+BlogAgent does not publish, post, or send anything on its own.
+
+---
+
 ## Implementation Status
 
 | Layer | Status |
@@ -859,3 +882,30 @@ tests/        Pytest test suite
 docs/         Architecture, eval plan, limitations
 examples/     Sample outputs and run traces
 ```
+
+---
+
+## Pre-Public Release Checklist
+
+Before making this repository public, confirm all of the following:
+
+- [ ] `uv run pytest` (or `.venv/bin/python -m pytest`) passes with no failures
+- [ ] `uv run ruff check .` passes with no errors
+- [ ] `uv run python -m blogagent.evals.runner` runs cleanly
+- [ ] `git diff --check` reports no whitespace errors
+- [ ] No secrets in tracked files — grep for API keys, tokens, and passwords:
+      `git grep -niE '(api[_-]?key|secret|token|password)\s*=\s*["'"'"'][^"'"'"' ]+'`
+- [ ] No `.env` or `.env.*` files (other than `.env.example`) are tracked:
+      `git ls-files | grep -E '\.env'`
+- [ ] `.env.example` contains placeholders only — no real keys or URLs
+- [ ] All API keys referenced in code are read from environment variables,
+      never hardcoded or committed
+- [ ] No client-side/browser code reads or exposes API keys
+- [ ] If any key was ever committed (even in history), rotate it at the
+      provider before/after making the repo public — removing it from a
+      future commit does not undo prior exposure
+- [ ] No local absolute paths (e.g. `/Users/...`) or personal data in tracked
+      files: `git grep -n '/Users/'`
+- [ ] No `logs/`, `runs/`, `outputs/`, `debug/`, or `*.log` files are tracked
+
+---

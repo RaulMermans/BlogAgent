@@ -239,3 +239,26 @@ def test_evidence_limited_pack_below_minimum_count_requires_enrichment():
     assert report.mode == "evidence_limited"
     assert report.passes is False
     assert report.repair_action == "enrich_search"
+
+
+# ---------------------------------------------------------------------------
+# Generic category/buying-guide phrases must never lock as specific products
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_pack_never_locks_invalid_specific_products():
+    """A generic phrase like "Best Luxury Watches" must be caught as invalid
+    even though "Tissot PRX Quartz" and "Seiko 5 Sports" are valid named products."""
+    items = [
+        _item("Tissot PRX Quartz", 0),
+        _item("Seiko 5 Sports", 1),
+        _item("Best Luxury Watches", 2),
+    ]
+    pack = _pack(items, requested=3, status="exact")
+    report = build_candidate_pack_quality_report(pack, _contract(3, strictness="standard"))
+
+    assert report.passes is False
+    assert "Best Luxury Watches" in report.invalid_items
+    assert report.mode == "failed"
+    assert report.publish_ceiling == "draft_only_not_publish_ready"
+    assert report.repair_action == "repair_candidates"

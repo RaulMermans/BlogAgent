@@ -136,10 +136,12 @@ def generate_outline(
     writer_handoff: dict | None = None,
     locked_skeleton: str = "",
     tone_profile: dict | None = None,
+    query_contract: dict | None = None,
 ) -> LLMResult:
     """Return a structured blog outline grounded in the evidence table."""
+    task_type = (query_contract or {}).get("task_type", "unknown")
     if not _use_llm():
-        return _mock_llm_result(_mock_outline(topic, evidence_table, is_recommendation))
+        return _mock_llm_result(_mock_outline(topic, evidence_table, is_recommendation, task_type))
 
     evidence_summary = _format_evidence(evidence_table, source_scores)
     if is_recommendation:
@@ -165,12 +167,17 @@ def generate_outline(
         output_model=OutlineOutput,
     )
     if result.is_mock:
-        return _fallback_llm_result(_mock_outline(topic, evidence_table, is_recommendation), result)
+        return _fallback_llm_result(
+            _mock_outline(topic, evidence_table, is_recommendation, task_type), result
+        )
     return result
 
 
 def _mock_outline(
-    topic: str, evidence_table: list[EvidenceItem], is_recommendation: bool = False
+    topic: str,
+    evidence_table: list[EvidenceItem],
+    is_recommendation: bool = False,
+    task_type: str = "unknown",
 ) -> OutlineOutput:
     keywords = [w.lower() for w in topic.split()[:3] if len(w) > 3]
     if is_recommendation:
@@ -185,6 +192,22 @@ def _mock_outline(
             title=f"Best {topic}: A Source-Grounded Guide",
             sections=sections,
             target_word_count=1200,
+            seo_keywords=keywords or [topic.lower()],
+        )
+    if task_type == "how_to":
+        sections = [
+            "Introduction",
+            "Step 1: Know What You're Looking For",
+            "Step 2: Compare Your Options",
+            "Step 3: Test and Decide",
+            "Key Facts",
+            "Conclusion",
+        ]
+        title = topic[:1].upper() + topic[1:] if topic else topic
+        return OutlineOutput(
+            title=title,
+            sections=sections,
+            target_word_count=900,
             seo_keywords=keywords or [topic.lower()],
         )
     sections = ["Introduction", "Key Facts", "Recent Developments", "Conclusion"]
@@ -240,6 +263,7 @@ def write_article_draft(
                 query_contract=query_contract or {},
                 evidence_limited_mode=evidence_limited_mode,
                 candidate_pack=candidate_pack,
+                task_type=(query_contract or {}).get("task_type", "unknown"),
             )
         )
 
@@ -302,6 +326,7 @@ def write_article_draft(
                 query_contract=query_contract or {},
                 evidence_limited_mode=evidence_limited_mode,
                 candidate_pack=candidate_pack,
+                task_type=(query_contract or {}).get("task_type", "unknown"),
             ),
             result,
         )
@@ -318,6 +343,7 @@ def _mock_draft(
     query_contract: dict | None = None,
     evidence_limited_mode: bool = False,
     candidate_pack: dict | None = None,
+    task_type: str = "unknown",
 ) -> DraftOutput:
     """Generate substantive mock prose using the outline and evidence."""
     if is_recommendation:
@@ -369,6 +395,41 @@ def _mock_draft(
             f"Readers seeking further depth should consult the primary sources cited."
         ),
     }
+
+    if task_type == "how_to":
+        topic_sentence = topic[:1].upper() + topic[1:] if topic else topic
+        mock_body = {
+            **mock_body,
+            "Introduction": (
+                f"{topic_sentence} comes down to a handful of practical decisions. "
+                f"This guide walks through the process step by step, drawing on the "
+                f"available source material so each recommendation is grounded in evidence."
+            ),
+            "Step 1: Know What You're Looking For": (
+                "Start by writing down your priorities — budget, intended use, and any "
+                "must-have features. Settling these up front keeps the rest of the "
+                "process focused and saves time later."
+            ),
+            "Step 2: Compare Your Options": (
+                "Line up the candidates that meet your priorities and compare them "
+                "side by side. Reviews, comparison guides, and the source material "
+                "referenced below can help narrow a long list down to a short one."
+            ),
+            "Step 3: Test and Decide": (
+                "Where possible, try before you commit — a sample, a trial, or an "
+                "in-person look can reveal details that descriptions alone miss. "
+                "Pick the option that best matches the priorities you started with."
+            ),
+            "Key Facts": (
+                f"A few facts are worth keeping in mind when thinking about {topic}. "
+                f"Multiple sources converge on the practical factors that matter most."
+            ),
+            "Conclusion": (
+                f"Working through these steps turns a decision about {topic} into a "
+                f"manageable process. Revisit your priorities if nothing on the "
+                f"shortlist feels right — it's better to keep looking than to settle."
+            ),
+        }
 
     for section in outline.sections:
         lines.append(f"## {section}")

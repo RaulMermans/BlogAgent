@@ -244,6 +244,64 @@ class TestEntityCandidateCleanlinessGate:
 
 
 # ---------------------------------------------------------------------------
+# Watch-topic candidates: bylines, nav/heading residue
+# ---------------------------------------------------------------------------
+
+
+def _watch_contract(count: int = 5):
+    return build_query_contract(
+        f"{count} best affordable luxury watches",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=count,
+    )
+
+
+class TestWatchCandidateCleanlinessGate:
+    def setup_method(self):
+        self.contract = _watch_contract(5)
+
+    def test_watch_candidate_gate_rejects_author_person(self):
+        """A reviewer byline ("Written By John Smith...") must not be locked as a product."""
+        cand = EntityCandidate(
+            raw_mention="John Smith",
+            canonical_name="John Smith",
+            name="John Smith",
+            entity_type="specific_product",
+            usable=True,
+            clean_name_score=0.9,
+            evidence_score=0.8,
+            evidence_spans=[
+                "Written By John Smith, our senior watch reviewer covers affordable "
+                "luxury picks."
+            ],
+            supported_context=["watches"],
+        )
+        result = _apply_cleanliness_gate_v2(cand, self.contract)
+        assert result.usable is False
+        assert result.entity_type == "person"
+        assert "byline" in (result.rejection_reason or "").lower()
+
+    def test_watch_candidate_gate_rejects_navigation_and_noise(self):
+        """A heading/navigation fragment like "How To Choose The Best Watch" must be rejected."""
+        name = "How To Choose The Best Watch"
+        cand = EntityCandidate(
+            raw_mention=name,
+            canonical_name=name,
+            name=name,
+            entity_type="specific_product",
+            usable=True,
+            clean_name_score=score_clean_candidate_name(name),
+            evidence_score=0.8,
+            evidence_spans=["How to choose the best watch for everyday wear."],
+            supported_context=["watches"],
+        )
+        result = _apply_cleanliness_gate_v2(cand, self.contract)
+        assert result.usable is False
+        assert "clean_name_score" in (result.rejection_reason or "")
+
+
+# ---------------------------------------------------------------------------
 # Source type propagation
 # ---------------------------------------------------------------------------
 

@@ -648,6 +648,7 @@ def generate_outline(state: BlogRunState) -> BlogRunState:
         writer_handoff=state.writer_handoff,
         locked_skeleton=locked_skeleton,
         tone_profile=state.tone_profile,
+        query_contract=state.query_contract,
     )
     from blogagent.workflow.state import BlogOutline  # noqa: PLC0415
 

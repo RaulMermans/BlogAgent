@@ -150,3 +150,29 @@ def test_final_contract_blocks_below_minimum_pack():
     repaired = repair_locked_recommendation_article("# 7 Best Parfums", pack, _contract())
     contract = _final_contract(repaired.repaired_markdown, 2, 0, "failed")
     assert contract.publish_status == "draft_only_not_publish_ready"
+
+
+def test_revision_repairs_extra_recommendation_section():
+    """An article with all locked candidates PLUS an extra, unlocked recommendation
+    section must have that extra section removed by repair."""
+    pack = _pack(3)
+    article = (
+        "# 3 Recommended Options for Parfums for Summer\n\n"
+        "The available evidence supported 3 validated options, rather than the 7 "
+        "originally requested.\n\n"
+        "## Quick Picks\n\n- Perfume 1\n- Perfume 2\n- Perfume 3\n\n"
+        "## 1. Perfume 1\n\nDetail for Perfume 1.\n\n"
+        "## 2. Perfume 2\n\nDetail for Perfume 2.\n\n"
+        "## 3. Perfume 3\n\nDetail for Perfume 3.\n\n"
+        "## 4. Mystery Watch X\n\n"
+        "This recommendation was never in the locked candidate table.\n\n"
+        "## Final Takeaway\n\nTakeaway."
+    )
+    result = repair_locked_recommendation_article(article, pack, _contract())
+    assert result.repair_applied is True
+    assert "Mystery Watch X" not in result.repaired_markdown
+    assert "## Final Takeaway" in result.repaired_markdown
+
+    audit = audit_writer_output(result.repaired_markdown, None, pack, _contract())
+    assert audit.detail_sections_count == 3
+    assert audit.passes_locked_structure is True

@@ -553,6 +553,25 @@ _LEAKED_PIPELINE_NOTES_ARTICLE = """# Best Running Shoes for Daily Training
 Either shoe rewards consistent training with reliable comfort and durability over time.
 """
 
+_BROKEN_QUOTE_ARTICLE = """# Best Running Shoes for Daily Training
+
+These shoes are built for runners who want consistent comfort and durability across long miles.
+
+## Quick Picks
+
+- Shoe One — best for cushioned long runs
+- Shoe Two — best for speed days
+
+## The Standout Picks
+
+One tester said, "This shoe felt like running on clouds from the very first mile and kept that
+comfort through marathon training.
+
+## Final Takeaway
+
+Either shoe rewards consistent training with reliable comfort and durability over time.
+"""
+
 
 class TestPublishabilityStructuralFloor:
     """A perfect score must be impossible when the article has structural defects —
@@ -629,3 +648,19 @@ class TestPublishabilityStructuralFloor:
         )
         assert result.polish_required is True
         assert result.publish_ready is False
+
+    def test_broken_quote_guard(self):
+        """A paragraph with an unclosed quotation mark (truncated source quote)
+        must be flagged as a structural defect."""
+        result = evaluate_publishability(
+            article_markdown=_BROKEN_QUOTE_ARTICLE,
+            topic="best running shoes for daily training",
+            is_recommendation=True,
+            selected_skills=[],
+            source_quality_scores=[_HIGH_QUALITY_SOURCE],
+            evidence_sufficiency=None,
+        )
+        structural_defects = [d for d in result.defects if d.type == "structural_defect"]
+        assert structural_defects
+        assert structural_defects[0].severity == "high"
+        assert "quotation mark" in structural_defects[0].message.lower()

@@ -1,5 +1,10 @@
 import streamlit as st
 
+from blogagent.tools.article_presentation import (
+    get_publish_status_label,
+    get_visible_article_markdown,
+    is_evidence_report_article,
+)
 from blogagent.workflow.graph import run_pipeline, validate_final_state
 
 st.set_page_config(page_title="BlogAgent", layout="wide")
@@ -43,28 +48,46 @@ tone_ids = {
 }
 
 if st.button("Run pipeline") and topic.strip():
+    # Clear any results shown for a previous topic before starting a new run,
+    # so a failed/blocked run never leaves a stale article or status visible.
+    for key in ("last_run_state", "last_run_topic"):
+        st.session_state.pop(key, None)
+
     with st.spinner("Running pipeline..."):
         state = run_pipeline(topic.strip(), tone_profile_id=tone_ids[tone_label])
 
+    st.session_state["last_run_state"] = state
+    st.session_state["last_run_topic"] = topic.strip()
+
+if "last_run_state" in st.session_state:
+    state = st.session_state["last_run_state"]
     errors = validate_final_state(state)
 
     if errors:
         st.error("Validation errors:\n" + "\n".join(f"- {e}" for e in errors))
     elif state.final_article_package:
         pkg = state.final_article_package
+        visible_markdown = get_visible_article_markdown(pkg.article_markdown)
+        status_label = get_publish_status_label(state.publish_ready_status, pkg.article_markdown)
+
         st.success(f"Pipeline complete. Run ID: `{pkg.run_id}`")
         if state.tone_profile:
             st.caption(f"Tone: {state.tone_profile.get('label', 'Auto')}")
-        if state.publish_ready_status == "publish_ready_with_editorial_review":
-            st.warning("Ready with editorial review: light source coverage.")
-        elif state.publish_ready_status == "draft_only_not_publish_ready":
-            st.error("Draft only: the article has unresolved contract issues.")
+
+        if is_evidence_report_article(pkg.article_markdown):
+            st.info(f"Status: {status_label}")
+        elif state.publish_ready_status == "publish_ready":
+            st.success(f"Status: {status_label}")
+        elif state.publish_ready_status == "publish_ready_with_editorial_review":
+            st.warning(f"Status: {status_label}")
+        else:
+            st.error(f"Status: {status_label}")
 
         col1, col2 = st.columns([2, 1])
 
         with col1:
             st.subheader("Article")
-            st.markdown(pkg.article_markdown)
+            st.markdown(visible_markdown)
 
         with col2:
             with st.expander("Sources", expanded=True):
@@ -82,5 +105,6 @@ if st.button("Run pipeline") and topic.strip():
             with st.expander("Revision summary"):
                 st.write(pkg.revision_summary)
 
-            with st.expander("Raw JSON"):
+            with st.expander("Debug / Raw JSON"):
+                st.caption(f"Internal publish_ready_status: `{state.publish_ready_status}`")
                 st.json(pkg.model_dump())

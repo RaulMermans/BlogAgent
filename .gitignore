@@ -12,6 +12,8 @@ build/
 
 # Environment
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 env/
@@ -26,6 +28,16 @@ coverage.xml
 
 # Streamlit
 .streamlit/
+
+# Vercel
+.vercel
+
+# Logs, run output, and debug artifacts
+*.log
+logs/
+runs/
+outputs/
+debug/
 
 # macOS
 .DS_Store

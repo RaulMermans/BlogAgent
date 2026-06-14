@@ -86,6 +86,16 @@ _FASHION_BRAND_NAMES: frozenset[str] = frozenset(
         "calvin klein",
         "levi's",
         "levis",
+        "burberry",
+        "cartier",
+        "celine",
+        "chanel",
+        "chloe",
+        "louis vuitton",
+        "gucci",
+        "prada",
+        "hermes",
+        "dior",
     }
 )
 

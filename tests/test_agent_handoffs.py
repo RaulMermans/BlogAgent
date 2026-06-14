@@ -110,6 +110,24 @@ def test_unknown_structured_entity_creates_high_defect():
     assert any(defect.type == "unknown_recommendation" for defect in review.defects)
 
 
+def test_reviewer_vetoes_invalid_candidate_pack():
+    """An article that drops a locked candidate and substitutes an unknown
+    recommendation must be vetoed by the reviewer with a non-passing revision mode."""
+    pack = _pack(3)
+    article = _article(pack, omit_last=True).replace(
+        "## Buying or Choosing Tips",
+        "## 3. Mystery Watch X\n\n"
+        "This recommendation was never in the locked candidate table.\n\n"
+        "## Buying or Choosing Tips",
+    )
+    writer = audit_writer_output(article, None, pack, _contract())
+    review = build_review_packet(article, writer, pack, _contract(), None, None)
+    assert review.passes is False
+    assert any(defect.type == "missing_locked_candidate" for defect in review.defects)
+    assert "c3" in review.missing_candidate_ids
+    assert review.required_revision_mode in {"targeted_repair", "full_rewrite"}
+
+
 def test_revision_plan_targets_exact_defects_and_preserves_ids():
     pack = _pack()
     article = _article(pack, omit_last=True)

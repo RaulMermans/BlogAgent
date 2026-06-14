@@ -47,6 +47,10 @@ _KNOWN_BRANDS: frozenset[str] = frozenset(
         "orient",
         "citizen",
         "longines",
+        "oris",
+        "cartier",
+        "tudor",
+        "tag heuer",
         "sony",
         "bose",
         "apple",
@@ -305,5 +309,13 @@ class GenericProductAdapter(DomainAdapter):
         if first.lower() in {"best", "top", "affordable", "budget", "luxury", "under"}:
             return False
         has_model_token = any(_MODEL_TOKEN_RE.match(w.strip(".,;:()")) for w in words[1:])
-        has_capitalized_second = len(words) >= 2 and words[1][0].isupper()
-        return has_model_token or has_capitalized_second
+        if has_model_token:
+            return True
+        # A bare two-word "Capitalized Capitalized" pair without a model token
+        # (digits, hyphens, version numbers) is indistinguishable from a person's
+        # name (e.g. "Paul Altieri") and must not be accepted as a product model.
+        # Require at least three capitalized words for the generic fallback.
+        if len(words) < 3:
+            return False
+        has_capitalized_second = words[1][0].isupper()
+        return has_capitalized_second

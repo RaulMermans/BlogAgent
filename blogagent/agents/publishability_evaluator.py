@@ -210,6 +210,12 @@ def evaluate_publishability(
         structural_issues.append(
             f"{len(not_mentioned)} 'Source: Not explicitly mentioned' line(s) leaked through"
         )
+    broken_quotes = _find_broken_quotes(article_markdown)
+    if broken_quotes:
+        structural_issues.append(
+            f"{len(broken_quotes)} paragraph(s) contain an unclosed quotation mark "
+            "(likely a truncated source quote)"
+        )
     if structural_issues:
         defects.append(
             PublishabilityDefect(
@@ -347,7 +353,10 @@ def evaluate_publishability(
             score -= 20
 
     # --- 6. Fragrance sensory detail ---
-    if is_fragrance:
+    # Sensory/note language is only expected when the article is recommending
+    # specific fragrance products. A fragrance how-to/explainer doesn't describe
+    # specific scents and shouldn't be penalized for lacking note terminology.
+    if is_fragrance and is_recommendation:
         sensory_count = sum(1 for t in _FRAGRANCE_SENSORY_TERMS if t in lower)
         lifestyle_count = sum(1 for t in _LIFESTYLE_CONTEXT_TERMS if t in lower)
         if sensory_count < 3:
@@ -498,6 +507,27 @@ def evaluate_publishability(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _find_broken_quotes(markdown: str) -> list[str]:
+    """Find paragraphs with an unmatched quotation mark.
+
+    An odd number of straight double-quotes, or a mismatched count of opening
+    vs. closing smart quotes, usually means a source quote was truncated when
+    copied into the draft (e.g. a quote that opens but never closes).
+    """
+    no_sources = _SOURCE_SECTION_RE.split(markdown)[0]
+    broken: list[str] = []
+    for para in re.split(r"\n\n+", no_sources):
+        para = para.strip()
+        if not para or para.startswith("#"):
+            continue
+        straight = para.count('"')
+        opening_smart = para.count("“")
+        closing_smart = para.count("”")
+        if straight % 2 == 1 or opening_smart != closing_smart:
+            broken.append(para[:80])
+    return broken
 
 
 def _find_repeated_paragraphs(markdown: str) -> list[str]:

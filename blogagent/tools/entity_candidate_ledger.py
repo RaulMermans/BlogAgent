@@ -91,6 +91,36 @@ _SOCIAL_RESIDUE: tuple[str, ...] = (
 # Price pattern
 _PRICE_RE = re.compile(r"\$\d+|\d+\s*usd|\d+\s*eur|\d+\s*gbp", re.IGNORECASE)
 
+# Calendar months — used to reject date-shaped candidates (e.g. "January 8th")
+_MONTH_NAMES: frozenset[str] = frozenset(
+    {
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    }
+)
+_DATE_DAY_RE = re.compile(r"^\d{1,2}(st|nd|rd|th)?,?$")
+
+# Phrases that, when found near a candidate name in source text, indicate the
+# candidate is a person's byline/author attribution rather than a product.
+_BYLINE_MARKERS: tuple[str, ...] = (
+    "written by",
+    "reviewed by",
+    "edited by",
+    "posted by",
+    "by ",
+    "founder",
+    "co-founder",
+    "ceo",
+    "chief executive",
+    "author",
+    "contributor",
+    "journalist",
+    "expert reviewer",
+    "staff writer",
+    "correspondent",
+    "editor",
+)
+
 # Stopwords for density check
 _STOPWORDS: frozenset[str] = frozenset(
     {
@@ -443,11 +473,30 @@ def _apply_cleanliness_gate_v2(
     if not requires_candidate_ledger(query_contract):
         return candidate
 
+    name = candidate.canonical_name or candidate.raw_mention
+
+    # --- Universal identity checks: apply regardless of strictness ---
+    if _looks_like_date(name):
+        return candidate.model_copy(
+            update={
+                "usable": False,
+                "entity_type": "date",
+                "rejection_reason": "looks like a calendar date, not a product",
+            }
+        )
+    byline_reason = _looks_like_person_byline(name, candidate.evidence_spans)
+    if byline_reason:
+        return candidate.model_copy(
+            update={
+                "usable": False,
+                "entity_type": "person",
+                "rejection_reason": byline_reason,
+            }
+        )
+
     # Invalid identities remain rejected in every policy mode.
     if not candidate.usable and query_contract.recommendation_strictness != "editorial":
         return candidate
-
-    name = candidate.canonical_name or candidate.raw_mention
 
     # --- Clean name score threshold ---
     if candidate.clean_name_score < 0.75:
@@ -649,6 +698,46 @@ def _same_candidate_identity(
         return False
     spans = " ".join(left.evidence_spans + right.evidence_spans).lower()
     return all(token in spans for token in longer)
+
+
+def _looks_like_date(name: str) -> bool:
+    """Return True if name looks like a calendar date (e.g. "January 8th")."""
+    words = name.lower().strip(" .,").split()
+    if len(words) < 2:
+        return False
+    if words[0].strip(".,") not in _MONTH_NAMES:
+        return False
+    return bool(_DATE_DAY_RE.match(words[1].strip(".,")))
+
+
+def _looks_like_person_byline(name: str, evidence_spans: list[str]) -> str | None:
+    """Return a rejection reason if name appears to be a person/author byline.
+
+    A candidate that is shaped like "Firstname Lastname" (2-3 capitalized
+    words, no digits/model markers) and appears in source text right next to
+    byline/attribution language is an author credit, not a product.
+    """
+    words = name.split()
+    if not (2 <= len(words) <= 3):
+        return None
+    if any(re.search(r"[\d&/+]", word) for word in words):
+        return None
+    if not all(word[:1].isupper() for word in words):
+        return None
+    name_lower = name.lower()
+    for span in evidence_spans:
+        span_lower = span.lower()
+        idx = span_lower.find(name_lower)
+        if idx == -1:
+            continue
+        window = span_lower[max(0, idx - 60) : idx + len(name_lower) + 60]
+        for marker in _BYLINE_MARKERS:
+            if marker in window:
+                return (
+                    f"byline/author attribution detected ('{marker.strip()}') — "
+                    "not a product"
+                )
+    return None
 
 
 def _detect_prose_fragment(name: str) -> str | None:

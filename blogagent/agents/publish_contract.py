@@ -46,6 +46,7 @@ class PublishContractResult(BaseModel):
     score_cap: Optional[int]  # None = no cap; int = maximum allowed score
     defects: list[ContractDefect]
     summary: str
+    failure_reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +476,11 @@ def check_publish_contract(
             )
 
     # --- 5. Weak source dominance ---
-    if source_quality_scores:
+    # This check is framed around "core recommendations" and only matters when
+    # the article is presenting source-backed picks. A how-to/explainer article
+    # is not making recommendations from these sources, so low source quality
+    # there is not a publish-blocking defect.
+    if is_recommendation and source_quality_scores:
         low = sum(1 for s in source_quality_scores if s.get("quality") == "low")
         total = len(source_quality_scores)
         if total > 0 and low / total > 0.6:
@@ -492,7 +497,10 @@ def check_publish_contract(
             )
 
     # --- 6. Fragrance sensory detail ---
-    if is_fragrance:
+    # Sensory detail (scent families, notes, mood) is only required when the
+    # article is recommending specific fragrance products. A fragrance how-to
+    # guide does not describe specific scents and should not be penalized for it.
+    if is_fragrance and is_recommendation:
         sensory_count = _count_sensory_terms(article_markdown)
         if sensory_count < 3:
             defects.append(
@@ -613,10 +621,26 @@ def check_publish_contract(
     effective_score = min(score, score_cap) if score_cap is not None else score
 
     # --- Determine status ---
+    # Invariant: if passes=False, either `defects` is non-empty or
+    # `failure_reason` explains why — never both empty (otherwise downstream
+    # callers see a "draft only" status alongside a "Contract passed" summary).
     high_defects = [d for d in defects if d.severity == "high"]
-    if high_defects or effective_score < _PUBLISH_READY_WITH_WARNINGS_SCORE:
+    failure_reason: Optional[str] = None
+    if high_defects:
         status: ContractStatus = "draft_only_not_publish_ready"
         passes = False
+        failure_reason = high_defects[0].message
+    elif effective_score < _PUBLISH_READY_WITH_WARNINGS_SCORE:
+        status = "draft_only_not_publish_ready"
+        passes = False
+        if defects:
+            failure_reason = defects[0].message
+        else:
+            failure_reason = (
+                f"Publishability score {effective_score}/100 is below the "
+                f"{_PUBLISH_READY_WITH_WARNINGS_SCORE} threshold required for "
+                "publish-ready status."
+            )
     elif effective_score < _PUBLISH_READY_SCORE or evidence_limited_accepted or defects:
         status = "publish_ready_with_editorial_review"
         passes = True
@@ -625,8 +649,13 @@ def check_publish_contract(
         passes = True
 
     # --- Build summary ---
-    if not defects:
+    if not defects and not failure_reason:
         summary = f"Contract passed. Score: {effective_score}/100."
+    elif not defects:
+        summary = (
+            f"{status.replace('_', ' ').title()}. Score: {effective_score}/100. "
+            f"{failure_reason}"
+        )
     else:
         msgs = "; ".join(d.message[:80] for d in defects[:3])
         more = f" (+{len(defects) - 3} more)" if len(defects) > 3 else ""
@@ -642,6 +671,7 @@ def check_publish_contract(
         score_cap=score_cap,
         defects=defects,
         summary=summary,
+        failure_reason=failure_reason,
     )
 
 

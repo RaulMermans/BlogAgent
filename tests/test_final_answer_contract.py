@@ -760,6 +760,74 @@ class TestNotApplicablePath:
 
 
 # ---------------------------------------------------------------------------
+# Part G regressions
+# ---------------------------------------------------------------------------
+
+
+class TestPartGRegressions:
+    def test_final_answer_contract_blocks_count_mismatch(self):
+        """Quick Picks=2 but H1 and detail sections declare 3 → draft_only."""
+        article = (
+            "# 3 Recommended Options for Watches\n\n"
+            "## Quick Picks\n\n- Watch 1\n- Watch 2\n\n"
+            "## 1. Watch 1\n\nDetail.\n\n"
+            "## 2. Watch 2\n\nDetail.\n\n"
+            "## 3. Watch 3\n\nDetail.\n\n"
+        )
+        fac = _build(
+            article_markdown=article,
+            title="3 Recommended Options for Watches",
+            query_contract=_consumer_query_contract(3),
+            answer_count_snapshot=_snap(
+                requested=3, allowed=3, article=3, grounded=3, status="satisfied"
+            ),
+            candidate_ledger_summary=_ledger_quality(3, "strong"),
+        )
+        assert fac.publish_status == "draft_only_not_publish_ready"
+        assert any("quick picks" in r.lower() for r in fac.failure_reasons)
+
+    def test_how_to_guide_not_blocked_by_count_contract(self):
+        """A how-to/general_answer query with no requested_count must never be
+        blocked by recommendation count invariants."""
+        fac = build_final_answer_contract(
+            article_markdown="# How to Choose a Summer Perfume\n\nGuide content.\n",
+            title="How to Choose a Summer Perfume",
+            meta_description="",
+            answer_count_snapshot=None,
+            candidate_ledger_summary=None,
+            query_contract={
+                "task_type": "how_to",
+                "answer_entity_type": "general_answer",
+                "requested_count": None,
+                "domain": "beauty_fragrance",
+                "minimum_publishable_items": 1,
+            },
+            publish_contract={"status": "publish_ready"},
+            minimum_publishable_items=1,
+            is_recommendation=False,
+        )
+        assert fac.final_count_mode == "not_applicable"
+        assert fac.publish_status != "draft_only_not_publish_ready"
+        assert fac.failure_reasons == []
+
+    def test_publish_contract_false_requires_defect_or_reason(self):
+        """draft_only_not_publish_ready must always carry a failure reason —
+        a counted recommendation query with no answer_count_snapshot must not
+        silently default to draft_only with an empty failure_reasons list."""
+        fac = _build(
+            article_markdown=_article_exact(3),
+            title="3 Best Parfums for Summer",
+            answer_count_snapshot=None,
+            candidate_ledger_summary=_ledger(3),
+            publish_contract=None,
+        )
+        assert fac.publish_status == "draft_only_not_publish_ready"
+        assert fac.failure_reasons, (
+            "draft_only_not_publish_ready must always carry at least one failure reason"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Helper function unit tests
 # ---------------------------------------------------------------------------
 

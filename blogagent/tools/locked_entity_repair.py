@@ -65,6 +65,13 @@ def repair_locked_recommendation_article(
         repaired = _insert_after_h1(repaired, explanation)
         summaries.append("Added evidence-limited framing.")
 
+    repaired, removed_titles = _remove_extra_detail_sections(repaired, pack)
+    if removed_titles:
+        summaries.append(
+            "Removed recommendation section(s) not in the locked CandidatePack: "
+            + ", ".join(removed_titles[:3])
+        )
+
     for index, item in enumerate(pack.items, start=1):
         if _has_detail_heading(repaired, item):
             continue
@@ -83,8 +90,12 @@ def repair_locked_recommendation_article(
 
 
 def _repair_below_minimum(markdown: str, pack: CandidatePack) -> RepairResult:
+    # Only the fully-repaired output uses "Why This Is Not Publish-Ready" — the
+    # unrepaired skeleton's heading is the similarly worded but distinct
+    # "Why Not Publish-Ready" and still contains unfilled "[...]" placeholders
+    # that must not reach the visible article.
     lower = markdown.lower()
-    if "why this is not publish-ready" in lower or "why not publish-ready" in lower:
+    if "why this is not publish-ready" in lower:
         return RepairResult(repaired_markdown=markdown, repair_applied=False)
     candidates = "\n".join(f"- {_candidate_line(item)}" for item in pack.items)
     if not candidates:
@@ -92,7 +103,8 @@ def _repair_below_minimum(markdown: str, pack: CandidatePack) -> RepairResult:
     repaired = (
         f"# Evidence Report: Draft Only\n\n"
         "## What Was Searched\n\n"
-        "A bounded source search was evaluated against the query contract.\n\n"
+        "A bounded source search was run and each candidate was checked against "
+        "this article's requirements.\n\n"
         "## Validated Candidates Found\n\n"
         f"{candidates}\n\n"
         "## Why This Is Not Publish-Ready\n\n"
@@ -216,7 +228,61 @@ def _remaining_issues(markdown: str, pack: CandidatePack) -> list[str]:
         and not _has_limited_explanation(markdown)
     ):
         issues.append("Evidence-limited explanation is missing.")
+    extras = _extra_detail_section_titles(markdown, pack)
+    if extras:
+        issues.append(
+            "Article contains recommendation section(s) not in the locked CandidatePack: "
+            + ", ".join(extras[:3])
+        )
     return issues
+
+
+# Numbered H2/H3 "detail section" heading + body, up to the next heading or end of text.
+_NUMBERED_SECTION_RE = re.compile(
+    r"^#{2,3}\s+\d+[.)]\s+(.+?)\s*\n(.*?)(?=\n#{1,3}\s+|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _matches_pack_item(heading_norm: str, pack: CandidatePack) -> bool:
+    if not heading_norm:
+        return False
+    for item in pack.items:
+        for candidate in (_norm(item.display_name), _norm(item.canonical_name)):
+            if not candidate:
+                continue
+            if heading_norm == candidate:
+                return True
+            if len(heading_norm) > 5 and len(candidate) > 5 and (
+                heading_norm in candidate or candidate in heading_norm
+            ):
+                return True
+    return False
+
+
+def _extra_detail_section_titles(markdown: str, pack: CandidatePack) -> list[str]:
+    return [
+        match.group(1).strip()
+        for match in _NUMBERED_SECTION_RE.finditer(markdown)
+        if not _matches_pack_item(_norm(match.group(1).strip()), pack)
+    ]
+
+
+def _remove_extra_detail_sections(markdown: str, pack: CandidatePack) -> tuple[str, list[str]]:
+    """Remove numbered recommendation sections that do not match a locked candidate."""
+    removed: list[str] = []
+
+    def repl(match: re.Match) -> str:
+        heading_text = match.group(1).strip()
+        if _matches_pack_item(_norm(heading_text), pack):
+            return match.group(0)
+        removed.append(heading_text)
+        return ""
+
+    new_markdown = _NUMBERED_SECTION_RE.sub(repl, markdown)
+    if removed:
+        new_markdown = re.sub(r"\n{3,}", "\n\n", new_markdown)
+    return new_markdown, removed
 
 
 def _quick_picks_body(markdown: str) -> str:

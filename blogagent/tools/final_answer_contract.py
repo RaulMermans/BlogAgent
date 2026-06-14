@@ -315,15 +315,10 @@ def build_final_answer_contract(
                 f"{requested_count if requested_count is not None else 'unspecified'} requested"
             )
     elif count_status == "":
-        return FinalAnswerContract(
-            **common,
-            final_count_mode="not_applicable",
-            publish_status=_sanitise_status(
-                (publish_contract or {}).get("status", "draft_only_not_publish_ready")
-            ),
-            failure_reasons=[],
-            warning_reasons=warning_reasons,
+        failure_reasons.append(
+            "answer_count_snapshot.count_status is missing for a counted recommendation query"
         )
+        final_count_mode = "failed"
     else:
         failure_reasons.append(f"count_status={count_status!r}: unresolvable publish status")
         final_count_mode = "failed"

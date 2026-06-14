@@ -514,14 +514,41 @@ def _to_pack_item(candidate) -> CandidatePackItem:
     )
 
 
+# Trailing words that describe a product variant rather than identify it —
+# safe to drop from a heading once the core model name is established.
+_TRAILING_DESCRIPTOR_WORDS: frozenset[str] = frozenset(
+    {"everyday", "dress", "watch", "watches", "edition", "model", "version", "series"}
+)
+
+
+def _strip_trailing_descriptors(name: str) -> str:
+    """Drop trailing variant/descriptor words and duplicate words from a heading.
+
+    e.g. "Hamilton Khaki Field Field Watch" -> "Hamilton Khaki Field"
+         "Tissot PRX Quartz Everyday" -> "Tissot PRX Quartz"
+    Keeps at least two words so brand+model identity is preserved.
+    """
+    words = name.split()
+    while len(words) > 2:
+        last_lower = words[-1].lower().strip(".,;:")
+        if last_lower in _TRAILING_DESCRIPTOR_WORDS:
+            words.pop()
+            continue
+        if any(w.lower().strip(".,;:") == last_lower for w in words[:-1]):
+            words.pop()
+            continue
+        break
+    return " ".join(words)
+
+
 def _sanitize_display_name(display: str, canonical_fallback: str) -> str:
     """Strip debris from a display name so it can safely appear as an article heading.
 
     Falls back to canonical_fallback if the display name is unusable.
     """
     name = display.strip()
-    # Strip price debris
-    name = re.sub(r"\$\d+[\d,.]*\s*", "", name).strip()
+    # Strip price debris, including a leading "~" approximation marker
+    name = re.sub(r"~?\s*\$\d+[\d,.]*\s*", "", name).strip()
     # Strip trailing connectors like " which starts around", " right Photos"
     name = re.sub(
         r"\s+(?:which|that|right|photos?|specs?)\b.*$", "", name, flags=re.IGNORECASE
@@ -533,6 +560,8 @@ def _sanitize_display_name(display: str, canonical_fallback: str) -> str:
             name = name[:idx].strip()
     # Strip leading/trailing punctuation
     name = name.strip(" -–—,;:.")
+    # Drop trailing variant descriptors and duplicate words
+    name = _strip_trailing_descriptors(name)
     if not name or len(name) < 3:
         name = canonical_fallback.strip()
     # Final length guard

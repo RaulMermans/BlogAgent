@@ -116,3 +116,36 @@ def test_non_recommendation_is_not_applicable():
     pack = build_candidate_pack(contract, _ledger([]))
     assert pack.mode == "not_applicable"
     assert pack.items == []
+
+
+def test_watch_candidate_gate_normalizes_display_names():
+    """A messy raw mention with price/descriptor debris must be normalized for
+    the article heading, e.g. "Hamilton Khaki Field Field Watch ~$695" ->
+    "Hamilton Khaki Field"."""
+    contract = build_query_contract(
+        "1 best affordable luxury watch",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=1,
+    )
+    candidate = EntityCandidate(
+        candidate_id="cand-1",
+        raw_mention="Hamilton Khaki Field Field Watch ~$695",
+        canonical_name="Hamilton Khaki Field",
+        name="Hamilton Khaki Field",
+        entity_type="specific_product",
+        domain="consumer_products",
+        source_urls=["https://example.com/1"],
+        source_titles=["Source 1"],
+        source_quality="high",
+        source_type="editorial",
+        evidence_spans=["Hamilton Khaki Field is a popular affordable field watch."],
+        evidence_terms=["everyday wear"],
+        supported_context=["everyday wear"],
+        clean_name_score=0.95,
+        evidence_score=0.9,
+        candidate_basis="known_entity",
+        usable=True,
+    )
+    pack = build_candidate_pack(contract, _ledger([candidate]))
+    assert pack.items[0].display_name == "Hamilton Khaki Field"

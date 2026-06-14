@@ -52,6 +52,34 @@ class TestClearOutputFunction:
         # warnings-body should have its content cleared
         assert "warnings-body" in html
 
+    def test_ui_clears_stale_run_metadata(self):
+        """clearOutput must remove all dynamically injected per-run metadata rows
+        (Query Contract, Candidate Ledger, Final Answer Contract, etc.) from the
+        previous run, not just the visible article/stats containers — otherwise a
+        new run can show a mix of this run's article and a prior run's debug
+        metadata."""
+        html = _get_html_source()
+        clear_section = html[
+            html.find("function clearOutput") : html.find("document.addEventListener")
+        ]
+        expected_labels = [
+            "Editorial Skills",
+            "Editorial Polish",
+            "Query Contract",
+            "Recommendation Candidates",
+            "Enrichment Queries",
+            "Candidate Ledger",
+            "Draft Compliance",
+            "Answer Count Snapshot",
+            "Entity Audit",
+            "Final Answer Contract",
+        ]
+        for label in expected_labels:
+            assert f"'{label}'" in clear_section, f"clearOutput must remove stale '{label}' row"
+        assert ".meta-label" in clear_section
+        assert "el.closest('div')" in clear_section
+        assert "parent.remove()" in clear_section
+
 
 class TestDynamicBannerClassPresent:
     """All dynamically inserted banners must have class='dynamic-banner'."""
