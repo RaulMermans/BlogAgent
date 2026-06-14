@@ -74,8 +74,8 @@ def test_public_docs_do_not_expose_local_claude_paths():
     }
     forbidden = (
         ".claude/projects/" + "-Users-",
-        "/Users/" + "raulm/Desktop",
-        "Desktop/GitHub/" + "BlogAgent",
+        "/" + "Users/" + "raulm/Desktop",
+        "Desktop/" + "GitHub/" + "BlogAgent",
     )
 
     violations: list[str] = []
