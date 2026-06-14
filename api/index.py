@@ -27,6 +27,7 @@ Safety:
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from typing import Any
@@ -34,6 +35,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+
+from blogagent.tools.article_presentation import (
+    get_publish_status_label,
+    get_visible_article_markdown,
+)
 
 app = FastAPI(title="BlogAgent API", version="0.1.0")
 
@@ -61,6 +67,7 @@ class RunResponse(BaseModel):
     meta_description: str
     seo_keywords: list[str]
     article_markdown: str
+    visible_article_markdown: str = ""
     source_count: int
     claim_status_counts: dict[str, int]
     revision_count: int
@@ -261,6 +268,7 @@ def _run_topic(topic: str, tone_profile_id: str | None = None) -> RunResponse:
             meta_description="",
             seo_keywords=[],
             article_markdown="",
+            visible_article_markdown="",
             source_count=0,
             claim_status_counts={"supported": 0, "partially_supported": 0, "unsupported": 0},
             revision_count=0,
@@ -283,6 +291,7 @@ def _run_topic(topic: str, tone_profile_id: str | None = None) -> RunResponse:
         meta_description=pkg.meta_description,
         seo_keywords=list(pkg.seo_keywords),
         article_markdown=pkg.article_markdown,
+        visible_article_markdown=get_visible_article_markdown(pkg.article_markdown),
         source_count=len(pkg.source_list),
         claim_status_counts={
             "supported": report.supported_count,
@@ -366,7 +375,20 @@ def _run_topic(topic: str, tone_profile_id: str | None = None) -> RunResponse:
 
 
 def _build_app_html() -> str:
-    return """<!DOCTYPE html>
+    status_labels = {
+        status: get_publish_status_label(status)
+        for status in (
+            "publish_ready",
+            "publish_ready_with_editorial_review",
+            "publish_ready_with_warnings",
+            "draft_only_not_publish_ready",
+        )
+    }
+    evidence_report_label = get_publish_status_label(
+        "draft_only_not_publish_ready",
+        "# Evidence Report",
+    )
+    html = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -623,7 +645,7 @@ def _build_app_html() -> str:
 <body>
 <div class="container">
   <h1>BlogAgent</h1>
-  <p class="subtitle">Source-aware editorial blog post generator</p>
+  <p class="subtitle">Source-aware editorial draft generator</p>
 
   <!-- access-screen: visible by default; hidden after successful auth -->
   <div id="access-screen" class="form-card">
@@ -663,7 +685,7 @@ def _build_app_html() -> str:
         <option value="seo_practical">SEO Practical</option>
         <option value="minimalist">Minimalist</option>
       </select>
-      <button type="button" id="generateButton">Generate Blog Post</button>
+      <button type="button" id="generateButton">Generate Blog Draft</button>
     </div>
 
     <div id="status"></div>
@@ -682,7 +704,7 @@ def _build_app_html() -> str:
     </details>
 
     <section id="output-section" style="display:none;">
-      <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:1rem;">Generated Blog Post</h2>
+      <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:1rem;">Generated Blog Draft</h2>
       <div class="form-card">
         <div id="title-display" style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;"></div>
 
@@ -748,9 +770,35 @@ def _build_app_html() -> str:
 
 <script>
   const SECRET_KEY = 'blogagent_worker_secret';
+  const COPY_READY_STATUS_LABELS = __COPY_READY_STATUS_LABELS__;
+  const EVIDENCE_REPORT_LABEL = __EVIDENCE_REPORT_LABEL__;
   let auth_verified = false;
   let _lastResponse = null;
   let _lastTopic = "";
+
+  // User-facing labels include "Copy-ready after light review" and
+  // "Needs revision before use"; internal enum values remain in Raw JSON only.
+  function getCopyReadinessLabel(status, articleMarkdown) {
+    const firstLine = (articleMarkdown || '').trim().split('\\n')[0];
+    if (firstLine.startsWith('# Evidence Report')) return EVIDENCE_REPORT_LABEL;
+    return COPY_READY_STATUS_LABELS[status] || COPY_READY_STATUS_LABELS.draft_only_not_publish_ready;
+  }
+
+  function getVisibleUiText(value) {
+    let text = String(value || '');
+    Object.entries(COPY_READY_STATUS_LABELS)
+      .sort((a, b) => b[0].length - a[0].length)
+      .forEach(([status, label]) => { text = text.split(status).join(label); });
+    return text
+      .replaceAll('Publishability', 'Copy-readiness')
+      .replaceAll('publishability', 'copy-readiness')
+      .replaceAll('Publish-ready', 'Copy-ready')
+      .replaceAll('publish-ready', 'copy-ready')
+      .replaceAll('Publish ready', 'Copy-ready')
+      .replaceAll('publish ready', 'copy-ready')
+      .replaceAll('ready to publish', 'copy-ready after human review')
+      .replaceAll('before publishing', 'before use');
+  }
 
   function showAccessScreen(message) {
     document.getElementById('access-screen').style.display = 'block';
@@ -864,9 +912,9 @@ def _build_app_html() -> str:
     'Evaluating quality',
     'Revising if needed',
     'Final validation',
-    'Publishability evaluation',
+    'Copy-readiness check',
     'Editorial polish (if needed)',
-    'Packaging blog post',
+    'Packaging draft',
   ];
 
   let _wfTimer = null;
@@ -1063,7 +1111,7 @@ def _build_app_html() -> str:
       }
     }
 
-    // Step 13 (index 13): publishability evaluation
+    // Step 13 (index 13): copy-readiness check
     const pe = data.publishability_evaluation || {};
     const peStep = steps[13];
     if (peStep && pe.score !== undefined) {
@@ -1072,13 +1120,13 @@ def _build_app_html() -> str:
       if (pe.polish_required) {
         peStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
-        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (polish needed)';
+        if (txt) txt.textContent = 'Copy-readiness — score ' + pe.score + '/100 (light review needed)';
       } else if (pe.publish_ready) {
-        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (ready)';
+        if (txt) txt.textContent = 'Copy-readiness — score ' + pe.score + '/100 (copy-ready)';
       } else {
         peStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
-        if (txt) txt.textContent = 'Publishability — score ' + pe.score + '/100 (not ready)';
+        if (txt) txt.textContent = 'Copy-readiness — score ' + pe.score + '/100 (needs revision)';
       }
     }
 
@@ -1102,19 +1150,15 @@ def _build_app_html() -> str:
       const txt = pkgStep.querySelector('span:last-child');
       const icon = pkgStep.querySelector('.step-icon');
       if (pcData.status === 'publish_ready') {
-        if (txt) txt.textContent = 'Packaging blog post — publish ready';
+        if (txt) txt.textContent = 'Packaging draft — copy-ready';
       } else if (pcData.status === 'publish_ready_with_editorial_review' || pcData.status === 'publish_ready_with_warnings') {
         pkgStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
-        if (txt) {
-          txt.textContent = pcData.status === 'publish_ready_with_editorial_review'
-            ? 'Packaging blog post — ready with editorial review'
-            : 'Packaging blog post — publish ready with warnings';
-        }
+        if (txt) txt.textContent = 'Packaging draft — copy-ready after light review';
       } else {
         pkgStep.className = 'workflow-step warn';
         if (icon) icon.textContent = '⚠';
-        if (txt) txt.textContent = 'Packaging blog post — draft only';
+        if (txt) txt.textContent = 'Packaging draft — needs revision before use';
       }
     }
   }
@@ -1210,11 +1254,12 @@ def _build_app_html() -> str:
   }
 
   function renderOutput(data) {
-    const title = data.title || 'Untitled Blog Post';
+    const title = data.title || 'Untitled Blog Draft';
     const slug = data.slug || '';
     const metaDescription = data.meta_description || data.metaDescription || '';
     const seoKeywords = data.seo_keywords || data.seoKeywords || [];
     const articleMarkdown =
+      data.visible_article_markdown ||
       data.article_markdown ||
       data.articleMarkdown ||
       data.markdown ||
@@ -1283,12 +1328,13 @@ def _build_app_html() -> str:
     // Final Answer Contract — canonical status badge (takes precedence over older fields)
     const fac = data.final_answer_contract || {};
     const facStatus = fac.publish_status || contractStatus || pubStatus;
+    const copyReadinessLabel = getCopyReadinessLabel(facStatus, articleMarkdown);
     if (facStatus === 'publish_ready') {
-      addStat(statsRow, '✓ publish ready', 'ok');
+      addStat(statsRow, copyReadinessLabel, 'ok');
     } else if (facStatus === 'publish_ready_with_editorial_review' || facStatus === 'publish_ready_with_warnings') {
-      addStat(statsRow, 'ready with editorial review', 'warn');
+      addStat(statsRow, copyReadinessLabel, 'warn');
     } else if (facStatus === 'draft_only_not_publish_ready') {
-      addStat(statsRow, '✗ draft only', 'danger');
+      addStat(statsRow, copyReadinessLabel, 'danger');
     }
     if (fac.final_count_mode) {
       const modeColor = fac.final_count_mode === 'exact' ? 'ok' : fac.final_count_mode === 'evidence_limited' ? 'warn' : 'danger';
@@ -1455,18 +1501,13 @@ def _build_app_html() -> str:
       const isWarn = facData.publish_status === 'publish_ready_with_editorial_review' || facData.publish_status === 'publish_ready_with_warnings';
       const isDraft = facData.publish_status === 'draft_only_not_publish_ready';
       let cardStyle = '';
-      let headerText = '';
+      const headerText = getCopyReadinessLabel(facData.publish_status, articleMarkdown);
       if (isReady) {
         cardStyle = 'background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#166534;';
-        headerText = '✓ Final Answer Contract: Publish Ready';
       } else if (isWarn) {
         cardStyle = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;';
-        headerText = recommendationStrictness === 'editorial'
-          ? 'Ready with editorial review'
-          : 'Publish Ready with Review';
       } else {
         cardStyle = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;';
-        headerText = '✗ Final Answer Contract: Draft Only — Not Publish Ready';
       }
       facCard.style.cssText = cardStyle;
       const header = document.createElement('div');
@@ -1485,7 +1526,7 @@ def _build_app_html() -> str:
         facData.failure_reasons.slice(0, 3).forEach(r => {
           const p = document.createElement('p');
           p.style.margin = '0.1rem 0';
-          p.textContent = '• ' + r;
+          p.textContent = '• ' + getVisibleUiText(r);
           reasonsDiv.appendChild(p);
         });
         facCard.appendChild(reasonsDiv);
@@ -1496,7 +1537,7 @@ def _build_app_html() -> str:
         facData.warning_reasons.slice(0, 2).forEach(r => {
           const p = document.createElement('p');
           p.style.margin = '0.1rem 0';
-          p.textContent = '⚠ ' + r;
+          p.textContent = '⚠ ' + getVisibleUiText(r);
           warnDiv.appendChild(p);
         });
         facCard.appendChild(warnDiv);
@@ -1504,7 +1545,7 @@ def _build_app_html() -> str:
       document.getElementById('output-section').insertBefore(facCard, document.getElementById('output-section').firstChild);
     }
 
-    // Draft-only banner — shown when article is not publish-ready
+    // Revision banner — shown when the draft is not ready for use.
     const effectiveStatus = facData.publish_status || (pubContract && pubContract.status ? pubContract.status : pubStatus);
     if (queryContract.task_type === 'recommendation' && ledgerSummary.table_quality === 'not_required') {
       const consistencyBanner = document.createElement('div');
@@ -1519,16 +1560,18 @@ def _build_app_html() -> str:
       draftBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;font-weight:600;';
       const contractDefects = pubContract.defects || [];
       const highContractDefects = contractDefects.filter(d => d.severity === 'high');
-      const contractMsg = highContractDefects.length > 0 ? highContractDefects.map(d => d.message).slice(0, 2).join(' | ') : 'Article needs additional evidence or editorial review before publishing.';
-      draftBanner.textContent = 'Draft only: this article does not satisfy the query contract. Reason: ' + contractMsg;
+      const contractMsg = highContractDefects.length > 0
+        ? highContractDefects.map(d => getVisibleUiText(d.message)).slice(0, 2).join(' | ')
+        : 'Draft needs additional evidence or editorial review before use.';
+      draftBanner.textContent = 'Needs revision before use: this draft does not satisfy the query contract. Reason: ' + contractMsg;
       document.getElementById('output-section').insertBefore(draftBanner, document.getElementById('output-section').firstChild);
     } else if (effectiveStatus === 'publish_ready_with_editorial_review' || effectiveStatus === 'publish_ready_with_warnings') {
       const warnBanner = document.createElement('div');
       warnBanner.className = 'dynamic-banner';
       warnBanner.style.cssText = 'background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#854d0e;font-size:0.9rem;';
       warnBanner.textContent = recommendationStrictness === 'editorial'
-        ? 'Needs editorial review: light source coverage.'
-        : 'Review recommended before publishing.';
+        ? 'Copy-ready after light review: light source coverage.'
+        : 'Copy-ready after light review: review recommended before use.';
       document.getElementById('output-section').insertBefore(warnBanner, document.getElementById('output-section').firstChild);
     }
 
@@ -1554,7 +1597,7 @@ def _build_app_html() -> str:
         dccBanner.textContent = 'Draft failed candidate compliance: ' + dccAllowed + ' allowed candidates were available, but the article used only ' + dccRecommended + '.';
       } else {
         dccBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;';
-        dccBanner.textContent = 'Draft compliance issue: ' + (dccReason || 'candidate table not followed');
+        dccBanner.textContent = 'Draft compliance issue: ' + getVisibleUiText(dccReason || 'candidate table not followed');
       }
       document.getElementById('output-section').insertBefore(dccBanner, document.getElementById('output-section').firstChild);
     } else if (snapStatus === 'evidence_limited' && snapAllowed < (snapRequested || snapAllowed)) {
@@ -1575,7 +1618,7 @@ def _build_app_html() -> str:
       const fvBanner = document.createElement('div');
       fvBanner.className = 'dynamic-banner';
       fvBanner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;color:#b91c1c;font-size:0.9rem;';
-      const msgs = highDefects.map(d => d.message).join(' | ') || 'High-severity quality issues remain.';
+      const msgs = highDefects.map(d => getVisibleUiText(d.message)).join(' | ') || 'High-severity quality issues remain.';
       fvBanner.textContent = '⚠ Generated with unresolved quality issues: ' + msgs;
       document.getElementById('output-section').insertBefore(fvBanner, document.getElementById('output-section').firstChild);
     } else if (fvStatus === 'passed_with_warnings' && data.evidence_limited_count_accepted) {
@@ -1593,7 +1636,7 @@ def _build_app_html() -> str:
 
     if (data.warnings && data.warnings.length) {
       document.getElementById('warnings-details').style.display = '';
-      document.getElementById('warnings-body').textContent = data.warnings.join('\\n');
+      document.getElementById('warnings-body').textContent = data.warnings.map(getVisibleUiText).join('\\n');
     }
 
     document.getElementById('events-body').textContent = providerEvents.join('\\n') || '(none)';
@@ -1633,7 +1676,7 @@ def _build_app_html() -> str:
       traceList.innerHTML = '';
       runTrace.forEach(line => {
         const li = document.createElement('li');
-        li.textContent = line;
+        li.textContent = getVisibleUiText(line);
         if (line.startsWith('✓')) li.className = 'ok';
         else if (line.startsWith('⚠')) li.className = 'warn';
         else if (line.startsWith('✗')) li.className = 'blocked';
@@ -1656,20 +1699,23 @@ def _build_app_html() -> str:
 
   function copyMarkdown() {
     if (!_lastResponse) return;
-    navigator.clipboard.writeText(_lastResponse.article_markdown || '')
+    navigator.clipboard.writeText(
+      _lastResponse.visible_article_markdown || _lastResponse.article_markdown || ''
+    )
       .then(() => setStatus('Copied to clipboard.'))
       .catch(() => setStatus('Copy failed — use the raw JSON instead.'));
   }
 
   function downloadMd() {
     if (!_lastResponse) return;
-    const slug = _lastResponse.slug || _lastTopic.replace(/\\s+/g, '-').toLowerCase() || 'blog-post';
-    download(slug + '.md', _lastResponse.article_markdown || '', 'text/markdown');
+    const slug = _lastResponse.slug || _lastTopic.replace(/\\s+/g, '-').toLowerCase() || 'blog-draft';
+    const markdown = _lastResponse.visible_article_markdown || _lastResponse.article_markdown || '';
+    download(slug + '.md', markdown, 'text/markdown');
   }
 
   function downloadJson() {
     if (!_lastResponse) return;
-    const slug = _lastResponse.slug || _lastTopic.replace(/\\s+/g, '-').toLowerCase() || 'blog-post';
+    const slug = _lastResponse.slug || _lastTopic.replace(/\\s+/g, '-').toLowerCase() || 'blog-draft';
     download(slug + '.json', JSON.stringify(_lastResponse, null, 2), 'application/json');
   }
 
@@ -1728,6 +1774,10 @@ def _build_app_html() -> str:
 </script>
 </body>
 </html>"""
+    return (
+        html.replace("__COPY_READY_STATUS_LABELS__", json.dumps(status_labels))
+        .replace("__EVIDENCE_REPORT_LABEL__", json.dumps(evidence_report_label))
+    )
 
 
 # ---------------------------------------------------------------------------

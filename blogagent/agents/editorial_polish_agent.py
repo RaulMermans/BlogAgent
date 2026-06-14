@@ -80,7 +80,7 @@ def _mock_polish(
 
 _EDITORIAL_POLISH_PROMPT = """\
 You are a senior personal-blog editor. Your task is to polish this article so it is
-ready to publish with minimal human editing.
+copy-ready for human review with minimal editing.
 
 Publishability issues to address:
 {defect_summary}

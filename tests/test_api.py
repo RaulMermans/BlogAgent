@@ -896,9 +896,9 @@ def test_html_contains_output_section_id():
     assert 'id="output-section"' in response.text
 
 
-def test_html_output_section_has_generated_blog_post_heading():
+def test_html_output_section_has_generated_blog_draft_heading():
     response = client.get("/")
-    assert "Generated Blog Post" in response.text
+    assert "Generated Blog Draft" in response.text
 
 
 def test_html_contains_raw_json_pre():
@@ -1216,7 +1216,8 @@ def test_html_contains_all_workflow_stage_labels():
         "Evaluating quality",
         "Revising if needed",
         "Final validation",
-        "Packaging blog post",
+        "Copy-readiness check",
+        "Packaging draft",
     ]
     for stage in stages:
         assert stage in html, f"Stage label missing from HTML: {stage!r}"

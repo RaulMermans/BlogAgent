@@ -59,5 +59,5 @@ def test_below_minimum_skeleton_is_evidence_report_not_best_list():
         _contract(), _pack("below_minimum", 2), "summer parfums"
     )
     assert skeleton.startswith("# Evidence Report:")
-    assert "## Why Not Publish-Ready" in skeleton
+    assert "## Why This Needs Revision" in skeleton
     assert "## What Evidence Is Missing" in skeleton

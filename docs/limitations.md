@@ -127,12 +127,14 @@ Editorial skills are **prompt-injected text**, not autonomous agents or tool-exe
 
 Skills only affect the content of the system prompt sent to the LLM. Their benefit is entirely dependent on the LLM following the injected brief. In mock mode, skills are selected but have no visible effect (mock output is deterministic regardless of prompt content).
 
-## Publishability and Publish Contract
+## Copy-Readiness and Internal Publish Contract
 
-The publishability evaluator and publish contract are **heuristic layers**, not human editorial judgment:
+The editorial readiness evaluator and internal publish contract are **heuristic layers**,
+not human editorial judgment:
 
-- Publish-ready status does not guarantee the article is good enough to publish — it means it passed structured automated checks.
-- Human editorial review is always recommended before publishing any AI-generated content.
+- A copy-ready label does not guarantee the draft is factually correct or suitable for
+  publication; it means the draft passed structured automated checks.
+- Human editorial review is required before using or manually publishing any generated draft.
 - The publish contract uses word-count patterns, term lists, and phrase matching. It can be fooled by content that matches surface patterns without genuine quality.
 - Query-contract enforcement and product/entity classification are heuristic. They improve obvious failures but can miss aliases, flankers, niche brands, or unusually named products.
 - `publish_ready` does not mean the article is factually verified. It means it passed the automated pipeline checks including citation matching, quality evaluation, and publish contract heuristics.
@@ -163,7 +165,7 @@ Each domain adapter (`software_tools`, `finance`, `beauty_fragrance`, etc.) main
   truly want categories/types/essentials need wording that makes that category intent explicit.
 - Search snippets often do not contain structured entity lists — the adapter may fail to extract candidates even when the source clearly discusses the topic.
 - Finance content is educational only. The pipeline applies safety constraints (no buy/sell language, disclaimer required). This is enforced deterministically but cannot substitute for a licensed financial advisor.
-- Human review is required before publishing any recommendation or financial content.
+- Human review is required before using any recommendation or financial content.
 
 ## Candidate Ledger Failure Behavior
 
@@ -172,7 +174,7 @@ When the candidate ledger fails (usable_count < minimum_publishable_items):
 - The draft is produced with `evidence_limited_mode=True`, but the model may still introduce company/product names from training data rather than from evidence.
 - Draft compliance will reject these unsupported names, and the publish contract will block the article.
 - The final status will be `draft_only_not_publish_ready` with an informative failure reason.
-- The article is still returned in the API response for reference, but it is not publish-ready.
+- The draft is still returned in the API response for reference, but it needs revision.
 
 ## Structured Handoff and Locked Repair Limits
 
@@ -183,7 +185,7 @@ When the candidate ledger fails (usable_count < minimum_publishable_items):
   when evidence supports clear identity overlap.
 - Locked repair prioritizes contract preservation over elegance. Restored sections may be
   shorter because they use only attached evidence spans, terms, and context.
-- Repair cannot invent missing evidence and cannot make a below-minimum pack publish-ready.
+- Repair cannot invent missing evidence and cannot make a below-minimum pack copy-ready.
 - Tone profiles affect voice only. They never override count, candidate, citation, safety,
   or publish contracts.
 
@@ -212,7 +214,7 @@ For recommendation topics, the pipeline enforces candidate-bound drafting:
 - Using entities outside the allowed table is a compliance failure
 - Using fewer than the requested count when enough allowed candidates exist is `draft_candidate_compliance_failed`, not evidence-limited
 
-**Known gap:** Compliance matching is name-based (exact + containment + brand-word overlap). A live model that uses a product alias not captured in the allowed table may fail compliance even if the underlying product is the same. Human review should verify entity identity before publishing.
+**Known gap:** Compliance matching is name-based (exact + containment + brand-word overlap). A live model that uses a product alias not captured in the allowed table may fail compliance even if the underlying product is the same. Human review should verify entity identity before use.
 
 ## Recommendation Candidate Extraction
 
@@ -235,7 +237,7 @@ The recommendation extractor runs in two phases:
 
 **Post-draft audit** (`recommendation_audit`): Compares final article recommendations to the validated candidate table.
 - Model-introduced candidates are not automatically made usable; they must still match source evidence and pass candidate validation.
-- Human review is still recommended before publishing recommendation content, especially for commercial products.
+- Human review is required before using recommendation content, especially for commercial products.
 
 ## Enrichment Search
 
@@ -380,12 +382,13 @@ The optional second Tavily search pass is bounded by design:
 
 ---
 
-## Publishability Scoring
+## Editorial Readiness Scoring
 
 - The publishability score (0–100) is heuristic-based: it detects generic phrases, checks for sensory terms, and inspects structural patterns.
 - It is not a guarantee of editorial quality. It catches clear failures (content-mill intros, no sensory detail) but cannot judge taste, originality, or depth without LLM review.
 - A score of 80+ is a useful threshold but human review is still recommended before publication.
-- The publishability evaluator does not read competitor articles or know what constitutes a "good" fragrance review by industry standards — it applies fixed rules.
+- The internal `publishability_evaluator` does not read competitor articles or know what
+  constitutes a "good" fragrance review by industry standards; it applies fixed rules.
 
 ---
 

@@ -3,7 +3,7 @@
 > **Portfolio blurb:** BlogAgent is a hybrid deterministic/LLM editorial workflow that
 > turns a topic into a source-grounded, copy-paste-ready blog draft. Deterministic
 > Python code owns workflow order, schemas, validation, candidate locking, and the
-> final publish-status decision; a small number of LLM-backed agents handle research
+> final copy-readiness decision; a small number of LLM-backed agents handle research
 > synthesis, drafting, and revision inside those guardrails. The result is a draft a
 > human can review and lightly edit — with a visible research trace, a locked
 > candidate table for recommendation articles, and an explicit "copy-ready / needs
@@ -37,7 +37,7 @@ concrete:
 - Turn a topic into a researched, source-grounded draft with SEO metadata (title,
   slug, meta description, keywords).
 - Surface the research trail (sources, evidence table, candidate ledger, fact-check
-  report) so a human reviewer can verify claims before publishing.
+  report) so a human reviewer can verify claims before use.
 - For recommendation-style articles, guarantee the article can't silently invent or
   drop items from the validated candidate set.
 - Give a clear, user-facing signal — copy-ready, copy-ready after light review, or
@@ -54,8 +54,8 @@ boring, make the evidence layer impressive.**
 In practice that meant:
 
 - **Deterministic code owns workflow order, schemas, validation, limits, and the
-  final publish decision.** Search limits, revision limits, count checks, candidate
-  validity, and the publish-status arbiter are all plain Python with tests — not
+  final copy-readiness decision.** Search limits, revision limits, count checks, candidate
+  validity, and the readiness arbiter are all plain Python with tests — not
   prompts.
 - **LLMs are used only where judgment is genuinely required**: research planning,
   outline generation, drafting, evaluator feedback, and revision.
@@ -226,7 +226,7 @@ presentation layer (`article_presentation.py`) maps it to copy-ready language:
   code path that reaches an external system.
 - **High-risk topics degrade gracefully.** For financial/legal/medical topics where
   confidence is too low, the pipeline can fall back to an evidence report (sources +
-  what was found + why it isn't publish-ready) instead of a polished draft that
+  what was found + why it needs revision) instead of a polished draft that
   overstates certainty.
 - **Debug vs. visible separation.** The visible article card shows only title, slug,
   meta description, SEO keywords, status badge, tone badge, and the article body.

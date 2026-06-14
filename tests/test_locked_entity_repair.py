@@ -94,7 +94,7 @@ def test_below_minimum_stays_draft_only_evidence_report():
         _contract(),
     )
     assert "Evidence Report" in result.repaired_markdown
-    assert "Not Publish-Ready" in result.repaired_markdown
+    assert "Why This Needs Revision" in result.repaired_markdown
     assert "minimum publishable count" in result.repaired_markdown
 
 

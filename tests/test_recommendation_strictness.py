@@ -239,7 +239,7 @@ def test_editorial_skeleton_avoids_compliance_memo_language():
 def test_ui_contains_editorial_review_status_and_badges():
     html = _build_app_html()
     assert "publish_ready_with_editorial_review" in html
-    assert "Ready with editorial review" in html
+    assert "Copy-ready after light review" in html
     assert "content-first" in html
     assert "editorial picks" in html
     assert "source-aware" in html

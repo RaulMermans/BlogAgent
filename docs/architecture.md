@@ -111,7 +111,7 @@ extract_claims                   → claim_extractor tool (heuristic or LLM)
 match_citations                  → citation_matcher tool (deterministic heuristic)
 run_fact_check                   → assemble FactCheckReport (+ optional LLM judgment)
 [fact-check revision]            → Editor Agent fact-check revision + re-run
-evaluate_publishability          → heuristic publish-readiness check; scores 0–100
+evaluate_publishability          → heuristic copy-readiness check; scores 0–100
 check_publish_contract           → deterministic final truth layer; hard-fail conditions (pre-polish)
 [if polish_required OR contract != publish_ready]
   run_editorial_polish           → LLM polish pass (at most once); skill briefs injected
@@ -157,7 +157,7 @@ survived each stage.
 The locked recommendation skeleton fixes article shape before prose generation. The LLM
 may write inside that shape but may not choose the recommendation set. The repair tool can
 rebuild Quick Picks, restore missing candidate sections, and correct the H1 count using
-only CandidatePack evidence. It never upgrades a below-minimum report to publish-ready.
+only CandidatePack evidence. It never upgrades a below-minimum report to copy-ready.
 
 Tone profiles are a separate voice contract. They can influence rhythm, warmth,
 vocabulary, and editorial style, but cannot affect counts, candidate identity, citations,
@@ -165,7 +165,7 @@ evidence rules, financial safety, or publish status.
 
 ---
 
-## Publish-Ready Pipeline
+## Copy-Readiness Pipeline
 
 ### Requested Count Detection
 
@@ -180,7 +180,9 @@ evidence rules, financial safety, or publish status.
 
 False-positive guards: years (1900–2099), price contexts (`under $50`), quantity phrases (`for 2 people`) are excluded.
 
-`requested_count` is stored in state and used by evidence sufficiency, quality evaluator, publishability evaluator, publish contract, revision agent, and the final run trace.
+`requested_count` is stored in state and used by evidence sufficiency, the quality
+evaluator, the internal `publishability_evaluator`, the publish contract, the revision
+agent, and the final run trace.
 
 ### Query Contract
 
@@ -394,7 +396,7 @@ Output: `EvidenceSufficiencyResult` with `sufficient`, `score`, `supported_count
 - Caps sources at `_MAX_SOURCES_TOTAL=10`
 - Re-extracts webpages, re-scores, re-classifies quality, re-extracts candidates, rebuilds evidence table after enrichment
 
-### Publishability Evaluator
+### Editorial Readiness Evaluator
 
 `blogagent/agents/publishability_evaluator.py` — heuristic, deterministic, no LLM.
 
@@ -410,13 +412,14 @@ Recalibrated checks:
 
 Advisory thresholds: `publish_ready = score >= 75 and no high defects`. `polish_required` triggers on ANY core medium defect (weak_sensory_detail, unmet_requested_count, weak_pov, thin_recommendations) or score < 80 or ≥2 medium/high defects.
 
-The publish contract is the final authority; the publishability evaluator is advisory.
+The publish contract is the final internal authority; the `publishability_evaluator`
+is advisory.
 
 ### Publish Contract (Intermediate Hard-Fail Layer)
 
 `blogagent/agents/publish_contract.py` — deterministic, no LLM.
 
-Hard-fail conditions applied after the publishability evaluator:
+Hard-fail conditions applied after the internal `publishability_evaluator`:
 
 | Defect | Severity | Score Cap |
 |---|---|---|

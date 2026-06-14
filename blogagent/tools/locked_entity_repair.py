@@ -90,12 +90,9 @@ def repair_locked_recommendation_article(
 
 
 def _repair_below_minimum(markdown: str, pack: CandidatePack) -> RepairResult:
-    # Only the fully-repaired output uses "Why This Is Not Publish-Ready" — the
-    # unrepaired skeleton's heading is the similarly worded but distinct
-    # "Why Not Publish-Ready" and still contains unfilled "[...]" placeholders
-    # that must not reach the visible article.
+    # The repaired evidence report replaces the placeholder-based initial report.
     lower = markdown.lower()
-    if "why this is not publish-ready" in lower:
+    if "why this needs revision" in lower and "[...]" not in markdown:
         return RepairResult(repaired_markdown=markdown, repair_applied=False)
     candidates = "\n".join(f"- {_candidate_line(item)}" for item in pack.items)
     if not candidates:
@@ -107,7 +104,7 @@ def _repair_below_minimum(markdown: str, pack: CandidatePack) -> RepairResult:
         "this article's requirements.\n\n"
         "## Validated Candidates Found\n\n"
         f"{candidates}\n\n"
-        "## Why This Is Not Publish-Ready\n\n"
+        "## Why This Needs Revision\n\n"
         f"Only {pack.final_target_count} candidates passed validation; "
         f"the minimum publishable count is {pack.minimum_publishable_items}.\n\n"
         "## What Evidence Is Missing\n\n"

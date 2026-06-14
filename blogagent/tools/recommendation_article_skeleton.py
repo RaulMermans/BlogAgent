@@ -36,7 +36,7 @@ def build_candidate_locked_recommendation_skeleton(
                 "\n".join(f"- {item.display_name}" for item in pack.items)
                 or "- No candidates passed validation."
             )
-            + "\n\n## Why Not Publish-Ready\n\n"
+            + "\n\n## Why This Needs Revision\n\n"
             f"Only {pack.final_target_count} clean candidates were found; "
             f"the minimum is {pack.minimum_publishable_items}.\n\n"
             "## What Evidence Is Missing\n\n[Describe the missing source support.]\n\n"

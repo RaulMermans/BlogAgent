@@ -34,7 +34,8 @@ def audit_writer_output(
 
     if pack.status == "below_minimum":
         passes = (
-            "not publish-ready" in article_markdown.lower()
+            "why this needs revision" in article_markdown.lower()
+            or "not publish-ready" in article_markdown.lower()
             or "not publish ready" in article_markdown.lower()
         )
     else:

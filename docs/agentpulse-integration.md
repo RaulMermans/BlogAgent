@@ -71,7 +71,7 @@ Open AgentPulse and inspect `/dashboard/runs`. The run detail should show:
 - Pipeline node start/completion events
 - Model call events from the centralized LLM client
 - Tool call events for search, extraction, source scoring, claim extraction, and citation matching
-- Eval summaries for evidence sufficiency, quality, fact check, publishability, and publish contract
+- Eval summaries for evidence sufficiency, quality, fact check, copy-readiness, and the internal publish contract
 - A final article artifact reference
 
 ## Troubleshooting

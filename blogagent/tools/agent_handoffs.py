@@ -117,7 +117,7 @@ def build_writer_handoff(
         required_structure = [
             "What was searched",
             "Validated candidates found",
-            "Why not publish-ready",
+            "Why this needs revision",
             "What evidence is missing",
             "Suggested next search/refinement",
         ]

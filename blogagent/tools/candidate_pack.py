@@ -564,7 +564,7 @@ def _to_pack_item(candidate) -> CandidatePackItem:
         candidate_basis=candidate.candidate_basis,
         needs_review=candidate.candidate_confidence == "low",
         editorial_note=(
-            "Fits the topic as a clean editorial pick; verify objective details before publishing."
+            "Fits the topic as a clean editorial pick; verify objective details before use."
             if candidate.candidate_basis in {"editorial_discretion", "weak_signal"}
             else None
         ),

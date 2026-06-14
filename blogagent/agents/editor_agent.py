@@ -596,10 +596,10 @@ def _mock_recommendation_draft(
                     lines.append(
                         (
                             "- **Editorial note**: Confirm current availability and any "
-                            "objective product details before publishing."
+                            "objective product details before use."
                             if editorial
                             else (
-                                "- **Caveat**: Source support is limited; review before publishing."
+                                "- **Caveat**: Source support is limited; review before use."
                             )
                         )
                     )

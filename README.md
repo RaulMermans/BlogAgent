@@ -1,6 +1,7 @@
 # BlogAgent
 
-A source-grounded editorial agent that turns a user topic into a researched, fact-checked, SEO-ready blog post.
+A source-grounded editorial drafting tool that turns a topic into a researched,
+fact-checked, copy-paste-ready blog draft for human review and manual publishing.
 
 This is not a generic AI blog generator. It is an agentic editorial workflow with web research, source extraction, source scoring, evidence tables, claim extraction, citation matching, evaluator-based revision, and final article packaging.
 
@@ -41,7 +42,7 @@ It combines:
 - Turns a topic into a researched, source-grounded, **copy-paste-ready draft**
   with SEO metadata (title, slug, meta description, keywords)
 - Surfaces its research trail (sources, evidence table, candidate ledger,
-  fact-check report) so a human reviewer can verify claims before publishing
+  fact-check report) so a human reviewer can verify claims before use
 - Validates recommendation-style articles against a locked candidate pack so
   the article can't silently invent or drop items
 - Flags when a draft is copy-ready, needs light editorial review, or needs
@@ -51,7 +52,7 @@ It combines:
 
 - It does not publish, post, schedule, or send anything to any external
   system — **human editorial review required** before anything goes live
-- It is not a fully autonomous content pipeline and is not a hosted multi-user
+- It is not an autonomous content pipeline and is not a hosted multi-user
   product — it's a single-user drafting tool you run locally or via a small
   internal API
 - It does not guarantee factual correctness — it grounds claims in sources
@@ -89,13 +90,13 @@ It combines:
 | Optional LLM semantic citation judge | **Done** — opt-in via `BLOGAGENT_USE_LLM_CITATION_JUDGE=true` |
 | Evidence Sufficiency Evaluator (deterministic pre-draft gate) | **Done** |
 | Targeted Enrichment Search (optional 2nd Tavily pass) | **Done** — recommendation topics only; max 2 passes |
-| Publishability Evaluator (heuristic + optional LLM) | **Done** |
+| Editorial Readiness Evaluator (heuristic + optional LLM) | **Done** |
 | Editorial Polish Agent (LLM-gated) | **Done** — runs at most once |
-| Publish-ready status (`publish_ready` / `publish_ready_with_warnings` / `draft_only`) | **Done** |
+| Copy-ready status mapping (internal `publish_ready_status` enums) | **Done** |
 | Mock/live output comparison CLI | **Done** |
 | GitHub Actions CI | **Done** — mock mode, no API keys required |
 | Vercel API scaffold | **Done** — mock-safe by default |
-| Agent Run Trace UI panel | **Done** — includes evidence sufficiency + publishability |
+| Agent Run Trace UI panel | **Done** — includes evidence sufficiency + copy-readiness |
 | AgentPulse runtime traces | **Done** — best-effort, opt-in via env vars |
 | Source quality badges in UI | **Done** |
 | Staged workflow animation (16 steps, self-annotating) | **Done** |
@@ -144,9 +145,11 @@ flowchart LR
 | `citation_matcher` | read_only | Match claims to evidence sources |
 | `validators` | read_only | Deterministic validation of the final package |
 
-### Publish-Ready Pipeline
+### Copy-Readiness Pipeline
 
-BlogAgent v2 adds a full publish-readiness layer on top of the existing research and drafting pipeline.
+BlogAgent v2 adds a full copy-readiness layer on top of the existing research and
+drafting pipeline. It classifies drafts for a human reviewer; it never posts,
+publishes, schedules, or sends content.
 
 #### Evidence Sufficiency Evaluation
 Before drafting, a deterministic evaluator checks whether the retrieved evidence is sufficient:
@@ -196,7 +199,7 @@ and structural mismatches are high-severity defects. Revision consumes the resul
 `ReviewPacket` and `RevisionPlan`; polish receives an explicit allow/deny change list.
 Deterministic locked-entity repair runs after every article-mutating stage and before the
 final contract. It can restore conservative source-backed structure, but it cannot make a
-below-minimum pack publish-ready.
+below-minimum pack copy-ready.
 
 Tone profiles (`Auto`, Editorial Magazine, Practical Buying Guide, Expert Analyst,
 Personal Blog, Luxury / Premium, SEO Neutral) affect prose only. They cannot change
@@ -214,8 +217,8 @@ When evidence is insufficient for a recommendation topic (and Tavily is active):
 - Re-extracts, re-scores, and rebuilds the evidence table
 - Bounded to max 2 total search passes — no unbounded loops
 
-#### Publishability Evaluator
-After revision, a heuristic evaluator scores the article on publish standards (0–100):
+#### Editorial Readiness Evaluator
+After revision, a heuristic evaluator scores the draft on editorial readiness (0–100):
 - Checks for generic intro phrases, content-mill filler, weak editorial POV
 - For fragrance/beauty topics: checks for sensory detail (notes, mood, occasion)
 - For recommendation topics: checks that picks have "best for" context and rationale
@@ -274,12 +277,17 @@ When a live LLM provider (e.g. Gemini) returns valid `article_markdown` but omit
 - `warning` is set to `"structured_output_completed_missing_fields=true"`
 - Mock fallback only happens when `article_markdown` itself is absent or unrecoverable
 
-#### Publish Ready Status
+#### Copy-ready status mapping
 
-The final `publish_ready_status` field indicates:
-- `publish_ready` — article meets editorial standards, ready to post
-- `publish_ready_with_warnings` — minor issues (evidence limits, low sources) but usable
-- `draft_only_not_publish_ready` — significant quality gap; human editing required
+The internal `publish_ready_status` field is retained for implementation stability and
+maps to these user-facing labels:
+
+- `publish_ready` → **Copy-ready**
+- `publish_ready_with_editorial_review` / `publish_ready_with_warnings` →
+  **Copy-ready after light review**
+- `draft_only_not_publish_ready` → **Needs revision before use**
+
+Every status still requires human editorial review before manual publishing.
 
 **`FinalAnswerContract` is the canonical authority** (added in the Final Publish Contract Reconciliation sprint). It is built after all pipeline stages complete — drafting, revision, polish, grounding, and the publish contract check — and enforces these invariants:
 
@@ -330,7 +338,7 @@ User Topic
 → Fact-Check Evaluator
 → [if not passed and revision_count < 1]
     → Editor Agent revision
-→ Publishability Evaluator (heuristic + optional LLM; scores 0–100)
+→ Editorial Readiness Evaluator (heuristic + optional LLM; scores 0–100)
 → Publish Contract (pre-polish check)
 → [if polish_required=True]
     → Editorial Polish Agent (LLM; runs at most once; skill briefs injected)
@@ -371,7 +379,8 @@ pip install -e ".[dev]"
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure:
+BlogAgent is mock-safe by default. API keys live only in environment variables,
+and live provider usage is opt-in. Copy `.env.example` to `.env` and configure:
 
 ```bash
 cp .env.example .env
@@ -672,7 +681,7 @@ The interface boots into a **private access screen** when `BLOGAGENT_WORKER_SECR
 1. On first visit, the page calls `GET /auth-status`. If `worker_secret_required` is `false` (no secret configured), the tool is shown immediately.
 2. If a secret is required, you see only the **Worker Secret** input and a **Login** button.
 3. Clicking **Login** sends the entered value to `POST /auth/verify`. The server compares it against `BLOGAGENT_WORKER_SECRET` using a constant-time comparison.
-4. On `200`, the secret is stored in `sessionStorage` under the key `blogagent_worker_secret` and the UI flips to the authenticated state showing **Logged in**, the topic textarea, and **Generate Blog Post**.
+4. On `200`, the secret is stored in `sessionStorage` under the key `blogagent_worker_secret` and the UI flips to the authenticated state showing **Logged in**, the topic textarea, and **Generate Blog Draft**.
 5. On `401`, the UI shows **Invalid or missing worker secret** and stays on the login screen.
 6. Each generate request sends the stored secret in the `X-BlogAgent-Secret` header.
 7. If `POST /run` returns `401`, the UI clears `sessionStorage`, returns to the login screen, and shows **Session expired or invalid worker secret. Log in again.**
@@ -683,7 +692,7 @@ The interface boots into a **private access screen** when `BLOGAGENT_WORKER_SECR
 ### What the interface lets you do
 
 - Log in with a worker secret (verified server-side; stored in `sessionStorage`)
-- Enter a topic and generate a blog post
+- Enter a topic and generate a blog draft
 - See the title, slug, meta description, SEO keywords, article markdown, and claim/source stats
 - Copy the article markdown to clipboard
 - Download the article as `.md`
@@ -761,14 +770,14 @@ no cookies, no OAuth, and no rate limiting. `sessionStorage` is browser-readable
 
 ---
 
-## How to request a blog post
+## How to request a blog draft
 
 ### Via the browser UI
 
 1. Open `/` (or `/app`) in a browser
 2. If a worker secret is configured, enter it and click **Login** (otherwise you are taken straight to the tool)
 3. Enter a topic
-4. Click **Generate Blog Post**
+4. Click **Generate Blog Draft**
 5. Use **Copy article markdown**, **Download .md**, or **Download full JSON**
 
 ### Via curl
@@ -795,7 +804,7 @@ BlogAgent ships three Claude Code skills under `.claude/skills/`:
 | Skill | Purpose |
 |---|---|
 | `skill-creator` | Sourced from [anthropics/skills](https://github.com/anthropics/skills). Teaches Claude Code how to create, test, and iterate on project skills. |
-| `blog-post-seo-writing` | Defines how BlogAgent should structure SEO-ready article outputs: title, slug, meta description, heading rules, keyword density, and publish-readiness checklist. |
+| `blog-post-seo-writing` | Defines how BlogAgent should structure SEO-ready draft outputs: title, slug, meta description, heading rules, keyword density, and copy-readiness checklist. |
 | `blog-output-evaluator` | Defines a 9-dimension rubric for judging BlogAgent article quality. Produces a structured score and blocking issue list. |
 
 Skills are **scaffolding for Claude Code development workflows** — they do not automatically
@@ -995,8 +1004,7 @@ Before making this repository public, confirm all of the following:
 - [ ] If any key was ever committed (even in history), rotate it at the
       provider before/after making the repo public — removing it from a
       future commit does not undo prior exposure
-- [ ] No local absolute paths (e.g. `/Users/...`) or personal data in tracked
-      files: `git grep -n '/Users/'`
+- [ ] No local absolute home-directory paths or personal data in tracked files
 - [ ] No `logs/`, `runs/`, `outputs/`, `debug/`, or `*.log` files are tracked
 
 ---

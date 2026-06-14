@@ -133,7 +133,7 @@ def run_article_quality_gate(
                 severity=severity,
                 message=(
                     f"Article contains {len(pipeline_hits)} internal pipeline phrase(s) "
-                    f"that must be removed before publishing: "
+                    f"that must be removed before use: "
                     + ", ".join(f'"{p}"' for p in pipeline_hits[:3])
                 ),
                 fixable=True,

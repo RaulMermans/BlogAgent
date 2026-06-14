@@ -412,6 +412,7 @@ _NON_RECOMMENDATION_HEADINGS: frozenset[str] = frozenset(
         "validated candidates found",
         "why not publish-ready",
         "why this is not publish-ready",
+        "why this needs revision",
         "what evidence is missing",
         "suggested next search or refinement",
     }
@@ -468,6 +469,7 @@ _NON_RECOMMENDATION_SUBSTRINGS: tuple[str, ...] = (
     "validated candidates found",
     "candidates found",
     "not publish-ready",
+    "needs revision",
     "what evidence is missing",
     "suggested next search",
 )
