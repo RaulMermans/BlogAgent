@@ -300,6 +300,53 @@ class TestWatchCandidateCleanlinessGate:
         assert result.usable is False
         assert "clean_name_score" in (result.rejection_reason or "")
 
+    def _make_watch_candidate(self, name: str) -> EntityCandidate:
+        return EntityCandidate(
+            raw_mention=name,
+            canonical_name=name,
+            name=name,
+            entity_type="specific_product",
+            usable=True,
+            clean_name_score=1.0,
+            evidence_score=0.9,
+            evidence_spans=["Some supporting evidence text about this product."],
+            supported_context=["watches"],
+        )
+
+    def test_watch_candidate_gate_rejects_dates(self):
+        """A date fragment like "January 8th" must not be locked as a product."""
+        cand = self._make_watch_candidate("January 8th")
+        result = _apply_cleanliness_gate_v2(cand, self.contract)
+        assert result.usable is False
+        assert result.entity_type == "date"
+        assert "date" in (result.rejection_reason or "").lower()
+
+    def test_watch_candidate_gate_rejects_navigation_clusters(self):
+        """Brand-cluster / filter-fragment candidates must be rejected, not locked."""
+        for name in (
+            "Burberry Cartier Celine Chanel Chloe",
+            "Chanel Boy Bags Louis Vuitton Wallets",
+            "Hermès Color Pink Bags Red Bags",
+            "All Designers",
+            "Shop Now",
+        ):
+            cand = self._make_watch_candidate(name)
+            result = _apply_cleanliness_gate_v2(cand, self.contract)
+            assert result.usable is False, f"{name!r} should be rejected"
+
+    def test_watch_candidate_gate_rejects_prose_fragments(self):
+        """A prose-residue fragment like "Tissot PRX Quartz which starts around" is rejected."""
+        cand = self._make_watch_candidate("Tissot PRX Quartz which starts around")
+        result = _apply_cleanliness_gate_v2(cand, self.contract)
+        assert result.usable is False
+        assert "which starts" in (result.rejection_reason or "")
+
+    def test_watch_candidate_gate_rejects_author_person_paul_altieri(self):
+        """"Paul Altieri" (a watch dealer/author name) must not be locked as a product."""
+        cand = self._make_watch_candidate("Paul Altieri")
+        result = _apply_cleanliness_gate_v2(cand, self.contract)
+        assert result.usable is False
+
 
 # ---------------------------------------------------------------------------
 # Source type propagation

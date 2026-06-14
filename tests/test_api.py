@@ -1295,5 +1295,5 @@ def test_html_clear_output_hides_workflow_panel():
     html = response.text
     idx = html.find("function clearOutput()")
     assert idx != -1
-    clear_body = html[idx : idx + 800]
+    clear_body = html[idx : idx + 900]
     assert "_hideWorkflowPanel" in clear_body or "workflow-panel" in clear_body

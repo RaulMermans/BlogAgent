@@ -12,7 +12,7 @@ from blogagent.tools.agent_handoffs import (
     RevisionPlan,
     WriterOutputAudit,
 )
-from blogagent.tools.candidate_pack import CandidatePack
+from blogagent.tools.candidate_pack import CandidatePack, build_candidate_pack_quality_report
 from blogagent.workflow.query_contract import QueryContract
 
 
@@ -99,6 +99,19 @@ def build_review_packet(
                 required_fix=required_fix,
                 fix_scope=scope,
             )
+        )
+
+    quality_report = build_candidate_pack_quality_report(pack, contract)
+    invalid_locked_candidates = list(quality_report.invalid_items)
+    for name in invalid_locked_candidates:
+        add(
+            "invalid_locked_candidate",
+            "high",
+            "valid recommendation entity",
+            name,
+            "Rebuild the CandidatePack to remove this invalid candidate "
+            "(e.g. a person/byline, date, or navigation fragment) before drafting continues.",
+            "candidate",
         )
 
     for cid in audit.missing_candidate_ids:
@@ -204,6 +217,58 @@ def build_review_packet(
     else:
         revision_mode = "targeted_repair"
     passes = contract_passes and editorial_passes and revision_mode != "draft_only"
+
+    missing_recommendation_sections = [
+        item.display_name for item in pack.items if item.candidate_id in audit.missing_candidate_ids
+    ]
+    extra_recommendation_sections = list(audit.unknown_candidate_names)
+    candidate_pack_valid = not invalid_locked_candidates
+
+    count_repair_types = {
+        "quick_picks_count_mismatch",
+        "detail_sections_count_mismatch",
+        "title_count_mismatch",
+        "answer_count_failed",
+    }
+    count_repair_required = (
+        any(d.type in count_repair_types for d in defects)
+        or bool(extra_recommendation_sections)
+        or bool(missing_recommendation_sections)
+    )
+
+    if not candidate_pack_valid:
+        effective_revision_mode = "candidate_pack_rebuild"
+    elif revision_mode == "draft_only":
+        effective_revision_mode = "evidence_report_required"
+    elif revision_mode == "none":
+        effective_revision_mode = "none"
+    elif count_repair_required:
+        effective_revision_mode = "count_contract_repair"
+    else:
+        effective_revision_mode = "prose_polish"
+
+    repair_instructions: list[str] = []
+    if not candidate_pack_valid:
+        repair_instructions.append(
+            "Rebuild the CandidatePack: remove invalid candidate(s) "
+            f"{', '.join(invalid_locked_candidates)} and replace with valid "
+            "recommendation entities before drafting continues."
+        )
+    if effective_revision_mode == "evidence_report_required":
+        repair_instructions.append(
+            "CandidatePack is below the minimum publishable count; produce an "
+            "Evidence Report instead of a recommendation article."
+        )
+    for name in missing_recommendation_sections:
+        repair_instructions.append(f"Restore the missing recommendation section for '{name}'.")
+    for name in extra_recommendation_sections:
+        repair_instructions.append(
+            f"Remove the recommendation section for '{name}' — it is not part of "
+            "the locked CandidatePack."
+        )
+    if effective_revision_mode == "prose_polish" and not repair_instructions:
+        repair_instructions.append("No structural defects found; limit revision to prose polish.")
+
     return ReviewPacket(
         passes=passes,
         contract_passes=contract_passes,
@@ -217,6 +282,13 @@ def build_review_packet(
             f"{len([d for d in defects if d.severity == 'high'])} high-severity "
             f"defect(s) and {len(defects)} total defect(s)."
         ),
+        candidate_pack_valid=candidate_pack_valid,
+        invalid_locked_candidates=invalid_locked_candidates,
+        extra_recommendation_sections=extra_recommendation_sections,
+        missing_recommendation_sections=missing_recommendation_sections,
+        count_repair_required=count_repair_required,
+        revision_mode=effective_revision_mode,
+        repair_instructions=repair_instructions,
     )
 
 
@@ -235,6 +307,21 @@ def build_revision_plan(
         if review.required_revision_mode != "none"
         else "targeted_repair"
     )
+    forbidden_changes = [
+        "add, remove, merge, or rename locked candidates",
+        "change CandidatePack mode or final_target_count",
+        "invent evidence or remove source URLs",
+        "silently delete an item whose evidence is incomplete",
+    ]
+    if not review.candidate_pack_valid:
+        # An invalid locked candidate (person/byline/date/navigation fragment, etc.)
+        # cannot be papered over with prose polish — the CandidatePack itself must
+        # be rebuilt before any other revision is attempted.
+        strategy = "full_rewrite"
+        forbidden_changes.append(
+            "perform prose-only polish while the CandidatePack contains invalid "
+            "candidates — rebuild the CandidatePack first"
+        )
     sections_to_add: list[str] = []
     sections_to_rewrite: list[str] = []
     for defect in review.defects:
@@ -252,12 +339,7 @@ def build_revision_plan(
         locked_candidate_ids_to_preserve=list(pack.locked_candidate_ids),
         sections_to_add=list(dict.fromkeys(sections_to_add)),
         sections_to_rewrite=list(dict.fromkeys(sections_to_rewrite)),
-        forbidden_changes=[
-            "add, remove, merge, or rename locked candidates",
-            "change CandidatePack mode or final_target_count",
-            "invent evidence or remove source URLs",
-            "silently delete an item whose evidence is incomplete",
-        ],
+        forbidden_changes=forbidden_changes,
     )
 
 

@@ -1823,6 +1823,7 @@ def build_final_answer_contract_node(state: BlogRunState) -> BlogRunState:
         minimum_publishable_items=min_publishable,
         is_recommendation=state.is_recommendation,
         recommendation_audit=state.recommendation_audit or None,
+        review_packet=state.review_packet or None,
     )
     state.final_answer_contract = contract.model_dump()
     _event(

@@ -50,6 +50,20 @@ class ReviewPacket(BaseModel):
     unsupported_entities: list[str] = Field(default_factory=list)
     required_revision_mode: Literal["none", "targeted_repair", "full_rewrite", "draft_only"]
     reviewer_summary: str
+    # CandidatePack/contract-level authority checks (see handoff_auditor.build_review_packet)
+    candidate_pack_valid: bool = True
+    invalid_locked_candidates: list[str] = Field(default_factory=list)
+    extra_recommendation_sections: list[str] = Field(default_factory=list)
+    missing_recommendation_sections: list[str] = Field(default_factory=list)
+    count_repair_required: bool = False
+    revision_mode: Literal[
+        "none",
+        "prose_polish",
+        "count_contract_repair",
+        "candidate_pack_rebuild",
+        "evidence_report_required",
+    ] = "none"
+    repair_instructions: list[str] = Field(default_factory=list)
 
 
 class RevisionPlan(BaseModel):

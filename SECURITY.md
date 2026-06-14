@@ -1,5 +1,10 @@
 # Security Policy
 
+BlogAgent is **internal editorial drafting, not autonomous publishing**. It
+produces draft content for a human editor to review — it does not post,
+publish, or send anything on its own. This policy covers both secrets/
+configuration security and the safety expectations for generated content.
+
 ## Reporting a Vulnerability
 
 If you discover a security issue in BlogAgent, please open a private report via
@@ -49,3 +54,27 @@ No API keys are read by or exposed to client-side/browser code. All
 provider calls happen server-side. The browser UI (`/app`) only ever
 receives the final article package and run metadata — never raw
 credentials.
+
+## Generated Content Requires Human Review
+
+Every article BlogAgent produces is a draft, regardless of its
+`publish_ready_status`. **Generated content requires human review** before it
+is published, shared, or relied upon — BlogAgent grounds claims in sources and
+flags unsupported ones, but it does not guarantee factual correctness and is
+not a substitute for editorial judgment.
+
+## High-Risk Topics
+
+Financial, legal, medical, and other high-risk topics require conservative
+handling. For these topics, BlogAgent prefers to under-claim: when evidence is
+insufficient or confidence is low, the pipeline returns an evidence report
+(sources and findings, not a polished recommendation) rather than presenting
+uncertain information as settled advice. Do not treat any BlogAgent output on
+these topics as financial, legal, or medical advice.
+
+## Reporting Concerns
+
+For non-vulnerability concerns (e.g. a draft containing a fabricated source or
+citation), open an issue in this repository describing the topic and the
+problematic output — do not include any API keys, tokens, or other secrets in
+issue text.

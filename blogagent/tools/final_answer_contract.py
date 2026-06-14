@@ -79,6 +79,66 @@ def build_final_answer_contract(
     minimum_publishable_items: int = 3,
     is_recommendation: bool = False,
     recommendation_audit: Optional[dict] = None,
+    review_packet: Optional[dict] = None,
+) -> FinalAnswerContract:
+    """Build the canonical risk-tiered post-polish publish contract.
+
+    ``review_packet`` (see ``blogagent.tools.agent_handoffs.ReviewPacket``) is the
+    Reviewer's authority check. If the Reviewer found the CandidatePack itself
+    invalid (e.g. it contains a person/byline, date, or navigation fragment as a
+    locked recommendation) or otherwise requires a CandidatePack rebuild or an
+    evidence report, the contract is forced to
+    ``draft_only_not_publish_ready`` regardless of how clean the count/quality
+    checks below look — a high editorial-quality score cannot override a failed
+    candidate pack.
+    """
+    contract = _build_final_answer_contract_core(
+        article_markdown=article_markdown,
+        title=title,
+        meta_description=meta_description,
+        answer_count_snapshot=answer_count_snapshot,
+        candidate_ledger_summary=candidate_ledger_summary,
+        query_contract=query_contract,
+        publish_contract=publish_contract,
+        minimum_publishable_items=minimum_publishable_items,
+        is_recommendation=is_recommendation,
+        recommendation_audit=recommendation_audit,
+    )
+    if review_packet and contract.publish_status != "draft_only_not_publish_ready":
+        invalid = review_packet.get("candidate_pack_valid") is False
+        blocking_mode = review_packet.get("revision_mode") in {
+            "candidate_pack_rebuild",
+            "evidence_report_required",
+        }
+        if invalid or blocking_mode:
+            if invalid:
+                names = ", ".join(review_packet.get("invalid_locked_candidates", [])[:3])
+                reason = f"Reviewer found invalid locked candidate(s): {names}"
+            else:
+                reason = (
+                    "Reviewer requires a CandidatePack rebuild or evidence report "
+                    "before this article can be publish-ready."
+                )
+            contract = contract.model_copy(
+                update={
+                    "publish_status": "draft_only_not_publish_ready",
+                    "failure_reasons": [reason, *contract.failure_reasons],
+                }
+            )
+    return contract
+
+
+def _build_final_answer_contract_core(
+    article_markdown: str,
+    title: str,
+    meta_description: str,
+    answer_count_snapshot: Optional[dict],
+    candidate_ledger_summary: Optional[dict],
+    query_contract: Optional[dict],
+    publish_contract: Optional[dict],
+    minimum_publishable_items: int = 3,
+    is_recommendation: bool = False,
+    recommendation_audit: Optional[dict] = None,
 ) -> FinalAnswerContract:
     """Build the canonical risk-tiered post-polish publish contract."""
     contract_cfg = query_contract or {}

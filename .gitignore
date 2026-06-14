@@ -38,6 +38,10 @@ logs/
 runs/
 outputs/
 debug/
+*.jsonl
+
+# Local Claude Code session data (never publish)
+.claude/projects/
 
 # macOS
 .DS_Store

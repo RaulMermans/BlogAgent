@@ -713,6 +713,11 @@ def _build_app_html() -> str:
 
       <div class="blog-card" id="article-display"></div>
 
+      <details id="research-trace-details">
+        <summary>Research &amp; Candidate Trace</summary>
+        <div class="details-body" id="research-trace-body"></div>
+      </details>
+
       <details id="sources-details">
         <summary id="sources-summary">Sources</summary>
         <div class="details-body"><ul class="source-list" id="sources-list"></ul></div>
@@ -1324,7 +1329,7 @@ def _build_app_html() -> str:
         span.textContent = sk;
         skillsDiv.appendChild(span);
       });
-      document.getElementById('title-display').closest('.form-card').appendChild(skillsDiv);
+      document.getElementById('research-trace-body').appendChild(skillsDiv);
     }
 
     // Polish summary
@@ -1342,7 +1347,7 @@ def _build_app_html() -> str:
         p.textContent = s;
         polishDiv.appendChild(p);
       });
-      document.getElementById('title-display').closest('.form-card').appendChild(polishDiv);
+      document.getElementById('research-trace-body').appendChild(polishDiv);
     }
 
     // Recommendation candidates summary
@@ -1359,7 +1364,7 @@ def _build_app_html() -> str:
         (queryContract.entity_subtype ? ` / ${queryContract.entity_subtype}` : '') +
         (queryContract.requested_count ? ` / ${queryContract.requested_count} requested` : '');
       qcDiv.appendChild(qcText);
-      document.getElementById('title-display').closest('.form-card').appendChild(qcDiv);
+      document.getElementById('research-trace-body').appendChild(qcDiv);
     }
 
     // Candidate ledger summary (primary source of candidate quality info)
@@ -1391,7 +1396,7 @@ def _build_app_html() -> str:
         issueText.textContent = ledgerSummary.quality_issues[0];
         ledgerDiv.appendChild(issueText);
       }
-      document.getElementById('title-display').closest('.form-card').appendChild(ledgerDiv);
+      document.getElementById('research-trace-body').appendChild(ledgerDiv);
     }
 
     const recCandidates = data.recommendation_candidates_summary || {};
@@ -1418,7 +1423,7 @@ def _build_app_html() -> str:
         namesList.textContent = recCandidates.names.slice(0, 5).join(', ') + (recCandidates.names.length > 5 ? '…' : '');
         candDiv.appendChild(namesList);
       }
-      document.getElementById('title-display').closest('.form-card').appendChild(candDiv);
+      document.getElementById('research-trace-body').appendChild(candDiv);
     }
 
     // Enrichment queries (if used)
@@ -1436,7 +1441,7 @@ def _build_app_html() -> str:
         p.textContent = '→ ' + q;
         enrDiv.appendChild(p);
       });
-      document.getElementById('title-display').closest('.form-card').appendChild(enrDiv);
+      document.getElementById('research-trace-body').appendChild(enrDiv);
     }
 
     document.getElementById('article-display').textContent = articleMarkdown || 'No article markdown returned by API.';
@@ -1699,6 +1704,7 @@ def _build_app_html() -> str:
     document.getElementById('article-display').textContent = '';
     document.getElementById('keywords-display').innerHTML = '';
     document.getElementById('stats-row').innerHTML = '';
+    document.getElementById('research-trace-body').innerHTML = '';
     _hideWorkflowPanel();
     // Remove all dynamic banners inserted by renderOutput from prior runs
     document.querySelectorAll('.dynamic-banner').forEach(el => el.remove());

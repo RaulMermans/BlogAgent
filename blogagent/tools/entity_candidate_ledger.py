@@ -69,6 +69,18 @@ _PROSE_VERBS: frozenset[str] = frozenset(
     }
 )
 
+# Substrings that indicate navigation/prose residue rather than a product
+# name, e.g. "Tissot PRX Quartz which starts around $400" or "All Designers".
+_FRAGMENT_PHRASES: tuple[str, ...] = (
+    "which starts",
+    "then you",
+    "it has",
+    "buy now",
+    "shop now",
+    "all designers",
+    "photos",
+)
+
 # First-person indicators
 _FIRST_PERSON: tuple[str, ...] = (
     " i ", " i've ", " i'm ", " i'd ", " i'll ", " i went ", " i got ",
@@ -88,8 +100,8 @@ _SOCIAL_RESIDUE: tuple[str, ...] = (
     "👍",
 )
 
-# Price pattern
-_PRICE_RE = re.compile(r"\$\d+|\d+\s*usd|\d+\s*eur|\d+\s*gbp", re.IGNORECASE)
+# Price pattern (handles thousands separators, e.g. "$1,900")
+_PRICE_RE = re.compile(r"\$\d[\d,]*(?:\.\d+)?|\d+\s*usd|\d+\s*eur|\d+\s*gbp", re.IGNORECASE)
 
 # Calendar months — used to reject date-shaped candidates (e.g. "January 8th")
 _MONTH_NAMES: frozenset[str] = frozenset(
@@ -547,13 +559,22 @@ def _apply_cleanliness_gate_v2(
             }
         )
 
+    # Domain adapter rejections (entity/brand clusters, repeated category
+    # words, navigation text, section headings, etc.) apply regardless of
+    # strictness — these are never valid recommendation candidates, even if
+    # they happen to have a high clean_name_score and evidence_score.
+    adapter_rejection = get_adapter(query_contract.domain).get_rejection_reason(
+        name, query_contract
+    )
+    if adapter_rejection:
+        return candidate.model_copy(
+            update={
+                "usable": False,
+                "rejection_reason": adapter_rejection,
+            }
+        )
+
     if query_contract.recommendation_strictness == "editorial":
-        adapter = get_adapter(query_contract.domain)
-        rejection = adapter.get_rejection_reason(name, query_contract)
-        if rejection:
-            return candidate.model_copy(
-                update={"usable": False, "rejection_reason": rejection}
-            )
         confidence = candidate.candidate_confidence
         if (
             candidate.candidate_basis == "weak_signal"
@@ -748,6 +769,11 @@ def _detect_prose_fragment(name: str) -> str | None:
     for residue in _SOCIAL_RESIDUE:
         if residue in lower or residue in name:
             return "social/forum residue or emoji in candidate name"
+
+    # Navigation/prose fragment phrases (e.g. "which starts", "Shop Now")
+    for phrase in _FRAGMENT_PHRASES:
+        if phrase in lower:
+            return f"navigation/prose fragment — contains '{phrase}'"
 
     # Unicode emoji check
     for char in name:
@@ -980,6 +1006,9 @@ def _strip_price_from_name(name: str) -> str:
     cleaned = _PRICE_RE.sub("", name).strip()
     # Remove trailing punctuation left by price removal
     cleaned = cleaned.strip(" -–—,;")
+    # Remove a stray trailing "~" approximation marker left when the price
+    # itself was stripped upstream, e.g. "Hamilton Khaki Field Field Watch ~"
+    cleaned = re.sub(r"\s*~+\s*$", "", cleaned).strip(" -–—,;")
     return cleaned
 
 
@@ -1072,6 +1101,11 @@ def score_clean_candidate_name(name: str) -> float:
     # Social/forum residue
     for residue in _SOCIAL_RESIDUE:
         if residue in lower:
+            return 0.1
+
+    # Navigation/prose fragment phrases (e.g. "which starts", "Shop Now")
+    for phrase in _FRAGMENT_PHRASES:
+        if phrase in lower:
             return 0.1
 
     # Price artifacts ($xxx)

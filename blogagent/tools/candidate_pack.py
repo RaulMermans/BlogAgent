@@ -258,6 +258,7 @@ class CandidatePack(BaseModel):
     count_policy: str
     locked_candidate_ids: list[str] = Field(default_factory=list)
     locked_display_names: list[str] = Field(default_factory=list)
+    validation_trace: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -283,6 +284,7 @@ def build_candidate_pack(
         if isinstance(query_contract, QueryContract)
         else QueryContract.model_validate(query_contract)
     )
+    adapter = get_adapter(contract.domain)
     ledger = (
         entity_candidate_ledger
         if isinstance(entity_candidate_ledger, CandidateLedger)
@@ -362,11 +364,68 @@ def build_candidate_pack(
         else deduped
     )
     selected = selection_pool[:final_target_count]
+    backfill_pool = selection_pool[final_target_count:]
+
+    # Final defense-in-depth validity pass: a candidate may only be locked
+    # into the pack if its name still passes the domain adapter's identity
+    # check (usable=True from the ledger gate is not sufficient on its own).
+    # Any selected candidate that fails this is dropped and, if possible,
+    # replaced with the next-best valid candidate from the remaining pool.
+    valid_selected: list = []
+    final_pass_rejections: list[dict] = []
+    replaced = 0
+    for candidate in selected:
+        name = candidate.canonical_name or candidate.name or candidate.raw_mention
+        if adapter.is_valid_entity(name, contract):
+            valid_selected.append(candidate)
+            continue
+        final_pass_rejections.append(
+            {
+                "name": name,
+                "rejection_reason": adapter.get_rejection_reason(name, contract)
+                or "invalid candidate identity",
+            }
+        )
+        while backfill_pool:
+            replacement = backfill_pool.pop(0)
+            r_name = (
+                replacement.canonical_name or replacement.name or replacement.raw_mention
+            )
+            if adapter.is_valid_entity(r_name, contract):
+                valid_selected.append(replacement)
+                replaced += 1
+                break
+
+    if len(valid_selected) != len(selected):
+        final_target_count = len(valid_selected)
+        if final_target_count < minimum:
+            status = "below_minimum"
+            count_policy = (
+                f"Only {final_target_count} clean candidates passed validation; "
+                f"the minimum publishable count is {minimum}. Produce a draft-only report."
+            )
+        elif requested is not None and final_target_count < requested:
+            status = "evidence_limited"
+            count_policy = (
+                f"Use all {final_target_count} locked candidates and explain that the "
+                f"evidence did not support the requested {requested} items."
+            )
+
+    selected = valid_selected
     items = [_to_pack_item(candidate) for candidate in selected]
     mode: CandidatePackMode = (
         "editorial_shortlist"
         if contract.recommendation_strictness == "editorial"
         else "evidence_locked"
+    )
+    rejected_items = [
+        *[c.model_dump() for c in ledger.rejected_candidates],
+        *compound_rejections,
+        *final_pass_rejections,
+    ]
+    validation_trace = (
+        f"candidate_pack_validation: passed={len(items)} "
+        f"rejected_invalid={len(rejected_items)} replaced={replaced}"
     )
     return CandidatePack(
         requested_count=requested,
@@ -379,13 +438,11 @@ def build_candidate_pack(
         minimum_publishable_items=minimum,
         evidence_limited=status == "evidence_limited",
         items=items,
-        rejected_items=[
-            *[c.model_dump() for c in ledger.rejected_candidates],
-            *compound_rejections,
-        ],
+        rejected_items=rejected_items,
         count_policy=count_policy,
         locked_candidate_ids=[item.candidate_id for item in items],
         locked_display_names=[item.display_name for item in items],
+        validation_trace=validation_trace,
     )
 
 
@@ -549,6 +606,9 @@ def _sanitize_display_name(display: str, canonical_fallback: str) -> str:
     name = display.strip()
     # Strip price debris, including a leading "~" approximation marker
     name = re.sub(r"~?\s*\$\d+[\d,.]*\s*", "", name).strip()
+    # Strip a bare trailing "~" left behind when the price itself was
+    # already removed upstream, e.g. "Hamilton Khaki Field Field Watch ~"
+    name = re.sub(r"\s*~+\s*$", "", name).strip()
     # Strip trailing connectors like " which starts around", " right Photos"
     name = re.sub(
         r"\s+(?:which|that|right|photos?|specs?)\b.*$", "", name, flags=re.IGNORECASE

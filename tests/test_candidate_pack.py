@@ -149,3 +149,17 @@ def test_watch_candidate_gate_normalizes_display_names():
     )
     pack = build_candidate_pack(contract, _ledger([candidate]))
     assert pack.items[0].display_name == "Hamilton Khaki Field"
+
+
+def test_candidate_pack_validation_trace_reports_counts():
+    """The pack records a candidate_pack_validation trace with passed/rejected/replaced counts."""
+    candidates = [
+        _candidate("Dior Sauvage Eau de Parfum", 1),
+        _candidate("Chanel Bleu de Chanel", 2),
+    ]
+    pack = build_candidate_pack(_contract(2), _ledger(candidates))
+    assert pack.validation_trace == (
+        f"candidate_pack_validation: passed={len(pack.items)} "
+        f"rejected_invalid={len(pack.rejected_items)} replaced=0"
+    )
+    assert len(pack.items) == 2

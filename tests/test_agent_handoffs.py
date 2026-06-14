@@ -128,6 +128,77 @@ def test_reviewer_vetoes_invalid_candidate_pack():
     assert review.required_revision_mode in {"targeted_repair", "full_rewrite"}
 
 
+def test_revision_does_not_polish_invalid_candidate_pack():
+    """If the locked CandidatePack itself contains an invalid entity (e.g. a
+    reviewer/dealer name like "Paul Altieri" mistaken for a product), the
+    Reviewer must flag candidate_pack_valid=False and the revision plan must
+    require a CandidatePack rebuild, not prose-only polish."""
+    contract = build_query_contract(
+        "best automatic watches under $2000",
+        is_recommendation=True,
+        is_financial=False,
+        requested_count=4,
+    )
+    names = ["Tissot PRX Quartz", "Seiko 5 Sports", "Hamilton Khaki Field", "Paul Altieri"]
+    items = [
+        CandidatePackItem(
+            candidate_id=f"cand-{i}",
+            canonical_name=name,
+            display_name=name,
+            section_heading=name,
+            source_url=f"https://example.com/{i}",
+            source_title=f"Source {i}",
+            source_quality="high",
+            source_type="editorial",
+            evidence_spans=[f"{name} review notes."],
+            evidence_terms=["daily wear"],
+            supported_context=["everyday wear"],
+            entity_type="specific_product",
+            entity_subtype="watch_product",
+            candidate_confidence="high",
+            candidate_basis="source_exact",
+            needs_review=False,
+        )
+        for i, name in enumerate(names)
+    ]
+    pack = CandidatePack(
+        requested_count=4,
+        allowed_count=len(items),
+        final_target_count=len(items),
+        mode="exact",
+        status="exact",
+        recommendation_strictness="standard",
+        evidence_mode="source_aware",
+        minimum_publishable_items=3,
+        evidence_limited=False,
+        items=items,
+        count_policy="exact",
+        locked_candidate_ids=[item.candidate_id for item in items],
+        locked_display_names=[item.display_name for item in items],
+    )
+    quick = "\n".join(f"- {item.display_name}" for item in items)
+    details = "\n\n".join(
+        f"## {index}. {item.display_name}\n\nSupported detail."
+        for index, item in enumerate(items, start=1)
+    )
+    article = (
+        f"# {len(items)} Best Automatic Watches Under $2000\n\n"
+        f"## Quick Picks\n\n{quick}\n\n## How We Chose\n\nEvidence.\n\n"
+        f"{details}\n\n## Buying or Choosing Tips\n\nTips.\n\n"
+        "## Final Takeaway\n\nTakeaway."
+    )
+    writer = audit_writer_output(article, None, pack, contract)
+    review = build_review_packet(article, writer, pack, contract, None, None)
+
+    assert review.candidate_pack_valid is False
+    assert "Paul Altieri" in review.invalid_locked_candidates
+    assert review.revision_mode == "candidate_pack_rebuild"
+
+    plan = build_revision_plan(review, pack)
+    assert plan.revision_strategy == "full_rewrite"
+    assert any("rebuild the candidatepack" in change.lower() for change in plan.forbidden_changes)
+
+
 def test_revision_plan_targets_exact_defects_and_preserves_ids():
     pack = _pack()
     article = _article(pack, omit_last=True)

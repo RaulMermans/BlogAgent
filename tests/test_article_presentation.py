@@ -51,3 +51,50 @@ def test_visible_article_card_excludes_debug_blocks():
 def test_visible_article_markdown_unchanged_when_no_debug_blocks():
     markdown = "# How to Choose a Summer Perfume\n\n## Introduction\n\nSome text."
     assert get_visible_article_markdown(markdown) == markdown
+
+
+def test_status_label_mapping():
+    """Every internal publish_ready_status enum value maps to a user-facing label."""
+    assert get_publish_status_label("publish_ready") == "Copy-ready"
+    assert (
+        get_publish_status_label("publish_ready_with_editorial_review")
+        == "Copy-ready after light review"
+    )
+    assert (
+        get_publish_status_label("publish_ready_with_warnings") == "Copy-ready after light review"
+    )
+    assert get_publish_status_label("draft_only_not_publish_ready") == "Needs revision before use"
+
+
+def test_visible_ui_uses_copy_ready_language():
+    """User-facing labels use copy-ready language, never raw snake_case enum values."""
+    for status in (
+        "publish_ready",
+        "publish_ready_with_editorial_review",
+        "publish_ready_with_warnings",
+        "draft_only_not_publish_ready",
+    ):
+        label = get_publish_status_label(status)
+        assert "_" not in label
+        assert label != status
+        assert "ready" in label.lower() or "revision" in label.lower()
+
+
+def test_debug_can_show_internal_status_but_article_card_cannot():
+    """A debug-only annotation containing the raw internal status enum is stripped
+    from the visible article card but remains in the raw markdown available to
+    debug views."""
+    raw_status = "publish_ready_with_editorial_review"
+    markdown = (
+        "# 5 Best Affordable Luxury Watches: Our Picks\n"
+        f"<!-- publish_ready_status: {raw_status} -->\n\n"
+        "## Quick Picks\n\n"
+        "- Tissot PRX Quartz\n"
+    )
+    # Debug views see the raw markdown, including the internal enum value.
+    assert raw_status in markdown
+
+    # The visible article card strips debug annotations entirely.
+    visible = get_visible_article_markdown(markdown)
+    assert raw_status not in visible
+    assert "publish_ready_status" not in visible

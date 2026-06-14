@@ -11,6 +11,7 @@ All operations are deterministic — no LLM calls.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -100,6 +101,27 @@ _SOURCE_ARTIFACT_PATTERNS: tuple[str, ...] = (
 
 _CITATION_PATTERNS = re.compile(r"^\[?\d+\]?$|^\(\d+\)$")
 
+# Luxury/fashion brand names used (in addition to each adapter's own brand
+# list) to detect "brand cluster" candidates — strings that concatenate
+# multiple brand names with no specific model, e.g.
+# "Burberry Cartier Celine Chanel Chloe" or "Chanel Boy Bags Louis Vuitton
+# Wallets". These are never valid recommendation candidates on their own.
+_LUXURY_BRAND_CLUSTER_NAMES: frozenset[str] = frozenset(
+    {
+        "burberry", "cartier", "celine", "chanel", "chloe", "louis vuitton",
+        "gucci", "prada", "hermes", "dior", "tiffany", "fendi", "balenciaga",
+        "valentino", "versace", "givenchy", "ysl", "saint laurent",
+        "bottega veneta", "loewe",
+    }
+)
+
+# Category words that, when the *same* word appears two or more times in a
+# candidate name (e.g. "Hermès Color Pink Bags Red Bags"), indicate a
+# navigation/filter fragment rather than a single specific product.
+_REPEATED_CATEGORY_WORDS: frozenset[str] = frozenset(
+    {"bag", "bags", "wallet", "wallets", "luggage", "ring", "rings", "color", "colour"}
+)
+
 
 class DomainAdapter:
     """Base domain adapter with universal rejection rules."""
@@ -163,6 +185,34 @@ class DomainAdapter:
         matched = sum(1 for brand in brands if brand.lower() in lower)
         return matched >= 3
 
+    def looks_like_luxury_brand_cluster(self, text: str) -> bool:
+        """Return True if 2+ distinct luxury/fashion brand names appear in text.
+
+        Catches strings like "Burberry Cartier Celine Chanel Chloe" or
+        "Chanel Boy Bags Louis Vuitton Wallets" — a real product name pairs
+        at most one brand with a model name, not another brand. Uses a
+        dedicated brand-only list (``_LUXURY_BRAND_CLUSTER_NAMES``) rather
+        than ``get_known_brands_or_entities()``, which also contains full
+        product names (e.g. "tissot prx quartz") that would self-match their
+        own brand and trigger false positives.
+        """
+        lower = _normalize(text)
+        matched = sum(1 for brand in _LUXURY_BRAND_CLUSTER_NAMES if brand in lower)
+        return matched >= 2
+
+    def looks_like_repeated_category_words(self, text: str) -> bool:
+        """Return True if a category word (e.g. "bags") appears 2+ times.
+
+        Catches navigation/filter fragments like "Hermès Color Pink Bags Red
+        Bags" — a real product name never repeats its own category word.
+        """
+        words = _normalize(text).split()
+        counts: dict[str, int] = {}
+        for word in words:
+            if word in _REPEATED_CATEGORY_WORDS:
+                counts[word] = counts.get(word, 0) + 1
+        return any(count >= 2 for count in counts.values())
+
     def looks_like_compound_candidate(self, text: str) -> bool:
         """Return True for explicit ``A or B``/``A and B`` recommendation names."""
         return bool(re.search(r"\s+(?:or|and)\s+", text, re.IGNORECASE))
@@ -212,6 +262,10 @@ class DomainAdapter:
             return False
         if self.looks_like_entity_cluster(name):
             return False
+        if self.looks_like_luxury_brand_cluster(name):
+            return False
+        if self.looks_like_repeated_category_words(name):
+            return False
         if self.looks_like_compound_candidate(name):
             return False
         return True
@@ -228,6 +282,10 @@ class DomainAdapter:
             return "catalog navigation text"
         if self.looks_like_entity_cluster(name):
             return "entity cluster — multiple brands in one string"
+        if self.looks_like_luxury_brand_cluster(name):
+            return "brand cluster — multiple luxury brand names in one string"
+        if self.looks_like_repeated_category_words(name):
+            return "repeated category word — looks like a navigation/filter fragment, not a product"
         if self.looks_like_compound_candidate(name):
             return "compound candidate must be split into specific entities"
         return None
@@ -239,6 +297,10 @@ class DomainAdapter:
         if self.looks_like_url_or_citation(name):
             return "unknown"
         if self.looks_like_entity_cluster(name):
+            return "brand_cluster"
+        if self.looks_like_luxury_brand_cluster(name):
+            return "brand_cluster"
+        if self.looks_like_repeated_category_words(name):
             return "brand_cluster"
         if self.looks_like_compound_candidate(name):
             return "brand_cluster"
@@ -260,6 +322,8 @@ class DomainAdapter:
             "URL/domain/citation artifacts do not count",
             "catalog navigation text does not count",
             "entity clusters (multiple brands in one string) do not count",
+            "luxury brand clusters (2+ designer brand names in one string) do not count",
+            "repeated category words (e.g. 'Bags ... Bags') do not count",
         ]
 
     def get_product_indicators(self) -> list[str]:
@@ -286,5 +350,8 @@ def _normalize(text: str) -> str:
     """Normalize text for comparison."""
     text = text.strip().lower()
     text = re.sub(r"[*_`]", "", text)
+    # Fold accents (e.g. "Hermès" -> "hermes") so brand matching is accent-insensitive.
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"\s+", " ", text)
     return text

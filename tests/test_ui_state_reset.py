@@ -162,3 +162,37 @@ class TestRenderOutputReplace:
         # The candidate ledger summary is the primary display (Candidate Ledger label)
         assert "candidate_ledger_summary" in html
         assert "'Candidate Ledger'" in html
+
+
+class TestVisibleArticleCardExcludesResearchTrace:
+    """The primary article card (.form-card / article-display) shows only
+    title, slug, meta description, SEO keywords, status badges, and the
+    article body. Research/candidate-internals (Query Contract, Candidate
+    Ledger, Recommendation Candidates, Editorial Polish, Enrichment Queries,
+    Editorial Skills) belong in a separate "Research & Candidate Trace"
+    section, not the visible article card."""
+
+    def test_research_trace_section_exists(self):
+        """A dedicated Research & Candidate Trace details section exists."""
+        html = _get_html_source()
+        assert 'id="research-trace-details"' in html
+        assert 'id="research-trace-body"' in html
+        assert "Research &amp; Candidate Trace" in html
+
+    def test_dynamic_research_labels_target_research_trace_body_not_form_card(self):
+        """Query Contract, Candidate Ledger, Recommendation Candidates, Editorial
+        Polish, Enrichment Queries, and Editorial Skills must be appended to the
+        research-trace container, never to .form-card (the visible article card)."""
+        html = _get_html_source()
+        assert "closest('.form-card').appendChild" not in html
+        # Each dynamic block is appended to the research-trace container.
+        assert html.count("getElementById('research-trace-body').appendChild") == 6
+
+    def test_clear_output_clears_research_trace_body(self):
+        """clearOutput must clear research-trace-body so stale trace data from a
+        prior run doesn't linger alongside a new article."""
+        html = _get_html_source()
+        clear_section = html[
+            html.find("function clearOutput") : html.find("document.addEventListener")
+        ]
+        assert "research-trace-body" in clear_section

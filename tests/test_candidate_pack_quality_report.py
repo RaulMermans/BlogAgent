@@ -262,3 +262,22 @@ def test_candidate_pack_never_locks_invalid_specific_products():
     assert report.mode == "failed"
     assert report.publish_ceiling == "draft_only_not_publish_ready"
     assert report.repair_action == "repair_candidates"
+
+
+def test_affordable_luxury_watches_no_paul_altieri():
+    """A reviewer/dealer name like "Paul Altieri" must never be locked as a
+    recommendation candidate alongside real watch models."""
+    items = [
+        _item("Tissot PRX Quartz", 0),
+        _item("Seiko 5 Sports", 1),
+        _item("Hamilton Khaki Field", 2),
+        _item("Paul Altieri", 3),
+    ]
+    pack = _pack(items, requested=4, status="exact")
+    report = build_candidate_pack_quality_report(pack, _contract(4, strictness="standard"))
+
+    assert report.passes is False
+    assert "Paul Altieri" in report.invalid_items
+    assert report.mode == "failed"
+    assert report.publish_ceiling == "draft_only_not_publish_ready"
+    assert report.repair_action == "repair_candidates"

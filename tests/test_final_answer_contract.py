@@ -170,6 +170,48 @@ class TestExactCountPass:
         assert fac.requested_count == n
         assert fac.allowed_count == n
         assert fac.final_article_count == n
+
+    def test_final_answer_contract_blocks_even_if_article_quality_gate_is_100(self):
+        """A perfectly count-aligned article (the kind of result an
+        ArticleQualityGate would score 100/100) must still be blocked if the
+        Reviewer found the locked CandidatePack itself invalid."""
+        n = 5
+        review_packet = {
+            "candidate_pack_valid": False,
+            "invalid_locked_candidates": ["Paul Altieri"],
+            "revision_mode": "candidate_pack_rebuild",
+        }
+        fac = _build(
+            article_markdown=_article_exact(n),
+            title=f"{n} Best Parfums for Summer",
+            answer_count_snapshot=_snap(
+                requested=n, allowed=n, article=n, grounded=n, status="satisfied"
+            ),
+            candidate_ledger_summary=_ledger(n),
+            review_packet=review_packet,
+        )
+        assert fac.publish_status == "draft_only_not_publish_ready"
+        assert any("Paul Altieri" in reason for reason in fac.failure_reasons)
+
+    def test_final_answer_contract_unaffected_by_passing_review_packet(self):
+        """A clean review packet (candidate_pack_valid=True, revision_mode=none)
+        must not change an otherwise publish-ready result."""
+        n = 5
+        review_packet = {
+            "candidate_pack_valid": True,
+            "invalid_locked_candidates": [],
+            "revision_mode": "none",
+        }
+        fac = _build(
+            article_markdown=_article_exact(n),
+            title=f"{n} Best Parfums for Summer",
+            answer_count_snapshot=_snap(
+                requested=n, allowed=n, article=n, grounded=n, status="satisfied"
+            ),
+            candidate_ledger_summary=_ledger(n),
+            review_packet=review_packet,
+        )
+        assert fac.publish_status == "publish_ready"
         assert fac.grounded_count == n
         assert fac.quick_picks_count == n
         assert fac.detail_sections_count == n

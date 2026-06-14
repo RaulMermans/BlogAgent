@@ -587,6 +587,8 @@ def _build_run_trace(state: BlogRunState) -> list[str]:
                 else ""
             )
         )
+        if pack.get("validation_trace"):
+            trace.append(f"✓ {pack['validation_trace']}")
     if state.writer_output_audit:
         audit = state.writer_output_audit
         used = len(audit.get("used_candidate_ids", []))

@@ -10,24 +10,54 @@ This is not a generic AI blog generator. It is an agentic editorial workflow wit
 
 ## About This Project
 
-BlogAgent is an internal editorial drafting workflow for producing copy-paste-ready
-blog drafts — not an autopublishing system. It combines:
+BlogAgent is an **internal editorial drafting tool** for generating copy-paste-ready
+blog drafts that a human reviews, lightly edits, and manually publishes. It is built
+around a **bounded workflow-agent architecture**: deterministic Python code owns
+workflow order, schemas, validation, and limits, while a small number of LLM-backed
+agents handle research synthesis, drafting, and revision within those bounds.
+
+It combines:
 
 - **query contracts** that lock the requested topic, count, and answer type
   before any drafting begins
 - **tone profiles** that adjust voice without ever changing the underlying
   contract
-- **source-aware research**, with every factual claim tied back to a scored,
-  extracted source
-- **candidate validation**, so recommendation lists are built from a vetted
-  ledger of real entities rather than free-form generation
+- **source-aware, not source-perfect research** — every factual claim is tied
+  back to a scored, extracted source, but sources are graded for confidence
+  rather than treated as guaranteed-correct
+- **candidate validation for recommendation articles**, so recommendation
+  lists are built from a vetted ledger of real entities (not navigation text,
+  bylines, dates, or brand-name clusters) rather than free-form generation
 - **reviewer/revision agents** that audit drafts against the locked contract
   and candidate pack, and can trigger targeted repair or full rewrite
 - **final answer contracts** that are the single source of truth for whether
   an article is copy-ready, needs light review, or needs revision
+- a **safe fallback for high-risk topics** (e.g. financial, legal, medical),
+  which downgrades the output to an evidence report rather than a polished
+  blog draft when confidence is too low
 
-The output of a run is always a draft for a human editor to review and adapt —
-BlogAgent does not publish, post, or send anything on its own.
+### What this project does
+
+- Turns a topic into a researched, source-grounded, **copy-paste-ready draft**
+  with SEO metadata (title, slug, meta description, keywords)
+- Surfaces its research trail (sources, evidence table, candidate ledger,
+  fact-check report) so a human reviewer can verify claims before publishing
+- Validates recommendation-style articles against a locked candidate pack so
+  the article can't silently invent or drop items
+- Flags when a draft is copy-ready, needs light editorial review, or needs
+  revision before it's usable
+
+### What this project doesn't do
+
+- It does not publish, post, schedule, or send anything to any external
+  system — **human editorial review required** before anything goes live
+- It is not a fully autonomous content pipeline and is not a hosted multi-user
+  product — it's a single-user drafting tool you run locally or via a small
+  internal API
+- It does not guarantee factual correctness — it grounds claims in sources
+  and flags unsupported ones, but a human is the final check
+- It does not promise flawless SEO — metadata is generated heuristically and
+  should be reviewed like any other draft copy
 
 ---
 
@@ -77,7 +107,24 @@ BlogAgent does not publish, post, or send anything on its own.
 
 ## MVP Architecture
 
-The pipeline uses a **hybrid deterministic workflow** with two model roles:
+The pipeline uses a **hybrid deterministic workflow** with two model roles, inside
+a **bounded workflow-agent architecture**: the graph below is the entire
+surface area an agent can act within.
+
+```mermaid
+flowchart LR
+    A[User Topic] --> B[Query Contract]
+    B --> C[Research / Search]
+    C --> D[Source Quality]
+    D --> E[Candidate Ledger]
+    E --> F[CandidatePack]
+    F --> G[Writer]
+    G --> H[Reviewer]
+    H -->|repair needed| I[Revision / Repair]
+    I --> H
+    H --> J[Final Answer Contract]
+    J --> K[Copy-ready Draft]
+```
 
 ### Agents
 
@@ -882,6 +929,50 @@ tests/        Pytest test suite
 docs/         Architecture, eval plan, limitations
 examples/     Sample outputs and run traces
 ```
+
+---
+
+## Safety and Review Model
+
+BlogAgent is **internal editorial drafting, not autonomous publishing**:
+
+- `check_external_effects` runs first and sets `blocked=True` for any request
+  containing publishing/posting/sending/scheduling language — the article
+  workflow never runs for those requests
+- Every output is a draft. **Human editorial review is required** before
+  anything is published, regardless of the `publish_ready_status` returned
+- Financial, legal, medical, and other high-risk topics get a **safe fallback**:
+  if confidence is too low, BlogAgent returns an evidence report (sources +
+  what was found) instead of a polished blog draft, clearly labeled as such
+- The pipeline never invents URLs, citations, statistics, or quotes — unsupported
+  claims are removed, rewritten, or marked uncertain by the Reviewer/Revision
+  stage before the final answer contract is produced
+
+See [SECURITY.md](SECURITY.md) for the full safety and secrets policy.
+
+---
+
+## Example Use Cases
+
+- **"7 best parfums for summer"** — a recommendation article built from a
+  validated candidate pack of real fragrance products, each backed by
+  evidence spans
+- **"How to choose a summer perfume"** — a how-to/guide article that doesn't
+  enforce a recommendation count, just editorial quality and source grounding
+- **"Affordable luxury watches"** — candidate validation rejects navigation
+  text, dates, bylines, and brand-name clusters so only real watch models are
+  recommended
+- **"Best energy stocks 2026"** — a financial topic that, depending on
+  evidence strength, may fall back to an evidence report rather than a
+  confident recommendation list
+
+---
+
+## Portfolio Case Study
+
+For a write-up of the product decisions, architecture trade-offs, and lessons
+learned while building this project, see
+[docs/portfolio-case-study.md](docs/portfolio-case-study.md).
 
 ---
 
