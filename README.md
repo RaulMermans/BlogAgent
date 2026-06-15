@@ -175,7 +175,11 @@ The default citation matcher is deterministic and heuristic. A semantic citation
 
 ---
 
-### Final Answer Contract
+### Copy-Readiness Pipeline
+
+The copy-readiness layer classifies drafts after all evidence, revision, and grounding checks.
+
+#### Final Answer Contract
 
 The `FinalAnswerContract` is the final readiness arbiter.
 
@@ -190,6 +194,8 @@ Failure examples:
 | Quick Picks count mismatches body count | Output is not copy-ready |
 | Title promises more items than the article contains | Output is not copy-ready |
 | Recommendation appears without source grounding | Output is not copy-ready |
+
+#### Copy-ready status mapping
 
 User-facing readiness labels:
 
