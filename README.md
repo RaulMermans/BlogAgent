@@ -274,6 +274,15 @@ The workflow checks:
 
 This keeps the repository reviewable as a public portfolio artifact without exposing secrets or requiring live-provider access.
 
+**Verified results (mock mode, current `main`):**
+
+| Check | Result |
+| --- | --- |
+| Unit and integration tests (`pytest -q`) | **1,166 passing** |
+| Deterministic evals (`python -m blogagent.evals.runner`) | **13 / 13 pass**, including honest fallbacks. For example, when too few candidates survive validation the pipeline produces an evidence-limited report instead of inventing recommendations. |
+
+Mock sources are placeholders, so these results validate the workflow's control logic, not how factually grounded a live article is.
+
 ---
 
 ## Safety model
